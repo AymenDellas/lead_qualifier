@@ -26,6 +26,7 @@ import {
     X,
     Clock,
     Database,
+    StopCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -111,6 +112,7 @@ export default function Dashboard() {
     const [batchInfo, setBatchInfo] = useState<string>('');
     const isPausedRef = React.useRef(false);
     const [isPaused, setIsPaused] = useState(false);
+    const isCancelledRef = React.useRef(false);
 
     // New state
     const [toasts, setToasts] = useState<Toast[]>([]);
@@ -204,6 +206,7 @@ export default function Dashboard() {
             return;
         }
 
+        isCancelledRef.current = false;
         setIsProcessing(true);
         setProgress(resumeFrom > 0 ? Math.round((resumeFrom / Math.min(csvUrls.length, rowLimit)) * 100) : 0);
         if (resumeFrom === 0) setLeads([]);
@@ -261,6 +264,16 @@ export default function Dashboard() {
                     setLogs(prev => [...prev, { msg: `💾 Progress saved (${processedCount}/${limit})`, time: new Date().toLocaleTimeString(), type: 'info' }]);
                 }
 
+                // Check cancel flag
+                if (isCancelledRef.current) {
+                    await saveProgress(allLeads, processedCount, limit);
+                    setLogs(prev => [...prev, { msg: `🛑 Processing cancelled at ${processedCount}/${limit}. Progress saved.`, time: new Date().toLocaleTimeString(), type: 'info' }]);
+                    addToast(`Cancelled. ${processedCount} leads processed so far.`, 'info');
+                    setBatchInfo('');
+                    setIsProcessing(false);
+                    return;
+                }
+
                 // Rate limiting: 3-5 second random delay between leads
                 if (i < batchUrls.length - 1) {
                     const delay = 3000 + Math.random() * 2000;
@@ -268,9 +281,19 @@ export default function Dashboard() {
                 }
 
                 // Check pause flag
-                while (isPausedRef.current) {
+                while (isPausedRef.current && !isCancelledRef.current) {
                     await new Promise(resolve => setTimeout(resolve, 500));
                 }
+            }
+
+            // Check cancel flag between batches
+            if (isCancelledRef.current) {
+                await saveProgress(allLeads, processedCount, limit);
+                setLogs(prev => [...prev, { msg: `🛑 Processing cancelled at ${processedCount}/${limit}. Progress saved.`, time: new Date().toLocaleTimeString(), type: 'info' }]);
+                addToast(`Cancelled. ${processedCount} leads processed so far.`, 'info');
+                setBatchInfo('');
+                setIsProcessing(false);
+                return;
             }
 
             // Pause between batches (30 seconds) — skip after last batch
@@ -317,6 +340,18 @@ export default function Dashboard() {
         addToast(isPausedRef.current ? 'Processing paused' : 'Processing resumed', 'info');
     };
 
+    const handleCancel = () => {
+        isCancelledRef.current = true;
+        // Unpause so the pause-wait loop exits and sees the cancel flag
+        isPausedRef.current = false;
+        setIsPaused(false);
+        setLogs(prev => [...prev, {
+            msg: '🛑 Cancelling... will stop after the current lead finishes.',
+            time: new Date().toLocaleTimeString(), type: 'info'
+        }]);
+        addToast('Cancelling after current lead...', 'info');
+    };
+
     const handleRetryFailed = async () => {
         let failedLeads = leads.filter(l => l.status === 'ACTIVITY_FAILED');
 
@@ -351,6 +386,13 @@ export default function Dashboard() {
         let retried = 0;
 
         for (const failedLead of failedLeads) {
+            // Check cancel flag
+            if (isCancelledRef.current) {
+                setLogs(prev => [...prev, { msg: `🛑 Retry cancelled at ${retried}/${failedLeads.length}.`, time: new Date().toLocaleTimeString(), type: 'info' }]);
+                addToast(`Retry cancelled. ${retried} lead(s) re-processed.`, 'info');
+                break;
+            }
+
             retried++;
             setLogs(prev => [...prev, {
                 msg: `[Retry ${retried}/${failedLeads.length}] Re-processing ${failedLead.url}...`,
@@ -626,18 +668,28 @@ export default function Dashboard() {
                                             Start Engine
                                         </button>
                                     ) : (
-                                        <button
-                                            onClick={handlePause}
-                                            className={cn(
-                                                "flex-1 h-[50px] mt-6 rounded-xl font-bold transition-all flex items-center justify-center gap-2 border",
-                                                isPaused
-                                                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20"
-                                                    : "bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20"
-                                            )}
-                                        >
-                                            {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
-                                            {isPaused ? 'Resume' : 'Pause'}
-                                        </button>
+                                        <>
+                                            <button
+                                                onClick={handlePause}
+                                                className={cn(
+                                                    "flex-1 h-[50px] mt-6 rounded-xl font-bold transition-all flex items-center justify-center gap-2 border",
+                                                    isPaused
+                                                        ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20"
+                                                        : "bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20"
+                                                )}
+                                            >
+                                                {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                                                {isPaused ? 'Resume' : 'Pause'}
+                                            </button>
+                                            <button
+                                                onClick={handleCancel}
+                                                className="h-[50px] mt-6 px-4 rounded-xl font-bold transition-all flex items-center justify-center gap-2 border bg-red-500/10 text-red-400 border-red-500/30 hover:bg-red-500/20"
+                                                title="Cancel processing"
+                                            >
+                                                <StopCircle className="w-4 h-4" />
+                                                Cancel
+                                            </button>
+                                        </>
                                     )}
                                     <button
                                         onClick={handleResumeFromSave}
