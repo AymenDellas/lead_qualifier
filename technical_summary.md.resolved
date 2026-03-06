@@ -1,0 +1,164 @@
+# Revlane Signal Engine — Technical Summary
+
+## What It Does
+
+A **LinkedIn lead qualification tool** that takes a list of LinkedIn profile URLs and determines which leads are worth pursuing. It runs a two-phase pipeline on each lead:
+
+1. **Phase 1 — Activity Gate**: Checks if the person posted on LinkedIn within the last 60 days. Inactive leads are rejected immediately.
+2. **Phase 2 — Contact Discovery**: For active leads, scrapes their first name, personal website(s), and email address(es) from LinkedIn's contact overlay and their personal website.
+
+The result is a filtered, enriched list of qualified leads with contact information, exportable as CSV or directly to Google Sheets.
+
+---
+
+## Inputs
+
+| Input | Format | Description |
+|---|---|---|
+| LinkedIn URLs | CSV file (single column) | Dropped or uploaded via the dashboard UI |
+| Processing limit | Number | Controls how many leads from the CSV to process |
+
+## Outputs
+
+| Output | Format | Description |
+|---|---|---|
+| Qualified leads table | In-app UI | Real-time status per lead: first name, activity status, websites, emails, per-lead logs |
+| CSV export | `.csv` download | LinkedIn URL, first name, status, activity status, websites, emails |
+| Google Sheets export | Google Spreadsheet | Same data, formatted and styled in a new or existing Google Sheet |
+| Progress saves | JSON files in `progress/` | Auto-saved on every lead for crash recovery; loadable run history |
+
+---
+
+## Architecture & Lead Pipeline
+
+```mermaid
+flowchart TD
+    A["CSV Upload (Dashboard)"] --> B["processSingleLead()"]
+    B --> C{"Phase 1: Activity Gate"}
+    C -->|"Active (≤60 days)"| D["Phase 2: Contact Discovery"]
+    C -->|"Inactive"| E["REJECTED"]
+    C -->|"API fail/timeout (5 retries)"| F["ACTIVITY_FAILED"]
+    D --> G["fetchProfileContactInfo()"]
+    G --> H["Parse contact overlay HTML"]
+    H --> I{"Has personal website?"}
+    I -->|Yes| J["discoverDeepWeb() — crawl for emails"]
+    I -->|No| K["Done"]
+    J --> K
+    K --> L["QUALIFIED"]
+    F -->|"Retry Failed button"| M["retrySingleLead() — skip Phase 1"]
+    M --> D
+```
+
+### Phase 1 — [gateLeadActivity()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#329-518)
+- Calls **Bright Data's Dataset API** (`BD_DATASET_ACTIVITY`) with the LinkedIn URL and a 90-day date window
+- Polls for results via [pollBrightData()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#1399-1428) if a snapshot ID is returned
+- Parses date fields (`date_posted`, [date](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/lib/env.ts#23-54), `created_at`, etc.) to find most recent post
+- Lead is **Active** if latest post is ≤ 60 days old, **Inactive** otherwise
+- `dead_page` error code → definitively inactive
+- Up to **5 outer attempts** × **2 inner retries** with 10s/5s delays + a 120s hard timeout
+
+### Phase 2 — [discoverLeadData()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#519-609) → [fetchProfileContactInfo()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#610-829)
+- Authenticates to LinkedIn using the `li_at` session cookie
+- **Step 1**: Visits the profile page to pick up session cookies + extract `<title>` for first name
+- **Step 2**: Fetches `/in/{slug}/overlay/contact-info/` for websites and emails
+- Parses the overlay HTML via [parseOverlayHtml()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#830-953) (LinkedIn redirect URLs, embedded JSON, raw regex)
+- Decodes Cloudflare-obfuscated emails when encountered
+- Falls back to URL slug for first name (hyphenated split or camelCase detection)
+
+### Deep Web Crawl — [discoverDeepWeb()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#1088-1196)
+- Takes the first non-LinkedIn website found on the profile
+- Fetches that homepage via [fetchPage()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#1314-1398) (raw HTTPS with timeout)
+- Discovers internal links (contact, about, team pages) via [discoverInternalLinks()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#1197-1252)
+- Crawls up to 5 internal pages looking for email addresses
+- All emails pass through [validateEmail()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/lib/utils.ts#25-60) + [isPlaceholderEmail()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#1280-1313) filters
+
+---
+
+## Main Files & What Each One Does
+
+### Frontend
+
+| File | Purpose |
+|---|---|
+| [page.tsx](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/page.tsx) | Root page — renders `<Dashboard />` |
+| [layout.tsx](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/layout.tsx) | App shell — dark theme, Inter font, metadata |
+| [Dashboard.tsx](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/components/Dashboard.tsx) | **Main UI** (1001 lines). CSV upload, real-time lead processing with per-lead status cards, progress bar, pause/resume, retry failed, CSV export, Google Sheets export, run history. Two tabs: Signal Engine + URL Cleaner |
+| [UrlCleaner.tsx](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/components/UrlCleaner.tsx) | Standalone utility tab. Upload a CSV of messy LinkedIn URLs → normalizes them to `https://www.linkedin.com/in/{slug}` format → export cleaned CSV |
+
+### Backend (Next.js Server Actions)
+
+| File | Purpose |
+|---|---|
+| [scraper-actions.ts](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts) | **Core engine** (1428 lines). Contains the entire lead processing pipeline: [processSingleLead](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#205-287), [retrySingleLead](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#288-328), [gateLeadActivity](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#329-518), [discoverLeadData](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#519-609), [fetchProfileContactInfo](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#610-829), [parseOverlayHtml](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#830-953), [discoverDeepWeb](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#1088-1196), [pollBrightData](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#1399-1428), plus progress save/load and run management |
+| [google-sheets.ts](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/google-sheets.ts) | Google Sheets export via REST API. JWT auth with service account, creates/clears spreadsheet, writes lead data, applies formatting (frozen headers, column widths, colors) |
+
+### Library / Utilities
+
+| File | Purpose |
+|---|---|
+| [utils.ts](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/lib/utils.ts) | [cleanUrl()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/lib/utils.ts#8-16), [extractEmails()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/lib/utils.ts#17-24), [validateEmail()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/lib/utils.ts#25-60) (blocks file extensions, LinkedIn/tracking domains, placeholder locals), [extractLinkedInName()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/lib/utils.ts#61-81), [cn()](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/lib/utils.ts#4-7) (Tailwind class merge) |
+| [env.ts](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/lib/env.ts) | Validates required/optional env vars at startup with clear console output |
+
+### Config
+
+| File | Purpose |
+|---|---|
+| [.env.example](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/.env.example) | Template for all environment variables |
+| [next.config.js](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/next.config.js) | Next.js configuration |
+| [tailwind.config.ts](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/tailwind.config.ts) | TailwindCSS config |
+
+### Test / Debug Files (root)
+
+Multiple `test-*.cjs` / `test-*.mjs` files used during development to test individual functions (activity checking, header extraction, Cloudflare decoding, LinkedIn page parsing, etc.). Not part of the production app.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Framework | **Next.js** (App Router, Server Actions) |
+| Language | **TypeScript** |
+| UI | **React** with Lucide React icons |
+| Styling | **TailwindCSS v4** with `tailwind-merge` + `clsx` |
+| CSV Parsing | **PapaParse** |
+| HTTP Requests | Node.js native `https` module (for LinkedIn), [fetch](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts#1314-1398) (for Bright Data API) |
+| Google Auth | Manual JWT signing with Node.js `crypto` module — no Google SDK |
+| Persistence | Filesystem JSON (`progress/` directory) |
+
+---
+
+## External APIs & Services
+
+| Service | What It's Used For | Auth Method |
+|---|---|---|
+| **Bright Data — Dataset API** | Activity check (recent posts), profile scraping, web scraping | Bearer API key (`BRIGHT_DATA_API_KEY`) |
+| **Bright Data — Proxy** (optional) | Residential proxy for web requests | Proxy URL string |
+| **LinkedIn** (direct) | Profile page + contact overlay scraping | `li_at` session cookie from browser |
+| **Google Sheets API** | Export qualified leads to a spreadsheet | Service account JWT (base64-encoded credentials) |
+
+### Bright Data Dataset IDs
+- `BD_DATASET_ACTIVITY` — Recent activity / post history
+- `BD_DATASET_PROFILES` — Profile data
+- `BD_DATASET_WEB_SCRAPER` — Generic web page scraping
+
+---
+
+## Known Issues & Limitations
+
+### Reliability
+- **Activity check failures are common** — Bright Data's activity API frequently times out or returns no datable posts, causing leads to land in `ACTIVITY_FAILED`. The retry logic (5 × 10s outer, 2 × 5s inner, 120s timeout) mitigates but doesn't eliminate this
+- **LinkedIn rate limiting** — Direct scraping of contact overlays is throttled by LinkedIn (HTTP 429/999). Exponential backoff + jitter helps, but large batches will slow down significantly
+- **`li_at` cookie expiry** — The LinkedIn session cookie must be manually refreshed from a browser whenever it expires (no automated auth flow)
+
+### Data Quality
+- **First name extraction** can pick up the *viewer's* name from embedded JSON instead of the profile owner's. Mitigated by prioritizing `<title>` and `og:title` over JSON, but edge cases remain
+- **Deep web crawl is shallow** — Only crawls up to 5 internal pages from the lead's personal website; won't find emails on deeply nested pages
+- **Email validation is heuristic** — Uses blocklists and regex rather than SMTP verification; false negatives possible for unusual TLDs or domains
+
+### Architecture
+- **No database** — All state is stored in JSON files in the `progress/` directory. Not suitable for multi-user or cloud deployment without modification
+- **Sequential processing** — Leads are processed one at a time. No parallelism or queue system
+- **Single-machine only** — The filesystem-based persistence and in-memory state make this a local-only tool
+- **Large monolithic files** — [scraper-actions.ts](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/app/actions/scraper-actions.ts) (1428 lines) and [Dashboard.tsx](file:///c:/Users/mimod/OneDrive/Desktop/Projects/leads_qualiferV2/src/components/Dashboard.tsx) (1001 lines) concentrate most logic in two files
+- **Debug logging left in** — Verbose `console.log` statements (including `[DEBUG]` blocks) remain throughout the activity checking code

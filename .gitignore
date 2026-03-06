@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Next.js build
+.next/
+out/
+
+# Environment files (contain secrets)
+.env.local
+.env*.local
+
+# Progress/results data
+progress/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Debug files
+debug_*.html
+debug_*.txt
+dave-home.html
+test-dave.html
+
+# Test files
+test-*.cjs
+test-*.mjs
+test_*.cjs
+test_*.mjs
+analyze_html.cjs
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+*.log
+npm-debug.log*
