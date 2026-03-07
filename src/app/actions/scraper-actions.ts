@@ -212,50 +212,34 @@ export async function processSingleLead(url: string): Promise<Lead> {
         logs: [`Started validation for ${url}`]
     };
 
-    // Phase 1: LinkedIn Activity Gate — retry until we get real post data
-    const MAX_ACTIVITY_ATTEMPTS = 5;
-    const RETRY_DELAY_MS = 10000; // 10s between retries
+    // Phase 1: LinkedIn Activity Gate — single attempt, no retries
     let activityResolved = false;
 
-    for (let attempt = 1; attempt <= MAX_ACTIVITY_ATTEMPTS; attempt++) {
-        try {
-            if (attempt > 1) {
-                lead.logs.push(`Phase 1: Retry ${attempt}/${MAX_ACTIVITY_ATTEMPTS} — waiting ${RETRY_DELAY_MS / 1000}s...`);
-                console.log(`Phase 1: Retry ${attempt}/${MAX_ACTIVITY_ATTEMPTS} for ${url}, waiting ${RETRY_DELAY_MS / 1000}s...`);
-                await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
-            }
+    try {
+        const { approved, timedOut, failed } = await gateLeadActivity(url);
 
-            const { approved, profileData, timedOut, failed } = await gateLeadActivity(url);
-
-            if (failed || timedOut) {
-                // Didn't get real data — retry
-                console.log(`Phase 1: Attempt ${attempt} ${failed ? 'failed' : 'timed out'} — ${attempt < MAX_ACTIVITY_ATTEMPTS ? 'retrying...' : 'no more retries.'}`);
-                lead.logs.push(`Phase 1: Attempt ${attempt} ${failed ? 'failed' : 'timed out'}.`);
-                continue;
-            }
-
-            // Got a definitive result
-            if (!approved) {
-                lead.status = 'REJECTED';
-                lead.activityStatus = 'Inactive';
-                lead.logs.push('Phase 1: No activity in last 60 days. Skipped.');
-                return lead;
-            }
-
+        if (failed || timedOut) {
+            console.log(`Phase 1: Activity check ${failed ? 'failed' : 'timed out'} for ${url}.`);
+            lead.logs.push(`Phase 1: Activity check ${failed ? 'failed' : 'timed out'}.`);
+        } else if (!approved) {
+            lead.status = 'REJECTED';
+            lead.activityStatus = 'Inactive';
+            lead.logs.push('Phase 1: No activity in last 60 days. Skipped.');
+            return lead;
+        } else {
             lead.activityStatus = 'Active';
-            lead.logs.push(`Phase 1: Activity confirmed within 60 days (attempt ${attempt}).`);
+            lead.logs.push('Phase 1: Activity confirmed within 60 days.');
             activityResolved = true;
-            break;
-        } catch (phase1Error) {
-            console.error(`Phase 1 Error (attempt ${attempt}):`, phase1Error instanceof Error ? phase1Error.message : phase1Error);
-            lead.logs.push(`Phase 1: Attempt ${attempt} errored: ${phase1Error instanceof Error ? phase1Error.message : 'Unknown'}`);
         }
+    } catch (phase1Error) {
+        console.error('Phase 1 Error:', phase1Error instanceof Error ? phase1Error.message : phase1Error);
+        lead.logs.push(`Phase 1 Error: ${phase1Error instanceof Error ? phase1Error.message : 'Unknown'}`);
     }
 
     if (!activityResolved) {
         lead.status = 'ACTIVITY_FAILED';
         lead.activityStatus = 'Failed';
-        lead.logs.push(`Phase 1: Activity check failed after ${MAX_ACTIVITY_ATTEMPTS} attempts — skipping.`);
+        lead.logs.push('Phase 1: Activity check failed — skipping.');
         return lead;
     }
 
