@@ -311,14 +311,15 @@ export async function retrySingleLead(url: string): Promise<Lead> {
 }
 
 // Helper: Decode LinkedIn Activity URN to Timestamp
-// LinkedIn uses a variation of Twitter Snowflake IDs for activities where the first 41 bits represent the UNIX epoch.
+// LinkedIn Snowflake IDs: the top 41 bits encode ms since Unix epoch (1970-01-01).
+// After right-shifting by 22, the result is directly a Unix timestamp in milliseconds.
 function decodeUrnDate(urnString: string): Date | null {
     const match = urnString.match(/urn:li:activity:(\d+)/);
     if (!match) return null;
     try {
         const id = BigInt(match[1]);
-        const shifted = Number(id >> BigInt(22));
-        return new Date(shifted);
+        const tsMs = Number(id >> BigInt(22));
+        return new Date(tsMs);
     } catch {
         return null;
     }
@@ -371,77 +372,63 @@ async function gateLeadActivity(linkedinUrl: string): Promise<{ approved: boolea
             console.warn("Phase 1: Failed to get new JSESSIONID, using fallback.", e);
         }
 
-        await randomDelay(1000, 2500);
-
-        // STEP 2: Scrape the URN from the profile page
+        // STEP 2: Use LinkedIn's GraphQL API to directly map vanityName -> fsd_profile URN
+        // This is far more reliable than scraping the profile page HTML, which injects
+        // the logged-in viewer's own URN in the header (causing wrong-person feed lookups).
         let fsdUrn = '';
-        const profileRes = await fetch(`https://www.linkedin.com/in/${profileSlug}/`, {
+        const graphqlUrl = `https://www.linkedin.com/voyager/api/graphql?includeWebMetadata=true&variables=(vanityName:${profileSlug})&queryId=voyagerIdentityDashProfiles.34ead06db82a2cc9a778fac97f69ad6a`;
+
+        const graphqlRes = await fetch(graphqlUrl, {
             headers: {
-                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'accept': 'application/vnd.linkedin.normalized+json+2.1',
                 'accept-language': 'en-US,en;q=0.9',
                 'cookie': `li_at=${LINKEDIN_LI_AT}; JSESSIONID="${jsessionId}"`,
+                'csrf-token': jsessionId,
                 'sec-ch-ua': '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
                 'sec-ch-ua-mobile': '?0',
                 'sec-ch-ua-platform': '"Windows"',
-                'sec-fetch-dest': 'document',
-                'sec-fetch-mode': 'navigate',
-                'sec-fetch-site': 'same-origin',
-                'sec-fetch-user': '?1',
-                'upgrade-insecure-requests': '1',
-                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                'x-restli-protocol-version': '2.0.0'
             }
         });
 
-        if (profileRes.status === 404) {
-            console.log("Phase 1: Profile 404 Not Found.");
+        if (graphqlRes.status === 404) {
+            console.log("Phase 1: Profile 404 Not Found via GraphQL.");
             return { approved: false, timedOut: false, failed: true };
         }
 
-        const html = await profileRes.text();
-
-        // Safe robust extraction: Find the URN that is explicitly bound to the profileSlug
-        // inside LinkedIn's embedded <code> JSON blocks, avoiding the viewer's own URN in the header.
-        const allUrns = [...html.matchAll(/urn:li:fsd_profile:(ACoA[a-zA-Z0-9_-]+)/g)].map(m => m[1]);
-        const uniqueUrns = [...new Set(allUrns)];
-
-        if (uniqueUrns.length > 0) {
-            let bestUrn = '';
-            let maxSlugProximity = -1;
-
-            for (const u of uniqueUrns) {
-                let proximityCount = 0;
-                const codeRegex = /<code[^>]*>([\s\S]*?)<\/code>/gi;
-                let cMatch;
-                while ((cMatch = codeRegex.exec(html)) !== null) {
-                    const block = cMatch[1];
-                    if (block.includes(profileSlug) && block.includes(u)) {
-                        proximityCount++;
-                    }
-                }
-                if (proximityCount > maxSlugProximity) {
-                    maxSlugProximity = proximityCount;
-                    bestUrn = u;
-                }
-            }
-
-            // Fallback: if no URN shares a block with the slug, pick the second most frequent URN
-            // (Assuming the most frequent is always the logged-in viewer's own profile URN padding the headers)
-            if (maxSlugProximity === 0 && uniqueUrns.length > 1) {
-                const counts = uniqueUrns.map(u => ({ u, count: html.split(u).length - 1 }));
-                counts.sort((a, b) => b.count - a.count);
-                bestUrn = counts[1].u;
-            } else if (maxSlugProximity === 0) {
-                bestUrn = uniqueUrns[0];
-            }
-
-            fsdUrn = `urn:li:fsd_profile:${bestUrn}`;
-            console.log(`Phase 1: Found TARGET fsd_profile URN: ${fsdUrn} (Proximity Score: ${maxSlugProximity})`);
-        } else {
-            console.log("Phase 1: Could not find fsd_profile URN in the HTML. (Anti-bot may have triggered)");
+        if (!graphqlRes.ok) {
+            console.error(`Phase 1: GraphQL returned ${graphqlRes.status}`);
             return { approved: false, timedOut: false, failed: true };
         }
+
+        const graphqlData = await graphqlRes.json() as any;
+        // The GraphQL response has an "included" array. The FIRST element that has
+        // a publicIdentifier matching our profileSlug is definitively the target person.
+        const included = graphqlData?.included || [];
+        for (const el of included) {
+            if (el?.publicIdentifier === profileSlug && el?.entityUrn) {
+                fsdUrn = el.entityUrn;
+                break;
+            }
+        }
+
+        // Fallback: grab first fsd_profile URN from the response text if structured parse missed it
+        if (!fsdUrn) {
+            const responseText = JSON.stringify(graphqlData);
+            const urnMatch = responseText.match(/urn:li:fsd_profile:(ACoA[a-zA-Z0-9_-]+)/);
+            if (urnMatch) fsdUrn = `urn:li:fsd_profile:${urnMatch[1]}`;
+        }
+
+        if (!fsdUrn) {
+            console.log("Phase 1: Could not extract fsd_profile URN from GraphQL response.");
+            return { approved: false, timedOut: false, failed: true };
+        }
+
+        console.log(`Phase 1: Extracted TARGET URN via GraphQL: ${fsdUrn}`);
 
         await randomDelay(1500, 3000);
+
 
         // STEP 3: Hit Voyager API
         const apiUrl = `https://www.linkedin.com/voyager/api/identity/profileUpdatesV2?count=10&includeLongTermHistory=true&moduleKey=creator_profile_all_content_view%3Adesktop&numComments=0&numLikes=0&profileUrn=${encodeURIComponent(fsdUrn)}&q=memberShareFeed`;
