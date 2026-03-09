@@ -16,7 +16,7 @@ function ensureEnv() {
 }
 
 const BRIGHT_DATA_API_KEY = process.env.BRIGHT_DATA_API_KEY;
-const BD_DATASET_ACTIVITY = process.env.BD_DATASET_ACTIVITY || 'gd_l190586f_profiles_recent_activity';
+const BD_DATASET_ACTIVITY = process.env.BD_DATASET_ACTIVITY; // No longer strictly required
 const BD_DATASET_PROFILES = process.env.BD_DATASET_PROFILES || 'gd_l190586f_profiles';
 const BD_DATASET_WEB_SCRAPER = process.env.BD_DATASET_WEB_SCRAPER || 'gd_l190586f_web_scraper';
 const LINKEDIN_LI_AT = process.env.LINKEDIN_LI_AT;
@@ -310,195 +310,185 @@ export async function retrySingleLead(url: string): Promise<Lead> {
     return lead;
 }
 
+// Helper: Decode LinkedIn Activity URN to Timestamp
+// LinkedIn uses a variation of Twitter Snowflake IDs for activities where the first 41 bits represent the UNIX epoch.
+function decodeUrnDate(urnString: string): Date | null {
+    const match = urnString.match(/urn:li:activity:(\d+)/);
+    if (!match) return null;
+    try {
+        const id = BigInt(match[1]);
+        const shifted = Number(id >> BigInt(22));
+        return new Date(shifted);
+    } catch {
+        return null;
+    }
+}
+
 async function gateLeadActivity(linkedinUrl: string): Promise<{ approved: boolean, profileData?: any, timedOut: boolean, failed?: boolean }> {
     let activityUrl = linkedinUrl.replace(/\/$/, '');
     const urlMatch = activityUrl.match(/linkedin\.com\/in\/([^\/]+)/);
-    if (urlMatch && urlMatch[1]) {
-        activityUrl = `https://www.linkedin.com/in/${urlMatch[1]}`;
+    const profileSlug = urlMatch ? urlMatch[1] : null;
+
+    if (!profileSlug) {
+        console.error("Phase 1 Error: Invalid LinkedIn URL format.");
+        return { approved: false, timedOut: false, failed: true };
+    }
+
+    if (!LINKEDIN_LI_AT) {
+        console.error("Phase 1 Error: LINKEDIN_LI_AT environment variable is missing.");
+        return { approved: false, timedOut: false, failed: true };
     }
 
     try {
-        console.log(`Phase 1: Checking activity for ${activityUrl}...`);
+        console.log(`Phase 1: Checking activity natively for "${profileSlug}"...`);
 
-        const endDate = new Date();
-        const startDate = new Date();
-        startDate.setDate(startDate.getDate() - 90);
-
-        // Timeout the entire activity check after 120 seconds
-        const MAX_RETRIES = 2;
-
-        const activityPromise = (async () => {
-            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-                try {
-                    if (attempt > 1) {
-                        console.log(`Phase 1: Retry attempt ${attempt}/${MAX_RETRIES} after 5s delay...`);
-                        await new Promise(r => setTimeout(r, 5000));
-                    }
-
-                    const response = await fetch(`https://api.brightdata.com/datasets/v3/scrape?dataset_id=${BD_DATASET_ACTIVITY}&notify=false&include_errors=true&type=discover_new&discover_by=profile_url`, {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${BRIGHT_DATA_API_KEY}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            input: [{
-                                url: activityUrl,
-                                start_date: startDate.toISOString(),
-                                end_date: endDate.toISOString()
-                            }]
-                        }),
-                    });
-
-                    if (!response.ok) {
-                        const errBody = await response.text().catch(() => '');
-                        console.error(`Phase 1: API returned ${response.status}: ${errBody.substring(0, 200)}`);
-                        // Retry on transient errors (5xx, 429)
-                        if (attempt < MAX_RETRIES && (response.status >= 500 || response.status === 429)) {
-                            continue;
-                        }
-                        // Final attempt or non-retryable error — signal failure
-                        return { approved: false, profileData: null, timedOut: false, failed: true };
-                    }
-
-                    const textResponse = await response.text();
-                    let result: any[] = [];
-
-                    try {
-                        const json = JSON.parse(textResponse);
-                        if (Array.isArray(json)) {
-                            result = json;
-                        } else if (json.snapshot_id) {
-                            console.log(`Phase 1: Polling snapshot ${json.snapshot_id}...`);
-                            const polled = await pollBrightData(json.snapshot_id, 20);
-                            result = Array.isArray(polled) ? polled : [];
-                        } else if (json.id) {
-                            console.log(`Phase 1: Polling snapshot ${json.id}...`);
-                            const polled = await pollBrightData(json.id, 20);
-                            result = Array.isArray(polled) ? polled : [];
-                        } else if (json.error_code || json.error) {
-                            // ── API returned an error object (NOT a real activity item) ──
-                            // e.g. { error_code: "dead_page", error: "No posts found for the selected period..." }
-                            console.log(`Phase 1: API returned error: [${json.error_code || 'unknown'}] ${(json.error || '').substring(0, 200)}`);
-
-                            if (json.error_code === 'dead_page') {
-                                // "dead_page" = API explicitly says NO recent activity → INACTIVE
-                                console.log('Phase 1: dead_page → lead is INACTIVE.');
-                                return { approved: false, profileData: null, timedOut: false };
-                            }
-                            // Other error codes → treat as failure to retry
-                            return { approved: false, profileData: null, timedOut: false, failed: true };
-                        } else {
-                            result = [json];
-                        }
-                    } catch (e) {
-                        // NDJSON fallback
-                        const lines = textResponse.split('\n').filter(line => line.trim() !== '');
-                        for (const line of lines) {
-                            try { result.push(JSON.parse(line)); } catch (pe) { }
-                        }
-                    }
-
-                    console.log(`Phase 1: Got ${result.length} activity item(s).`);
-
-                    // ── DEBUG: Print full data for every activity item ──
-                    for (let idx = 0; idx < result.length; idx++) {
-                        const item = result[idx];
-                        const keys = Object.keys(item);
-                        console.log(`Phase 1 [DEBUG] Item ${idx + 1}/${result.length} keys: [${keys.join(', ')}]`);
-                        // Print ALL date-like fields
-                        for (const key of keys) {
-                            const val = item[key];
-                            if (typeof val === 'string' && (key.toLowerCase().includes('date') || key.toLowerCase().includes('time') || key.toLowerCase().includes('posted') || key.toLowerCase().includes('created') || key.toLowerCase().includes('published') || key.toLowerCase().includes('updated'))) {
-                                console.log(`Phase 1 [DEBUG]   DATE FIELD: ${key} = "${val}"`);
-                            }
-                        }
-                        // Print a compact summary of the item (first 500 chars of JSON)
-                        const itemJson = JSON.stringify(item);
-                        console.log(`Phase 1 [DEBUG]   Full data (${itemJson.length} chars): ${itemJson.substring(0, 500)}${itemJson.length > 500 ? '...' : ''}`);
-                    }
-
-                    if (result.length > 0) {
-                        // First, filter out any error items that might be in the array
-                        const errorItems = result.filter(item => item.error_code || item.error || item.__error);
-                        const validItems = result.filter(item => !item.error_code && !item.error && !item.__error);
-
-                        if (errorItems.length > 0) {
-                            console.log(`Phase 1: ${errorItems.length} error item(s) in results.`);
-                            for (const ei of errorItems) {
-                                console.log(`Phase 1: Error in array: [${ei.error_code || 'unknown'}] ${(ei.error || '').substring(0, 200)}`);
-                                if (ei.error_code === 'dead_page') {
-                                    console.log('Phase 1: dead_page in array → lead is INACTIVE.');
-                                    return { approved: false, profileData: null, timedOut: false };
-                                }
-                            }
-                        }
-
-                        // Look for date fields — NOTE: "timestamp" is EXCLUDED because
-                        // it refers to the API request time (always today), NOT a post date.
-                        const posts = validItems.filter(item =>
-                            item.date_posted || item.date ||
-                            item.created_at || item.published_at || item.posted_date ||
-                            item.activity_date || item.time
-                        );
-                        console.log(`Phase 1: ${posts.length} valid item(s) have recognized date fields (out of ${validItems.length} valid items).`);
-
-                        if (posts.length > 0) {
-                            const getDateValue = (item: any) =>
-                                item.date_posted || item.date ||
-                                item.created_at || item.published_at || item.posted_date ||
-                                item.activity_date || item.time || '1970-01-01';
-
-                            const latestPost = posts.sort((a: any, b: any) =>
-                                new Date(getDateValue(b)).getTime() - new Date(getDateValue(a)).getTime()
-                            )[0];
-                            const latestDateStr = getDateValue(latestPost);
-                            const lastActivityDate = new Date(latestDateStr);
-                            const sixtyDaysAgo = new Date();
-                            sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
-
-                            const isActive = lastActivityDate > sixtyDaysAgo;
-                            console.log(`Phase 1: Latest activity date: "${latestDateStr}" → parsed as ${lastActivityDate.toISOString()} — ${isActive ? 'ACTIVE ✓' : 'INACTIVE ✗'} (cutoff: ${sixtyDaysAgo.toISOString()})`);
-
-                            return { approved: isActive, profileData: null, timedOut: false };
-                        }
-                    }
-
-                    // No posts found or no date fields → can't confirm activity → FAIL (don't auto-approve)
-                    console.log('Phase 1: No datable posts found — treating as FAILED (not auto-approving).');
-                    return { approved: false, profileData: null, timedOut: false, failed: true };
-                } catch (innerError) {
-                    console.error(`Phase 1: Activity attempt ${attempt} error:`, innerError instanceof Error ? innerError.message : innerError);
-                    if (attempt >= MAX_RETRIES) {
-                        return { approved: false, profileData: null, timedOut: false, failed: true };
-                    }
+        // STEP 1: Get JSESSIONID by hitting the home page
+        let jsessionId = 'ajax:8675309'; // Fallback just in case
+        try {
+            const homeRes = await fetch('https://www.linkedin.com/', {
+                headers: {
+                    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                    'accept-language': 'en-US,en;q=0.9',
+                    'cookie': `li_at=${LINKEDIN_LI_AT}`,
+                    'priority': 'u=0, i',
+                    'sec-ch-ua': '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+                    'sec-ch-ua-mobile': '?0',
+                    'sec-ch-ua-platform': '"Windows"',
+                    'sec-fetch-dest': 'document',
+                    'sec-fetch-mode': 'navigate',
+                    'sec-fetch-site': 'none',
+                    'sec-fetch-user': '?1',
+                    'upgrade-insecure-requests': '1',
+                    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
                 }
+            });
+            const cookies = homeRes.headers.get('set-cookie');
+            if (cookies) {
+                const match = cookies.match(/JSESSIONID="?([^";,]+)"?/);
+                if (match) jsessionId = match[1];
             }
-            // Should never reach here, but just in case
-            return { approved: false, profileData: null, timedOut: false, failed: true };
-        })();
-
-        const timeoutPromise = new Promise<{ approved: boolean, profileData: any, timedOut: boolean, failed?: boolean }>((resolve) =>
-            setTimeout(() => {
-                // IMPORTANT: Do NOT auto-approve timed-out leads.
-                // Signal both timedOut and failed so the retry loop treats this properly.
-                resolve({ approved: false, profileData: null, timedOut: true, failed: true });
-            }, 120000)
-        );
-
-        const result = await Promise.race([activityPromise, timeoutPromise]);
-
-        if (result.timedOut) {
-            console.warn('Phase 1: Activity check timed out after 120s — NOT auto-approving.');
+        } catch (e) {
+            console.warn("Phase 1: Failed to get new JSESSIONID, using fallback.", e);
         }
 
-        return result;
+        await randomDelay(1000, 2500);
+
+        // STEP 2: Scrape the URN from the profile page
+        let fsdUrn = '';
+        const profileRes = await fetch(`https://www.linkedin.com/in/${profileSlug}/`, {
+            headers: {
+                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'accept-language': 'en-US,en;q=0.9',
+                'cookie': `li_at=${LINKEDIN_LI_AT}; JSESSIONID="${jsessionId}"`,
+                'sec-ch-ua': '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                'sec-fetch-dest': 'document',
+                'sec-fetch-mode': 'navigate',
+                'sec-fetch-site': 'same-origin',
+                'sec-fetch-user': '?1',
+                'upgrade-insecure-requests': '1',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
+            }
+        });
+
+        if (profileRes.status === 404) {
+            console.log("Phase 1: Profile 404 Not Found.");
+            return { approved: false, timedOut: false, failed: true };
+        }
+
+        const html = await profileRes.text();
+        // Exact regex to parse the pure ACoA string without the 'urn' prefix duplication
+        const match = html.match(/urn:li:fsd_profile:(ACoA[a-zA-Z0-9_-]+)/);
+        if (match) {
+            fsdUrn = `urn:li:fsd_profile:${match[1]}`;
+            console.log(`Phase 1: Found fsd_profile URN: ${fsdUrn}`);
+        } else {
+            console.log("Phase 1: Could not find fsd_profile URN in the HTML. (Anti-bot may have triggered)");
+            return { approved: false, timedOut: false, failed: true };
+        }
+
+        await randomDelay(1500, 3000);
+
+        // STEP 3: Hit Voyager API
+        const apiUrl = `https://www.linkedin.com/voyager/api/identity/profileUpdatesV2?count=10&includeLongTermHistory=true&moduleKey=creator_profile_all_content_view%3Adesktop&numComments=0&numLikes=0&profileUrn=${encodeURIComponent(fsdUrn)}&q=memberShareFeed`;
+
+        const apiRes = await fetch(apiUrl, {
+            headers: {
+                'accept': 'application/vnd.linkedin.normalized+json+2.1',
+                'accept-language': 'en-US,en;q=0.9',
+                'cookie': `li_at=${LINKEDIN_LI_AT}; JSESSIONID="${jsessionId}"`,
+                'csrf-token': jsessionId, // Crucial
+                'sec-ch-ua': '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-origin',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                'x-restli-protocol-version': '2.0.0'
+            }
+        });
+
+        if (!apiRes.ok) {
+            console.error(`Phase 1: Voyager API returned ${apiRes.status}`);
+            return { approved: false, timedOut: false, failed: true };
+        }
+
+        const data = await apiRes.json();
+
+        // STEP 4: Decode Snowflake Dates
+        // LinkedIn doesn't always put the URNs in elements; they are spread in the included array
+        const urns: string[] = [];
+        if (data.data?.['*elements']) {
+            urns.push(...data.data['*elements']);
+        }
+
+        // Also scavenge all string values looking for activity URNs as a fallback
+        const strData = JSON.stringify(data);
+        const allUrnsMatch = strData.match(/urn:li:activity:\d+/g);
+        if (allUrnsMatch) {
+            allUrnsMatch.forEach(u => {
+                if (!urns.includes(u)) urns.push(u);
+            });
+        }
+
+        if (urns.length === 0) {
+            console.log("Phase 1: Voyager returned 200 OK but 0 feed elements. Assuming no recent activity.");
+            return { approved: false, timedOut: false };
+        }
+
+        const dates: Date[] = [];
+        for (const urn of urns) {
+            const date = decodeUrnDate(urn);
+            if (date && date.getFullYear() > 2000 && date.getFullYear() < 2100) {
+                dates.push(date);
+            }
+        }
+
+        if (dates.length === 0) {
+            console.log("Phase 1: Could not decode any valid dates from URNs.");
+            return { approved: false, timedOut: false, failed: true };
+        }
+
+        // Sort latest first
+        dates.sort((a, b) => b.getTime() - a.getTime());
+        const latestPostDate = dates[0];
+
+        const sixtyDaysAgo = new Date();
+        sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+
+        const isActive = latestPostDate > sixtyDaysAgo;
+        console.log(`Phase 1: Latest decoded post date: ${latestPostDate.toISOString()} — ${isActive ? 'ACTIVE ✓' : 'INACTIVE ✗'} (cutoff: ${sixtyDaysAgo.toISOString()})`);
+
+        return { approved: isActive, timedOut: false };
 
     } catch (error) {
         console.error("Phase 1 Error:", error instanceof Error ? error.message : error);
-        return { approved: false, profileData: null, timedOut: false, failed: true };
+        return { approved: false, timedOut: false, failed: true };
     }
 }
+
 
 // ────────────────────────────────────────────────────────
 // Phase 2: Contact Info Extraction via Voyager API only

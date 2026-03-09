@@ -12,12 +12,16 @@
     "@tailwindcss/postcss": "^4.1.18",
     "@tailwindcss/vite": "^4.1.18",
     "@types/papaparse": "^5.5.2",
+    "axios": "^1.13.6",
     "clsx": "latest",
+    "got-scraping": "^4.2.1",
     "https-proxy-agent": "^7.0.6",
     "lucide": "latest",
     "lucide-react": "latest",
     "next": "latest",
     "papaparse": "^5.5.3",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "react": "latest",
     "react-dom": "latest",
     "tailwind-merge": "latest"
@@ -30,6 +34,7 @@
     "eslint": "latest",
     "eslint-config-next": "latest",
     "postcss": "^8.5.6",
+    "puppeteer": "^24.38.0",
     "tailwindcss": "^4.1.18",
     "typescript": "latest"
   }
