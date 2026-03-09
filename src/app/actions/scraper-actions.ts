@@ -398,11 +398,44 @@ async function gateLeadActivity(linkedinUrl: string): Promise<{ approved: boolea
         }
 
         const html = await profileRes.text();
-        // Exact regex to parse the pure ACoA string without the 'urn' prefix duplication
-        const match = html.match(/urn:li:fsd_profile:(ACoA[a-zA-Z0-9_-]+)/);
-        if (match) {
-            fsdUrn = `urn:li:fsd_profile:${match[1]}`;
-            console.log(`Phase 1: Found fsd_profile URN: ${fsdUrn}`);
+
+        // Safe robust extraction: Find the URN that is explicitly bound to the profileSlug
+        // inside LinkedIn's embedded <code> JSON blocks, avoiding the viewer's own URN in the header.
+        const allUrns = [...html.matchAll(/urn:li:fsd_profile:(ACoA[a-zA-Z0-9_-]+)/g)].map(m => m[1]);
+        const uniqueUrns = [...new Set(allUrns)];
+
+        if (uniqueUrns.length > 0) {
+            let bestUrn = '';
+            let maxSlugProximity = -1;
+
+            for (const u of uniqueUrns) {
+                let proximityCount = 0;
+                const codeRegex = /<code[^>]*>([\s\S]*?)<\/code>/gi;
+                let cMatch;
+                while ((cMatch = codeRegex.exec(html)) !== null) {
+                    const block = cMatch[1];
+                    if (block.includes(profileSlug) && block.includes(u)) {
+                        proximityCount++;
+                    }
+                }
+                if (proximityCount > maxSlugProximity) {
+                    maxSlugProximity = proximityCount;
+                    bestUrn = u;
+                }
+            }
+
+            // Fallback: if no URN shares a block with the slug, pick the second most frequent URN
+            // (Assuming the most frequent is always the logged-in viewer's own profile URN padding the headers)
+            if (maxSlugProximity === 0 && uniqueUrns.length > 1) {
+                const counts = uniqueUrns.map(u => ({ u, count: html.split(u).length - 1 }));
+                counts.sort((a, b) => b.count - a.count);
+                bestUrn = counts[1].u;
+            } else if (maxSlugProximity === 0) {
+                bestUrn = uniqueUrns[0];
+            }
+
+            fsdUrn = `urn:li:fsd_profile:${bestUrn}`;
+            console.log(`Phase 1: Found TARGET fsd_profile URN: ${fsdUrn} (Proximity Score: ${maxSlugProximity})`);
         } else {
             console.log("Phase 1: Could not find fsd_profile URN in the HTML. (Anti-bot may have triggered)");
             return { approved: false, timedOut: false, failed: true };
