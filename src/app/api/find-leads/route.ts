@@ -39,9 +39,19 @@ export async function POST(req: Request) {
             negative_keywords: negative_keywords || []
         };
 
-        const apiKey = process.env.SERPER_API_KEY;
-        if (!apiKey) {
-            return NextResponse.json({ error: 'Missing SERPER_API_KEY' }, { status: 500 });
+        const apiKey = [
+            process.env.SERPER_API_KEY_1,
+            process.env.SERPER_API_KEY_2,
+            process.env.SERPER_API_KEY_3,
+            process.env.SERPER_API_KEY_4,
+            process.env.SERPER_API_KEY_5,
+            process.env.SERPER_API_KEY_6,
+            process.env.SERPER_API_KEY_7,
+            process.env.SERPER_API_KEY_8
+        ].filter(Boolean) as string[];
+
+        if (apiKey.length === 0) {
+            return NextResponse.json({ error: 'Missing SERPER_API_KEY environment variables' }, { status: 500 });
         }
 
         // Run in background
@@ -65,13 +75,19 @@ export async function POST(req: Request) {
                     results
                 }));
 
-                // Auto-Push to CRM
+                // Auto-Push to CRM if not duplicate
+                const { getAllLeads } = await import('@/lib/db');
+                const existingLeads = await getAllLeads();
+                const existingUrls = new Set(existingLeads.map(l => l.linkedin_url));
+
                 for (const r of results) {
-                    await insertOrUpdateLead({
-                        linkedin_url: r.url,
-                        location: r.location,
-                        pipeline_status: 'INBOX'
-                    });
+                    if (!existingUrls.has(r.url)) {
+                        await insertOrUpdateLead({
+                            linkedin_url: r.url,
+                            location: r.location,
+                            pipeline_status: 'INBOX'
+                        });
+                    }
                 }
 
             } catch (err: any) {

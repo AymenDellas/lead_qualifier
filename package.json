@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 8787",
+    "dev": "next dev -p 3000",
     "build": "next build",
-    "start": "next start -p 8787",
+    "start": "next start -p 3000",
     "lint": "next lint"
   },
   "dependencies": {
@@ -13,6 +13,7 @@
     "@tailwindcss/vite": "^4.1.18",
     "@types/papaparse": "^5.5.2",
     "axios": "^1.13.6",
+    "better-sqlite3": "^12.11.1",
     "clsx": "latest",
     "got-scraping": "^4.2.1",
     "groq-sdk": "^1.3.0",
@@ -25,9 +26,12 @@
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "react": "latest",
     "react-dom": "latest",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^6.0.1",
     "tailwind-merge": "latest"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",

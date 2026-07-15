@@ -9,19 +9,20 @@ export async function POST(req: Request) {
         
         const results = [];
         for (const lead of rawLeads) {
-            const mappedLead: Partial<LeadRecord> = {
-                linkedin_url: lead.linkedin_url || lead.url || '',
-                first_name: lead.first_name || lead.firstName || '',
-                last_name: lead.last_name || lead.lastName || '',
-                company: lead.company || lead.company_name || '',
-                website: lead.website || '',
-                website_source: lead.website_source || '',
-                email: lead.email || '',
-                all_emails: lead.all_emails || '',
-                hook: lead.hook || '',
-                location: lead.location || '',
-                contacted: lead.contacted || false,
-            };
+            const mappedLead: Partial<LeadRecord> = {};
+            if (lead.linkedin_url || lead.url) mappedLead.linkedin_url = lead.linkedin_url || lead.url;
+            if (lead.first_name || lead.firstName) mappedLead.first_name = lead.first_name || lead.firstName;
+            if (lead.last_name || lead.lastName) mappedLead.last_name = lead.last_name || lead.lastName;
+            if (lead.company || lead.company_name) mappedLead.company = lead.company || lead.company_name;
+            if (lead.website) mappedLead.website = lead.website;
+            if (lead.website_source) mappedLead.website_source = lead.website_source;
+            if (lead.email) mappedLead.email = lead.email;
+            if (lead.all_emails) mappedLead.all_emails = lead.all_emails;
+            if (lead.email_status) mappedLead.email_status = lead.email_status;
+            if (lead.hook) mappedLead.hook = lead.hook;
+            if (lead.location) mappedLead.location = lead.location;
+            if (lead.contacted !== undefined) mappedLead.contacted = lead.contacted;
+            if (lead.pipeline_status) mappedLead.pipeline_status = lead.pipeline_status;
             
             const inserted = await insertOrUpdateLead(mappedLead);
             results.push(inserted);
@@ -34,9 +35,21 @@ export async function POST(req: Request) {
     }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
     try {
-        const leads = await getAllLeads();
+        const { searchParams } = new URL(req.url);
+        const location = searchParams.get('location');
+        const status = searchParams.get('status');
+
+        let leads = await getAllLeads();
+
+        if (location) {
+            leads = leads.filter(l => l.location?.toUpperCase() === location.toUpperCase());
+        }
+        if (status) {
+            leads = leads.filter(l => l.pipeline_status === status);
+        }
+
         return NextResponse.json({ success: true, count: leads.length, data: leads });
     } catch (error: any) {
         return NextResponse.json({ success: false, error: error.message }, { status: 500 });

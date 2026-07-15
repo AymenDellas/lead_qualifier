@@ -1,9 +1,10 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Database, Filter, Loader2, Search, CheckCircle, AlertCircle, XCircle, Trash2, Download, ShieldCheck, RefreshCcw, Zap, Phone } from "lucide-react";
+import { Database, Filter, Loader2, Search, CheckCircle, AlertCircle, XCircle, Trash2, Download, ShieldCheck, RefreshCcw, Zap, Phone, Radar, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { verifyLeadEmailAction, bulkDeleteLeadsAction, toggleContactedAction, generateHookAction } from "@/app/actions/crm-actions";
+import { verifyLeadEmailAction, bulkDeleteLeadsAction, toggleContactedAction, generateHookAction, importLeadsAction, pushLeadsToInboxAction } from "@/app/actions/crm-actions";
+import Papa from "papaparse";
 
 interface LeadRecord {
     id: string;
@@ -26,10 +27,17 @@ interface LeadRecord {
 export default function CrmDatabase() {
     const [leads, setLeads] = useState<LeadRecord[]>([]);
     const [loading, setLoading] = useState(true);
-    const [filter, setFilter] = useState<'ALL' | 'INBOX' | 'ENRICHMENT' | 'OUTREACH' | 'QUALIFIED' | 'CONTACTED'>('ALL');
+    const [filter, setFilter] = useState<string>('ALL');
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [verifying, setVerifying] = useState(false);
     const [generatingHooks, setGeneratingHooks] = useState(false);
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 100;
+
+    // Reset page when filter changes
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [filter]);
 
     const fetchLeads = async () => {
         setLoading(true);
@@ -53,9 +61,71 @@ export default function CrmDatabase() {
     const filteredLeads = leads.filter(l => {
         if (filter === 'ALL') return true;
         if (filter === 'CONTACTED') return l.contacted;
-        if (filter === 'QUALIFIED') return l.pipeline_status === 'OUTREACH' && (l.email_status === 'VALID' || l.email_status === 'RISKY') && !!l.hook;
+        
+        // Raw location tabs (Inbox only)
+        if (['UK', 'USA', 'CANADA'].includes(filter)) {
+            return l.pipeline_status === 'INBOX' && l.location?.toUpperCase() === filter;
+        }
+        
+        // Qualified location tabs
+        if (['UK_QUALIFIED', 'USA_QUALIFIED', 'CANADA_QUALIFIED'].includes(filter)) {
+            const loc = filter.split('_')[0]; // UK, USA, CANADA
+            return l.pipeline_status === 'OUTREACH' && (l.email_status === 'VALID' || l.email_status === 'RISKY') && !!l.hook && l.location?.toUpperCase() === loc;
+        }
+
         return l.pipeline_status === filter;
     });
+
+    const totalPages = Math.max(1, Math.ceil(filteredLeads.length / itemsPerPage));
+    const paginatedLeads = filteredLeads.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+    const handleUploadCsv = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        Papa.parse(file, {
+            complete: async (results) => {
+                const headers = results.meta?.fields?.map(h => h.toLowerCase().trim()) || [];
+                const urlCol = results.meta?.fields?.find((_, i) => ['url', 'linkedin', 'linkedin url', 'linkedin_url', 'profile'].includes(headers[i]));
+                const locCol = results.meta?.fields?.find((_, i) => ['location', 'country'].includes(headers[i]));
+                const nameCol = results.meta?.fields?.find((_, i) => ['name', 'first name'].includes(headers[i]));
+                
+                if (!urlCol) {
+                    alert("Could not find a URL column in the CSV.");
+                    return;
+                }
+
+                setLoading(true);
+                const leadsToImport = (results.data as any[])
+                    .filter(row => row[urlCol] && row[urlCol].trim() !== '')
+                    .map(row => ({
+                        linkedin_url: row[urlCol],
+                        location: locCol ? row[locCol] : 'Unknown',
+                        first_name: nameCol ? row[nameCol] : 'Unknown',
+                        pipeline_status: 'INBOX'
+                    }));
+                
+                await importLeadsAction(leadsToImport);
+                await fetchLeads();
+                setLoading(false);
+                alert(`Imported ${leadsToImport.length} leads successfully!`);
+            },
+            header: true,
+            skipEmptyLines: true
+        });
+        e.target.value = '';
+    };
+
+    const handlePushToAll = async () => {
+        if (filteredLeads.length === 0) return;
+        const idsToPush = selectedIds.size > 0 ? Array.from(selectedIds) : filteredLeads.map(l => l.id);
+        if (!confirm(`Are you sure you want to push ${idsToPush.length} leads to All (INBOX)?`)) return;
+        
+        setLoading(true);
+        await pushLeadsToInboxAction(idsToPush);
+        await fetchLeads();
+        setSelectedIds(new Set());
+        setLoading(false);
+    };
 
     const toggleSelect = (id: string) => {
         const newSet = new Set(selectedIds);
@@ -111,6 +181,29 @@ export default function CrmDatabase() {
         
         setGeneratingHooks(false);
         setSelectedIds(new Set());
+    };
+
+    const handleAutoGenerateMissingHooks = async () => {
+        // Find leads with no hook
+        const missingHookLeads = leads.filter(l => !l.hook || l.hook.trim() === '');
+        if (missingHookLeads.length === 0) {
+            alert("No leads are missing hooks!");
+            return;
+        }
+        
+        if (!confirm(`Auto-generate hooks for ${missingHookLeads.length} leads? This may take a while.`)) return;
+        
+        setGeneratingHooks(true);
+        for (const lead of missingHookLeads) {
+            try {
+                await generateHookAction(lead.id);
+            } catch (err) {
+                console.error("Failed to auto-generate hook", lead.id, err);
+            }
+        }
+        // Refetch after all done
+        await fetchLeads();
+        setGeneratingHooks(false);
     };
 
     const handleToggleContacted = async (id: string, currentVal: boolean) => {
@@ -207,14 +300,51 @@ export default function CrmDatabase() {
                                 <Download className="w-4 h-4" />
                                 Export Verified
                             </button>
-                            <div className="bg-black/50 p-1 rounded-xl border border-zinc-800 flex items-center text-sm ml-2">
-                                <button onClick={() => setFilter('ALL')} className={cn("px-3 py-1.5 rounded-lg transition-all", filter === 'ALL' ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300")}>All</button>
-                                <button onClick={() => setFilter('QUALIFIED')} className={cn("px-3 py-1.5 rounded-lg transition-all flex items-center gap-1", filter === 'QUALIFIED' ? "bg-accent/20 text-accent" : "text-zinc-500 hover:text-zinc-300")}><Zap className="w-3 h-3"/> Qualified</button>
-                                <button onClick={() => setFilter('OUTREACH')} className={cn("px-3 py-1.5 rounded-lg transition-all", filter === 'OUTREACH' ? "bg-accent/20 text-accent" : "text-zinc-500 hover:text-zinc-300")}>Outreach</button>
-                                <button onClick={() => setFilter('ENRICHMENT')} className={cn("px-3 py-1.5 rounded-lg transition-all", filter === 'ENRICHMENT' ? "bg-amber-500/20 text-amber-400" : "text-zinc-500 hover:text-zinc-300")}>Enrichment</button>
-                                <button onClick={() => setFilter('INBOX')} className={cn("px-3 py-1.5 rounded-lg transition-all", filter === 'INBOX' ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300")}>Inbox</button>
-                                <button onClick={() => setFilter('CONTACTED')} className={cn("px-3 py-1.5 rounded-lg transition-all flex items-center gap-1", filter === 'CONTACTED' ? "bg-purple-500/20 text-purple-400" : "text-zinc-500 hover:text-zinc-300")}><Phone className="w-3 h-3"/> Contacted</button>
+                                <div className="bg-black/50 p-1 rounded-xl border border-zinc-800 flex items-center text-sm ml-2 overflow-x-auto max-w-[500px]">
+                                <button onClick={() => setFilter('ALL')} className={cn("whitespace-nowrap px-3 py-1.5 rounded-lg transition-all", filter === 'ALL' ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300")}>All</button>
+                                <div className="w-px h-4 bg-zinc-800 mx-1"></div>
+                                <button onClick={() => setFilter('LEADS')} className={cn("whitespace-nowrap px-3 py-1.5 rounded-lg transition-all flex items-center gap-1", filter === 'LEADS' ? "bg-blue-500/20 text-blue-400" : "text-zinc-500 hover:text-zinc-300")}><Radar className="w-3 h-3"/> Leads</button>
+                                <div className="w-px h-4 bg-zinc-800 mx-1"></div>
+                                <button onClick={() => setFilter('UK')} className={cn("whitespace-nowrap px-3 py-1.5 rounded-lg transition-all", filter === 'UK' ? "bg-accent/20 text-accent" : "text-zinc-500 hover:text-zinc-300")}>UK</button>
+                                <button onClick={() => setFilter('UK_QUALIFIED')} className={cn("whitespace-nowrap px-3 py-1.5 rounded-lg transition-all flex items-center gap-1", filter === 'UK_QUALIFIED' ? "bg-accent/20 text-accent" : "text-zinc-500 hover:text-zinc-300")}><Zap className="w-3 h-3"/> UK Qual</button>
+                                <div className="w-px h-4 bg-zinc-800 mx-1"></div>
+                                <button onClick={() => setFilter('USA')} className={cn("whitespace-nowrap px-3 py-1.5 rounded-lg transition-all", filter === 'USA' ? "bg-accent/20 text-accent" : "text-zinc-500 hover:text-zinc-300")}>USA</button>
+                                <button onClick={() => setFilter('USA_QUALIFIED')} className={cn("whitespace-nowrap px-3 py-1.5 rounded-lg transition-all flex items-center gap-1", filter === 'USA_QUALIFIED' ? "bg-accent/20 text-accent" : "text-zinc-500 hover:text-zinc-300")}><Zap className="w-3 h-3"/> USA Qual</button>
+                                <div className="w-px h-4 bg-zinc-800 mx-1"></div>
+                                <button onClick={() => setFilter('CANADA')} className={cn("whitespace-nowrap px-3 py-1.5 rounded-lg transition-all", filter === 'CANADA' ? "bg-accent/20 text-accent" : "text-zinc-500 hover:text-zinc-300")}>Canada</button>
+                                <button onClick={() => setFilter('CANADA_QUALIFIED')} className={cn("whitespace-nowrap px-3 py-1.5 rounded-lg transition-all flex items-center gap-1", filter === 'CANADA_QUALIFIED' ? "bg-accent/20 text-accent" : "text-zinc-500 hover:text-zinc-300")}><Zap className="w-3 h-3"/> Canada Qual</button>
+                                <div className="w-px h-4 bg-zinc-800 mx-1"></div>
+                                <button onClick={() => setFilter('OUTREACH')} className={cn("whitespace-nowrap px-3 py-1.5 rounded-lg transition-all", filter === 'OUTREACH' ? "bg-accent/20 text-accent" : "text-zinc-500 hover:text-zinc-300")}>Outreach</button>
+                                <button onClick={() => setFilter('ENRICHMENT')} className={cn("whitespace-nowrap px-3 py-1.5 rounded-lg transition-all", filter === 'ENRICHMENT' ? "bg-amber-500/20 text-amber-400" : "text-zinc-500 hover:text-zinc-300")}>Enrichment</button>
+                                <button onClick={() => setFilter('CONTACTED')} className={cn("whitespace-nowrap px-3 py-1.5 rounded-lg transition-all flex items-center gap-1", filter === 'CONTACTED' ? "bg-purple-500/20 text-purple-400" : "text-zinc-500 hover:text-zinc-300")}><Phone className="w-3 h-3"/> Contacted</button>
                             </div>
+                            
+                            {filter === 'ALL' && (
+                                <div>
+                                    <input type="file" id="upload-csv" className="hidden" accept=".csv" onChange={handleUploadCsv} />
+                                    <label htmlFor="upload-csv" className="bg-zinc-800 text-zinc-300 border border-zinc-700 px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-zinc-700 transition-all flex items-center gap-2 ml-2 cursor-pointer whitespace-nowrap">
+                                        <Upload className="w-4 h-4" />
+                                        Upload CSV
+                                    </label>
+                                </div>
+                            )}
+
+                            {filter === 'LEADS' && (
+                                <button 
+                                    onClick={handlePushToAll}
+                                    className="bg-blue-500/20 text-blue-400 border border-blue-500/30 px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-500/30 transition-all flex items-center gap-2 ml-2 whitespace-nowrap"
+                                >
+                                    Push to All
+                                </button>
+                            )}
+                            <button 
+                                onClick={handleAutoGenerateMissingHooks}
+                                disabled={generatingHooks}
+                                className="bg-amber-500/20 text-amber-400 border border-amber-500/30 px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-amber-500/30 transition-all flex items-center gap-2 ml-2 whitespace-nowrap"
+                            >
+                                {generatingHooks ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                                Auto-Gen Missing Hooks
+                            </button>
                             <button onClick={fetchLeads} className="p-2 text-zinc-400 hover:text-white bg-zinc-800/50 hover:bg-zinc-800 rounded-xl transition-all border border-zinc-700/50 ml-1">
                                 <RefreshCcw className={cn("w-4 h-4", loading && "animate-spin")} />
                             </button>
@@ -237,6 +367,7 @@ export default function CrmDatabase() {
                                 </th>
                                 <th className="px-4 py-3 text-xs text-zinc-500 font-medium uppercase tracking-wider">Status</th>
                                 <th className="px-4 py-3 text-xs text-zinc-500 font-medium uppercase tracking-wider">Name</th>
+                                <th className="px-4 py-3 text-xs text-zinc-500 font-medium uppercase tracking-wider">LinkedIn URL</th>
                                 <th className="px-4 py-3 text-xs text-zinc-500 font-medium uppercase tracking-wider">Location</th>
                                 <th className="px-4 py-3 text-xs text-zinc-500 font-medium uppercase tracking-wider">Email</th>
                                 <th className="px-4 py-3 text-xs text-zinc-500 font-medium uppercase tracking-wider">Verification</th>
@@ -254,13 +385,13 @@ export default function CrmDatabase() {
                                 </tr>
                             ) : filteredLeads.length === 0 ? (
                                 <tr>
-                                    <td colSpan={8} className="px-4 py-12 text-center text-zinc-500">
+                                    <td colSpan={9} className="px-4 py-12 text-center text-zinc-500">
                                         <Search className="w-6 h-6 mx-auto mb-2 opacity-50" />
                                         No leads found
                                     </td>
                                 </tr>
                             ) : (
-                                filteredLeads.map((lead) => (
+                                paginatedLeads.map((lead) => (
                                     <tr 
                                         key={lead.id} 
                                         className={cn(
@@ -290,6 +421,15 @@ export default function CrmDatabase() {
                                         <td className="px-4 py-3 font-medium text-zinc-300">
                                             {lead.first_name} {lead.last_name}
                                             {!lead.first_name && <span className="text-zinc-600 italic">Unknown</span>}
+                                        </td>
+                                        <td className="px-4 py-3 text-zinc-400 text-xs">
+                                            {lead.linkedin_url ? (
+                                                <a href={lead.linkedin_url} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
+                                                    {lead.linkedin_url.includes('linkedin.com/in/') ? lead.linkedin_url.split('linkedin.com/in/')[1].replace(/\/$/, '') : 'Profile'}
+                                                </a>
+                                            ) : (
+                                                <span className="text-zinc-600 italic">—</span>
+                                            )}
                                         </td>
                                         <td className="px-4 py-3 text-zinc-400 text-xs">{lead.location || <span className="text-zinc-600 italic">—</span>}</td>
                                         <td className="px-4 py-3 text-accent font-mono text-xs">{lead.email || <span className="text-zinc-600 italic">—</span>}</td>
@@ -325,6 +465,32 @@ export default function CrmDatabase() {
                         </tbody>
                     </table>
                 </div>
+
+                {/* Pagination Controls */}
+                {filteredLeads.length > 0 && (
+                    <div className="p-4 border-t border-zinc-800 flex items-center justify-between bg-black/50">
+                        <div className="text-sm text-zinc-500">
+                            Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredLeads.length)} of {filteredLeads.length} leads
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button 
+                                disabled={currentPage === 1}
+                                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                className="px-3 py-1 bg-zinc-800 text-zinc-300 rounded-lg disabled:opacity-50 text-sm hover:bg-zinc-700 transition-colors"
+                            >
+                                Previous
+                            </button>
+                            <span className="text-sm text-zinc-400 px-2">Page {currentPage} of {totalPages}</span>
+                            <button 
+                                disabled={currentPage === totalPages}
+                                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                className="px-3 py-1 bg-zinc-800 text-zinc-300 rounded-lg disabled:opacity-50 text-sm hover:bg-zinc-700 transition-colors"
+                            >
+                                Next
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );

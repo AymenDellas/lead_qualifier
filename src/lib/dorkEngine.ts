@@ -154,11 +154,13 @@ function isResultRelevant(item: any, nicheSignals: NicheSignals, location: strin
   return { isRelevant: false, confidence: 'none' };
 }
 
-async function serperSearch(query: string, apiKey: string, page: number = 1): Promise<any[]> {
+async function serperSearch(query: string, apiKeys: string | string[], page: number = 1): Promise<any[]> {
   const url = "https://google.serper.dev/search";
   const payload = { q: query, num: 10, page };
+  const keys = Array.isArray(apiKeys) ? apiKeys : [apiKeys];
 
   for (let attempt = 0; attempt < 3; attempt++) {
+    const apiKey = keys[Math.floor(Math.random() * keys.length)];
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -190,7 +192,7 @@ async function serperSearch(query: string, apiKey: string, page: number = 1): Pr
   return [];
 }
 
-async function prequalifyViaGoogle(url: string, apiKey: string, nicheSignals: NicheSignals): Promise<{url: string, passed: boolean, reason: string}> {
+async function prequalifyViaGoogle(url: string, apiKeys: string | string[], nicheSignals: NicheSignals): Promise<{url: string, passed: boolean, reason: string}> {
   try {
     const slugMatch = url.match(/\/in\/([\w-]+)/);
     if (!slugMatch) return { url, passed: true, reason: 'bad_url' };
@@ -198,7 +200,7 @@ async function prequalifyViaGoogle(url: string, apiKey: string, nicheSignals: Ni
     const slug = slugMatch[1];
     const query = `site:linkedin.com/in/${slug}`;
     
-    const results = await serperSearch(query, apiKey, 1);
+    const results = await serperSearch(query, apiKeys, 1);
     
     if (results.length === 0) return { url, passed: true, reason: 'not_indexed' };
     
@@ -224,7 +226,7 @@ async function prequalifyViaGoogle(url: string, apiKey: string, nicheSignals: Ni
 
 export async function runDorkEngine(
   config: SearchConfig, 
-  apiKey: string,
+  apiKeys: string | string[],
   onProgress?: (found: number, totalQueries: number, qIdx: number, query: string) => void
 ): Promise<DorkResult[]> {
   const nicheSignals = extractNicheSignals(config.job_titles);
@@ -263,7 +265,7 @@ export async function runDorkEngine(
     for (let page = 1; page <= maxPages; page++) {
       if (allUrls.size + prequalPending.size >= maxTarget) break;
 
-      const results = await serperSearch(qObj.query, apiKey, page);
+      const results = await serperSearch(qObj.query, apiKeys, page);
       queriesUsed++;
 
       if (results.length === 0) break;
@@ -312,7 +314,7 @@ export async function runDorkEngine(
       
       // Parallel layer 2 verification
       const verifyResults = await Promise.all(
-        batch.map(url => prequalifyViaGoogle(url, apiKey, nicheSignals))
+        batch.map(url => prequalifyViaGoogle(url, apiKeys, nicheSignals))
       );
       
       for (const res of verifyResults) {
@@ -328,7 +330,7 @@ export async function runDorkEngine(
     const batch = Array.from(prequalPending);
     prequalPending.clear();
     const verifyResults = await Promise.all(
-      batch.map(url => prequalifyViaGoogle(url, apiKey, nicheSignals))
+      batch.map(url => prequalifyViaGoogle(url, apiKeys, nicheSignals))
     );
     for (const res of verifyResults) {
       if (res.passed) {

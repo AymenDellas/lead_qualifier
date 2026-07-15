@@ -4,14 +4,16 @@ const nextConfig = {
     output: 'standalone',
 
     // Allow Node packages in server actions
-    serverExternalPackages: [],
+    serverExternalPackages: ['better-sqlite3'],
 
     // Disable powered-by header for security
     poweredByHeader: false,
 
     // Increase server action body size limit for large CSV uploads
-    serverActions: {
-        bodySizeLimit: '10mb',
+    experimental: {
+        serverActions: {
+            bodySizeLimit: '10mb',
+        },
     },
 
 };

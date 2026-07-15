@@ -1,6 +1,6 @@
 "use server";
 
-import { updateLead, deleteLead, bulkDeleteLeads, getLead, LeadRecord } from "@/lib/db";
+import { updateLead, deleteLead, bulkDeleteLeads, getLead, LeadRecord, insertOrUpdateLead, bulkInsertOrUpdateLeads } from "@/lib/db";
 import { verifyEmail } from "@/app/actions/email-verifier-actions";
 import { generateHook } from "@/lib/groqClient";
 
@@ -54,5 +54,26 @@ export async function generateHookAction(id: string) {
     } catch (err) {
         console.error("Failed to generate hook", err);
         return lead;
+    }
+}
+
+export async function pushLeadsToInboxAction(ids: string[]) {
+    const results = [];
+    for (const id of ids) {
+        try {
+            results.push(await updateLead(id, { pipeline_status: 'INBOX' }));
+        } catch (e) {
+            console.error("Failed to push lead to inbox", id, e);
+        }
+    }
+    return results;
+}
+
+export async function importLeadsAction(leads: Partial<LeadRecord>[]) {
+    try {
+        return await bulkInsertOrUpdateLeads(leads);
+    } catch (e) {
+        console.error("Failed to bulk import leads", e);
+        return [];
     }
 }

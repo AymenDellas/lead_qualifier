@@ -8,6 +8,7 @@ if (!fs.existsSync(dataDir)) {
 }
 
 const dbPath = path.join(dataDir, 'leads_db.json');
+const sqliteBackupPath = path.join(dataDir, 'leads_db.sqlite');
 
 export interface LeadRecord {
     id: string;
@@ -27,7 +28,7 @@ export interface LeadRecord {
     created_at: string;
 }
 
-// Helper to read DB synchronously (fine for local small scale)
+// Helper to read DB synchronously (fine for local scale)
 function readDb(): LeadRecord[] {
     if (!fs.existsSync(dbPath)) {
         fs.writeFileSync(dbPath, JSON.stringify([]));
@@ -50,13 +51,8 @@ export function generateId(): string {
     return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 }
 
-export function determinePipelineStatus(email: string, hook: string): 'INBOX' | 'ENRICHMENT' | 'OUTREACH' {
-    const hasValidEmail = !!email && email.trim() !== '';
-    const hasHook = !!hook && hook.trim() !== '';
-
-    if (hasValidEmail && hasHook) return 'OUTREACH';
-    if (hasValidEmail || hasHook) return 'ENRICHMENT';
-    return 'INBOX';
+export function determinePipelineStatus(email: string, hook: string, currentStatus?: string): string {
+    return currentStatus || 'INBOX';
 }
 
 export async function insertOrUpdateLead(lead: Partial<LeadRecord>): Promise<LeadRecord> {
@@ -64,7 +60,7 @@ export async function insertOrUpdateLead(lead: Partial<LeadRecord>): Promise<Lea
     
     const email = lead.email || '';
     const hook = lead.hook || '';
-    const pipelineStatus = lead.pipeline_status || determinePipelineStatus(email, hook);
+    const pipelineStatus = lead.pipeline_status || 'INBOX';
     const linkedin_url = lead.linkedin_url || '';
 
     // Check if lead with this linkedin_url already exists
@@ -80,11 +76,12 @@ export async function insertOrUpdateLead(lead: Partial<LeadRecord>): Promise<Lea
         const current = leads[existingIndex];
         const newEmail = lead.email !== undefined ? lead.email : current.email;
         const newHook = lead.hook !== undefined ? lead.hook : current.hook;
+        const newStatus = lead.pipeline_status || current.pipeline_status || 'INBOX';
         
         leads[existingIndex] = {
             ...current,
             ...lead,
-            pipeline_status: lead.pipeline_status || determinePipelineStatus(newEmail, newHook),
+            pipeline_status: newStatus,
         };
         writeDb(leads);
         return leads[existingIndex];
@@ -113,6 +110,85 @@ export async function insertOrUpdateLead(lead: Partial<LeadRecord>): Promise<Lea
     }
 }
 
+export async function bulkInsertOrUpdateLeads(newLeads: Partial<LeadRecord>[]): Promise<LeadRecord[]> {
+    const leads = readDb();
+    
+    // Create a map for fast lookup by id or linkedin_url
+    const urlMap = new Map<string, number>();
+    const idMap = new Map<string, number>();
+    
+    leads.forEach((l, idx) => {
+        if (l.linkedin_url) urlMap.set(l.linkedin_url, idx);
+        if (l.id) idMap.set(l.id, idx);
+    });
+
+    const results: LeadRecord[] = [];
+    let madeChanges = false;
+
+    for (const lead of newLeads) {
+        const email = lead.email || '';
+        const hook = lead.hook || '';
+        const pipelineStatus = lead.pipeline_status || 'INBOX';
+        const linkedin_url = lead.linkedin_url || '';
+
+        let existingIndex = -1;
+        if (linkedin_url && !lead.id) {
+            existingIndex = urlMap.get(linkedin_url) ?? -1;
+        } else if (lead.id) {
+            existingIndex = idMap.get(lead.id) ?? -1;
+        }
+
+        if (existingIndex >= 0) {
+            // Update existing
+            const current = leads[existingIndex];
+            const newEmail = lead.email !== undefined ? lead.email : current.email;
+            const newHook = lead.hook !== undefined ? lead.hook : current.hook;
+            const newStatus = lead.pipeline_status || current.pipeline_status || 'INBOX';
+            
+            leads[existingIndex] = {
+                ...current,
+                ...lead,
+                pipeline_status: newStatus,
+            };
+            results.push(leads[existingIndex]);
+            madeChanges = true;
+        } else {
+            // Insert new
+            const newLead: LeadRecord = {
+                id: lead.id || generateId(),
+                linkedin_url,
+                first_name: lead.first_name || '',
+                last_name: lead.last_name || '',
+                company: lead.company || '',
+                website: lead.website || '',
+                website_source: lead.website_source || '',
+                email,
+                all_emails: lead.all_emails || '',
+                email_status: lead.email_status || 'UNVERIFIED',
+                hook,
+                pipeline_status: pipelineStatus,
+                location: lead.location || '',
+                contacted: lead.contacted || false,
+                created_at: new Date().toISOString()
+            };
+            leads.push(newLead);
+            
+            // Add to maps
+            urlMap.set(newLead.linkedin_url, leads.length - 1);
+            idMap.set(newLead.id, leads.length - 1);
+            
+            results.push(newLead);
+            madeChanges = true;
+        }
+    }
+
+    if (madeChanges) {
+        writeDb(leads);
+    }
+    
+    return results;
+}
+
 export async function updateLead(id: string, updates: Partial<LeadRecord>): Promise<LeadRecord> {
     const leads = readDb();
     const index = leads.findIndex(l => l.id === id);
@@ -121,13 +197,14 @@ export async function updateLead(id: string, updates: Partial<LeadRecord>): Prom
         const current = leads[index];
         const newEmail = updates.email !== undefined ? updates.email : current.email;
         const newHook = updates.hook !== undefined ? updates.hook : current.hook;
+        const newStatus = updates.pipeline_status || current.pipeline_status || 'INBOX';
         
         leads[index] = {
             ...current,
             ...updates,
             id, // protect id
             created_at: current.created_at, // protect created_at
-            pipeline_status: updates.pipeline_status || determinePipelineStatus(newEmail, newHook),
+            pipeline_status: newStatus,
         };
         writeDb(leads);
         return leads[index];
@@ -162,3 +239,16 @@ export async function bulkDeleteLeads(ids: string[]): Promise<void> {
         writeDb(filtered);
     }
 }
+
+// Restore JSON from backup if it was migrated
+function restoreJsonBackup() {
+    const backupPath = dbPath + '.backup';
+    if (fs.existsSync(backupPath)) {
+        if (!fs.existsSync(dbPath) || fs.readFileSync(dbPath, 'utf8') === '[]') {
+            fs.copyFileSync(backupPath, dbPath);
+            console.log('Restored leads_db.json from backup.');
+        }
+    }
+}
+
+restoreJsonBackup();
