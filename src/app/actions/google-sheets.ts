@@ -2,18 +2,10 @@
 
 /**
  * Google Sheets Export — uses the Google Sheets REST API directly via fetch.
- * No additional npm packages required.
- *
- * Setup:
- * 1. Create a Google Cloud project & enable the Google Sheets API
- * 2. Create a service account & download the JSON key
- * 3. Base64-encode the JSON key: base64 -w0 credentials.json
- * 4. Set GOOGLE_SHEETS_CREDENTIALS_BASE64 in .env.local
- * 5. Optionally set GOOGLE_SHEETS_SPREADSHEET_ID to append to an existing sheet
+ * 3-Tab CRM Architecture: Inbox, Enrichment, Outreach Pipeline
  */
 
 import crypto from 'crypto';
-import type { Lead } from './scraper-actions';
 
 // ── Google Auth via Service Account JWT ──
 
@@ -74,6 +66,14 @@ async function getAccessToken(creds: ServiceAccountKey): Promise<string> {
 
 // ── Sheets API Helpers ──
 
+async function getSpreadsheetDetails(token: string, spreadsheetId: string): Promise<any> {
+    const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (!response.ok) return null;
+    return await response.json();
+}
+
 async function createSpreadsheet(token: string, title: string): Promise<string> {
     const response = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
         method: 'POST',
@@ -83,12 +83,11 @@ async function createSpreadsheet(token: string, title: string): Promise<string> 
         },
         body: JSON.stringify({
             properties: { title },
-            sheets: [{
-                properties: {
-                    title: 'Qualified Leads',
-                    gridProperties: { frozenRowCount: 1 },
-                },
-            }],
+            sheets: [
+                { properties: { title: 'Outreach Pipeline (CRM)', gridProperties: { frozenRowCount: 1 } } },
+                { properties: { title: 'Enrichment (Processing)', gridProperties: { frozenRowCount: 1 } } },
+                { properties: { title: 'Inbox (Raw Leads)', gridProperties: { frozenRowCount: 1 } } },
+            ],
         }),
     });
 
@@ -101,51 +100,72 @@ async function createSpreadsheet(token: string, title: string): Promise<string> 
     return data.spreadsheetId;
 }
 
-async function clearAndWriteSheet(token: string, spreadsheetId: string, rows: string[][]): Promise<void> {
-    // Clear existing data
-    await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/A:Z?key=`,
-        {
-            method: 'PUT' as string,
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                range: 'A:Z',
-                majorDimension: 'ROWS',
-                values: [],
-            }),
-        }
-    ).catch(() => { }); // Ignore errors on clear
+async function ensureSheetsExist(token: string, spreadsheetId: string, requiredTitles: string[]): Promise<number[]> {
+    const details = await getSpreadsheetDetails(token, spreadsheetId);
+    if (!details) throw new Error("Could not fetch spreadsheet details");
 
-    // Write the data
-    const response = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/A1?valueInputOption=USER_ENTERED`,
+    const existingSheets = details.sheets.map((s: any) => ({
+        title: s.properties.title,
+        sheetId: s.properties.sheetId
+    }));
+    
+    const existingTitles = existingSheets.map((s: any) => s.title);
+    const missingTitles = requiredTitles.filter(t => !existingTitles.includes(t));
+    
+    if (missingTitles.length > 0) {
+        const requests = missingTitles.map(title => ({
+            addSheet: {
+                properties: { title, gridProperties: { frozenRowCount: 1 } }
+            }
+        }));
+        
+        await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requests }),
+        });
+        
+        const newDetails = await getSpreadsheetDetails(token, spreadsheetId);
+        return requiredTitles.map(t => newDetails.sheets.find((s: any) => s.properties.title === t).properties.sheetId);
+    }
+    
+    return requiredTitles.map(t => existingSheets.find((s: any) => s.title === t).sheetId);
+}
+
+async function clearAndWriteSheet(token: string, spreadsheetId: string, sheetName: string, rows: string[][]): Promise<void> {
+    const encodedSheetName = encodeURIComponent(sheetName);
+    const range = `'${encodedSheetName}'!A:Z`;
+    
+    await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?key=`,
         {
             method: 'PUT',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                range: 'A1',
-                majorDimension: 'ROWS',
-                values: rows,
-            }),
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ range: `'${sheetName}'!A:Z`, majorDimension: 'ROWS', values: [] }),
+        }
+    ).catch(() => { });
+
+    const writeRange = `'${sheetName}'!A1`;
+    const writeRangeEncoded = `'${encodedSheetName}'!A1`;
+    const response = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${writeRangeEncoded}?valueInputOption=USER_ENTERED`,
+        {
+            method: 'PUT',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ range: writeRange, majorDimension: 'ROWS', values: rows }),
         }
     );
 
     if (!response.ok) {
         const err = await response.text();
-        throw new Error(`Failed to write data: ${response.status} — ${err}`);
+        throw new Error(`Failed to write data to ${sheetName}: ${response.status} — ${err}`);
     }
 }
 
-async function formatSheet(token: string, spreadsheetId: string, sheetId: number, rowCount: number): Promise<void> {
-    const requests = [
-        // Bold header row
-        {
+async function formatSheets(token: string, spreadsheetId: string, sheetIds: number[]): Promise<void> {
+    const requests: any[] = [];
+    for (const sheetId of sheetIds) {
+        requests.push({
             repeatCell: {
                 range: { sheetId, startRowIndex: 0, endRowIndex: 1 },
                 cell: {
@@ -157,72 +177,22 @@ async function formatSheet(token: string, spreadsheetId: string, sheetId: number
                 },
                 fields: 'userEnteredFormat(textFormat,backgroundColor,horizontalAlignment)',
             },
-        },
-        // Auto-resize columns
-        { autoResizeDimensions: { dimensions: { sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 6 } } },
-        // Conditional format: green for QUALIFIED
-        {
-            addConditionalFormatRule: {
-                rule: {
-                    ranges: [{ sheetId, startRowIndex: 1, endRowIndex: rowCount + 1, startColumnIndex: 3, endColumnIndex: 4 }],
-                    booleanRule: {
-                        condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'QUALIFIED' }] },
-                        format: {
-                            backgroundColor: { red: 0.85, green: 0.95, blue: 0.85 },
-                            textFormat: { foregroundColor: { red: 0.1, green: 0.5, blue: 0.1 }, bold: true },
-                        },
-                    },
-                },
-                index: 0,
-            },
-        },
-        // Conditional format: red for REJECTED
-        {
-            addConditionalFormatRule: {
-                rule: {
-                    ranges: [{ sheetId, startRowIndex: 1, endRowIndex: rowCount + 1, startColumnIndex: 3, endColumnIndex: 4 }],
-                    booleanRule: {
-                        condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'REJECTED' }] },
-                        format: {
-                            backgroundColor: { red: 0.95, green: 0.85, blue: 0.85 },
-                            textFormat: { foregroundColor: { red: 0.7, green: 0.1, blue: 0.1 }, bold: true },
-                        },
-                    },
-                },
-                index: 1,
-            },
-        },
-        // Conditional format: orange for ACTIVITY_FAILED
-        {
-            addConditionalFormatRule: {
-                rule: {
-                    ranges: [{ sheetId, startRowIndex: 1, endRowIndex: rowCount + 1, startColumnIndex: 3, endColumnIndex: 4 }],
-                    booleanRule: {
-                        condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'ACTIVITY_FAILED' }] },
-                        format: {
-                            backgroundColor: { red: 1.0, green: 0.93, blue: 0.8 },
-                            textFormat: { foregroundColor: { red: 0.8, green: 0.5, blue: 0.0 }, bold: true },
-                        },
-                    },
-                },
-                index: 2,
-            },
-        },
-    ];
+        });
+        requests.push({
+            autoResizeDimensions: { dimensions: { sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 10 } }
+        });
+    }
 
     await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
         method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ requests }),
-    }).catch(() => { }); // Best-effort formatting
+    }).catch(() => { });
 }
 
 // ── Public Export Function ──
 
-export async function exportToGoogleSheets(leads: Lead[]): Promise<{ success: boolean; url?: string; error?: string }> {
+export async function exportToGoogleSheets(leads: any[]): Promise<{ success: boolean; url?: string; error?: string }> {
     try {
         const creds = getCredentials();
         if (!creds) {
@@ -235,34 +205,62 @@ export async function exportToGoogleSheets(leads: Lead[]): Promise<{ success: bo
         console.log('Google Sheets: Authenticating...');
         const token = await getAccessToken(creds);
 
-        // Build rows
-        const headers = ['LinkedIn URL', 'First Name', 'Status', 'Activity Status', 'Websites', 'Emails'];
-        const dataRows = leads.map(l => [
-            l.url,
-            l.firstName || '',
-            l.status,
-            l.activityStatus || '',
-            (l.websites || []).join('; ') || l.website || '',
-            l.emails.join('; '),
-        ]);
-        const allRows = [headers, ...dataRows];
+        // 3-Tab Architecture setup
+        const outreachHeaders = ['First Name', 'Last Name', 'Company', 'Website', 'Email', 'All Emails', 'Hook', 'Website Source', 'LinkedIn URL'];
+        const enrichmentHeaders = ['First Name', 'Last Name', 'Company', 'Website', 'Email', 'All Emails', 'Hook', 'Website Source', 'LinkedIn URL', 'Verification Status', 'Enrichment Status'];
+        const inboxHeaders = ['Date Added', 'LinkedIn URL', 'Niche/Job Title', 'Status', 'Website Source'];
+        
+        const outreachRows: string[][] = [outreachHeaders];
+        const enrichmentRows: string[][] = [enrichmentHeaders];
+        const inboxRows: string[][] = [inboxHeaders];
 
-        // Use existing spreadsheet or create new one
+        leads.forEach((lead) => {
+            const linkedinUrl = lead.linkedin_url || lead.url || '';
+            const firstName = lead.first_name || lead.firstName || '';
+            const lastName = lead.last_name || lead.lastName || '';
+            const company = lead.company || lead.company_name || '';
+            const website = lead.website || (lead.websites ? lead.websites.join('; ') : '') || '';
+            const email = lead.email || (lead.emails && lead.emails.length > 0 ? lead.emails[0] : '') || '';
+            const allEmails = lead.all_emails || (lead.emails ? lead.emails.join('; ') : '') || '';
+            const hook = lead.hook || '';
+            const websiteSource = lead.website_source || '';
+            const status = lead.status || '';
+
+            const hasValidEmail = !!email;
+            const hasHook = !!hook;
+
+            if (hasValidEmail && hasHook) {
+                // Fully qualified
+                outreachRows.push([firstName, lastName, company, website, email, allEmails, hook, websiteSource, linkedinUrl]);
+            } else if (firstName || website || email || hook || allEmails) {
+                // Needs work / missing components
+                const vStatus = hasValidEmail ? 'Valid' : 'Missing Email';
+                const eStatus = hasHook ? 'Has Hook' : 'Missing Hook';
+                enrichmentRows.push([firstName, lastName, company, website, email, allEmails, hook, websiteSource, linkedinUrl, vStatus, eStatus]);
+            } else {
+                // Raw lead
+                inboxRows.push([new Date().toISOString().split('T')[0], linkedinUrl, '', status, websiteSource]);
+            }
+        });
+
+        const sheetNames = ['Outreach Pipeline (CRM)', 'Enrichment (Processing)', 'Inbox (Raw Leads)'];
         let spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-        let isNew = false;
 
         if (!spreadsheetId) {
-            const title = `Revlane Leads — ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}`;
+            const title = `Revlane CRM — ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}`;
             console.log(`Google Sheets: Creating new spreadsheet "${title}"...`);
             spreadsheetId = await createSpreadsheet(token, title);
-            isNew = true;
         }
 
-        console.log(`Google Sheets: Writing ${leads.length} leads to spreadsheet ${spreadsheetId}...`);
-        await clearAndWriteSheet(token, spreadsheetId, allRows);
+        console.log(`Google Sheets: Ensuring 3-tab structure exists in spreadsheet ${spreadsheetId}...`);
+        const sheetIds = await ensureSheetsExist(token, spreadsheetId, sheetNames);
 
-        // Apply formatting (best-effort)
-        await formatSheet(token, spreadsheetId, 0, leads.length);
+        console.log(`Google Sheets: Writing data...`);
+        if (outreachRows.length > 1) await clearAndWriteSheet(token, spreadsheetId, sheetNames[0], outreachRows);
+        if (enrichmentRows.length > 1) await clearAndWriteSheet(token, spreadsheetId, sheetNames[1], enrichmentRows);
+        if (inboxRows.length > 1) await clearAndWriteSheet(token, spreadsheetId, sheetNames[2], inboxRows);
+
+        await formatSheets(token, spreadsheetId, sheetIds);
 
         const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
         console.log(`Google Sheets: Export complete → ${url}`);

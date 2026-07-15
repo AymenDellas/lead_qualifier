@@ -10,12 +10,7 @@ type EnvVar = {
 };
 
 const ENV_VARS: EnvVar[] = [
-    { name: 'BRIGHT_DATA_API_KEY', required: true, description: 'Bright Data API authentication key' },
-    { name: 'BD_DATASET_ACTIVITY', required: true, description: 'Bright Data dataset ID for activity checks' },
-    { name: 'BD_DATASET_PROFILES', required: true, description: 'Bright Data dataset ID for profile scraping' },
-    { name: 'BD_DATASET_WEB_SCRAPER', required: true, description: 'Bright Data dataset ID for web scraping' },
-    { name: 'LINKEDIN_LI_AT', required: true, description: 'LinkedIn li_at session cookie' },
-    { name: 'BD_PROXY_URL', required: false, description: 'Bright Data residential proxy URL' },
+    // Worker uses browser-based login (LINKEDIN_ACCOUNTS in .env.local) — no li_at needed
     { name: 'GOOGLE_SHEETS_CREDENTIALS_BASE64', required: false, description: 'Base64-encoded Google service account credentials JSON' },
     { name: 'GOOGLE_SHEETS_SPREADSHEET_ID', required: false, description: 'Default Google Sheets spreadsheet ID' },
 ];

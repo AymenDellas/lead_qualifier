@@ -1,138 +1,140 @@
 import { NextRequest, NextResponse } from "next/server";
-import { processSingleLead } from "@/app/actions/scraper-actions";
+import fs from "fs";
+import path from "path";
 
-// ── In-memory job store ──
-// Jobs persist for the lifetime of the server process.
-// On Render, the process stays alive between requests.
-type Job = {
-    id: string;
-    status: "pending" | "processing" | "done" | "error";
-    linkedinUrl: string;
-    result?: any;
-    error?: string;
-    createdAt: number;
-    completedAt?: number;
-};
+// Force dynamic — never cache this route
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
-const jobs = new Map<string, Job>();
+const PROJECT_ROOT = process.cwd();
+const QUEUE_DIR = path.join(PROJECT_ROOT, "queue");
+const RESULTS_DIR = path.join(PROJECT_ROOT, "queue-results");
 
-// Clean up jobs older than 30 minutes to prevent memory leaks
-function cleanOldJobs() {
-    const cutoff = Date.now() - 30 * 60 * 1000;
-    for (const [id, job] of jobs) {
-        if (job.createdAt < cutoff) jobs.delete(id);
-    }
-}
+// Ensure dirs exist
+if (!fs.existsSync(QUEUE_DIR)) fs.mkdirSync(QUEUE_DIR, { recursive: true });
+if (!fs.existsSync(RESULTS_DIR)) fs.mkdirSync(RESULTS_DIR, { recursive: true });
 
-// ── GET: Check job status or show usage ──
+// ── GET: Check job status ──
 export async function GET(request: NextRequest) {
     const jobId = request.nextUrl.searchParams.get("jobId");
 
-    // If no jobId, show usage instructions
     if (!jobId) {
+        // Check if worker is alive
+        const statusPath = path.join(RESULTS_DIR, "worker-status.json");
+        let workerStatus: any = "unknown";
+        try {
+            if (fs.existsSync(statusPath)) {
+                const raw = JSON.parse(fs.readFileSync(statusPath, "utf8"));
+                // Check if status file is stale (>60s old = worker likely dead)
+                const updatedAt = new Date(raw.updatedAt || 0).getTime();
+                const isStale = Date.now() - updatedAt > 120_000;
+                workerStatus = { ...raw, stale: isStale };
+            }
+        } catch { }
+
         return NextResponse.json({
             status: "ok",
-            endpoint: "POST /api/process-lead",
+            worker: workerStatus,
+            queueSize: fs.readdirSync(QUEUE_DIR).filter(f => f.endsWith('.json')).length,
             usage: {
-                step1: "POST with { \"linkedinUrl\": \"https://www.linkedin.com/in/some-profile\" }",
-                step2: "Response returns { \"jobId\": \"...\" }",
+                step1: 'POST with { "linkedinUrl": "https://www.linkedin.com/in/some-profile" }',
+                step2: 'Response returns { "jobId": "..." }',
                 step3: "GET /api/process-lead?jobId=... to poll for results",
             },
         });
     }
 
-    // Look up the job
-    const job = jobs.get(jobId);
-    if (!job) {
-        return NextResponse.json({ error: "Job not found" }, { status: 404 });
+    // Check if result file exists (job completed)
+    const resultPath = path.join(RESULTS_DIR, `${jobId}.json`);
+    if (fs.existsSync(resultPath)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(resultPath, "utf8"));
+            return NextResponse.json({
+                jobId,
+                status: "done",
+                result: data.result,
+            });
+        } catch {
+            return NextResponse.json({ jobId, status: "error", error: "Failed to read result" }, { status: 500 });
+        }
     }
 
-    if (job.status === "done") {
-        const elapsed = job.completedAt
-            ? ((job.completedAt - job.createdAt) / 1000).toFixed(1) + "s"
-            : undefined;
+    // Check if job is still in queue (waiting to be picked up)
+    const queuePath = path.join(QUEUE_DIR, `${jobId}.json`);
+    if (fs.existsSync(queuePath)) {
         return NextResponse.json({
-            jobId: job.id,
-            status: "done",
-            elapsed,
-            result: job.result,
+            jobId,
+            status: "queued",
+            message: "Job is in the queue, waiting for worker to pick it up.",
         });
     }
 
-    if (job.status === "error") {
-        return NextResponse.json({
-            jobId: job.id,
-            status: "error",
-            error: job.error,
-        }, { status: 500 });
-    }
+    // Check if worker is processing it right now
+    const statusPath = path.join(RESULTS_DIR, "worker-status.json");
+    try {
+        if (fs.existsSync(statusPath)) {
+            const ws = JSON.parse(fs.readFileSync(statusPath, "utf8"));
+            if (ws.status === "processing" && ws.jobId === jobId) {
+                return NextResponse.json({
+                    jobId,
+                    status: "processing",
+                    message: `Worker is currently scraping ${ws.url}`,
+                });
+            }
+        }
+    } catch { }
 
-    // Still processing
-    const elapsed = ((Date.now() - job.createdAt) / 1000).toFixed(1);
-    return NextResponse.json({
-        jobId: job.id,
-        status: job.status,
-        elapsed: elapsed + "s",
-        message: "Still processing. Poll this URL again in a few seconds.",
-    });
+    // Job not found anywhere — might have been processed and cleaned up
+    return NextResponse.json({ jobId, status: "not_found", message: "Job not found. It may have expired or was never created." }, { status: 404 });
 }
 
-// ── POST: Start a new job ──
+// ── POST: Queue a new job ──
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { linkedinUrl } = body;
+        const { linkedinUrl, webhookUrl } = body;
 
-        if (!linkedinUrl || typeof linkedinUrl !== "string") {
-            return NextResponse.json(
-                { error: "Missing or invalid 'linkedinUrl' field" },
-                { status: 400 }
-            );
+        if (!linkedinUrl) {
+            return NextResponse.json({ error: "Missing 'linkedinUrl'" }, { status: 400 });
         }
 
-        // Clean up old jobs periodically
-        cleanOldJobs();
+        // Validate URL format
+        if (!linkedinUrl.includes('linkedin.com/in/')) {
+            return NextResponse.json({ error: "Invalid LinkedIn profile URL" }, { status: 400 });
+        }
 
-        // Create a new job
+        // Check worker is alive
+        const statusPath = path.join(RESULTS_DIR, "worker-status.json");
+        if (!fs.existsSync(statusPath)) {
+            return NextResponse.json({ error: "Worker is not running. Start it with: node worker.cjs" }, { status: 503 });
+        }
+
+        // Check worker staleness
+        try {
+            const ws = JSON.parse(fs.readFileSync(statusPath, "utf8"));
+            const updatedAt = new Date(ws.updatedAt || 0).getTime();
+            if (Date.now() - updatedAt > 90_000 && ws.status !== 'processing') {
+                return NextResponse.json({ error: "Worker appears offline (status file is stale). Restart with: node worker.cjs" }, { status: 503 });
+            }
+        } catch { /* non-fatal */ }
+
         const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        const job: Job = {
-            id: jobId,
-            status: "processing",
-            linkedinUrl,
-            createdAt: Date.now(),
-        };
-        jobs.set(jobId, job);
 
-        console.log(`[API] Job ${jobId} created for ${linkedinUrl}`);
+        // Drop job file into queue/
+        const jobPath = path.join(QUEUE_DIR, `${jobId}.json`);
+        const tmpPath = `${jobPath}.tmp`;
+        fs.writeFileSync(tmpPath, JSON.stringify({ jobId, linkedinUrl, webhookUrl: webhookUrl || null, createdAt: new Date().toISOString() }));
+        fs.renameSync(tmpPath, jobPath);
 
-        // Start processing in the background (fire and forget)
-        processSingleLead(linkedinUrl)
-            .then((result) => {
-                job.status = "done";
-                job.result = result;
-                job.completedAt = Date.now();
-                const elapsed = ((job.completedAt - job.createdAt) / 1000).toFixed(1);
-                console.log(`[API] Job ${jobId} done in ${elapsed}s — status: ${result.status}`);
-            })
-            .catch((error) => {
-                job.status = "error";
-                job.error = error instanceof Error ? error.message : "Internal server error";
-                job.completedAt = Date.now();
-                console.error(`[API] Job ${jobId} failed:`, error);
-            });
+        console.log(`[API] Queued job ${jobId} for ${linkedinUrl}`);
 
-        // Return immediately with the job ID
         return NextResponse.json({
             jobId,
-            status: "processing",
+            status: "queued",
             pollUrl: `/api/process-lead?jobId=${jobId}`,
-            message: "Job started. Poll the pollUrl to check for results.",
         });
     } catch (error) {
-        console.error("[API] POST error:", error);
-        return NextResponse.json(
-            { error: error instanceof Error ? error.message : "Internal server error" },
-            { status: 500 }
-        );
+        console.error('[API] POST error:', error);
+        return NextResponse.json({ error: "Internal error" }, { status: 500 });
     }
 }

@@ -1,13 +1,40 @@
 @import "tailwindcss";
 
+@theme {
+  --color-background: #0B0B0B;
+  --color-text: #F0EFE9;
+  --color-accent: #C8F135;
+  --color-danger: #E56B6B;
+  --font-sans: var(--font-outfit), 'Outfit', sans-serif;
+  --font-mono: var(--font-fira-code), 'Fira Code', monospace;
+}
 
 :root {
-  --background: #0a0a0a;
-  --foreground: #ededed;
+  --background: #0B0B0B;
+  --foreground: #F0EFE9;
+  --accent: #C8F135;
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-background);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* Custom scrollbar to match sleek theme */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
 }

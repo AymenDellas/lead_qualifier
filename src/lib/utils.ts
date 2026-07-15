@@ -58,6 +58,85 @@ export function validateEmail(email: string): boolean {
     return true;
 }
 
+/**
+ * Verify an email domain has valid MX records (DNS check).
+ * Returns true if the domain can receive email.
+ * Safe to call from server actions only (uses Node dns module).
+ */
+export async function verifyEmailDomain(email: string): Promise<boolean> {
+    try {
+        const dns = await import('dns');
+        const domain = email.split('@')[1];
+        if (!domain) return false;
+        return new Promise((resolve) => {
+            dns.resolveMx(domain, (err, addresses) => {
+                if (err || !addresses || addresses.length === 0) {
+                    resolve(false);
+                } else {
+                    resolve(true);
+                }
+            });
+        });
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Generate common email guesses from a first name, last name hint, and domain.
+ * Returns a list of plausible email addresses to verify.
+ */
+export function guessEmails(firstName: string, domain: string, lastName?: string): string[] {
+    if (!firstName || !domain) return [];
+    const f = firstName.toLowerCase().trim();
+    const d = domain.toLowerCase().replace(/^www\./, '').trim();
+
+    // Don't guess for generic platforms
+    const skipDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',
+        'icloud.com', 'aol.com', 'protonmail.com', 'mail.com',
+        'squarespace.com', 'wix.com', 'wordpress.com', 'godaddy.com',
+        'shopify.com', 'webflow.io', 'carrd.co', 'notion.so'];
+    if (skipDomains.some(s => d === s || d.endsWith('.' + s))) return [];
+
+    const guesses = [
+        `${f}@${d}`,
+        `hello@${d}`,
+        `info@${d}`,
+        `contact@${d}`,
+    ];
+
+    if (lastName) {
+        const l = lastName.toLowerCase().trim();
+        guesses.push(
+            `${f}.${l}@${d}`,
+            `${f}${l}@${d}`,
+            `${f[0]}${l}@${d}`,
+        );
+    }
+
+    return [...new Set(guesses)];
+}
+
+/** Common contact page paths to guess when crawling a website */
+export const CONTACT_PAGE_PATHS = [
+    '/contact', '/contact-us', '/about', '/about-us', '/about-me',
+    '/get-in-touch', '/connect', '/reach-out', '/work-with-me',
+    '/hire-me', '/coaching', '/consulting', '/services',
+    '/lets-talk', '/book', '/book-a-call', '/schedule',
+    '/work-together', '/say-hello', '/enquiry', '/inquiry',
+    '/support', '/help', '/faq', '/team', '/people', '/staff',
+    '/privacy', '/legal', '/imprint', '/impressum', '/footer',
+];
+
+/** Priority keywords for sorting internal links (contact-likely pages first) */
+export const LINK_PRIORITY_KEYWORDS = [
+    'contact', 'about', 'team', 'people', 'staff', 'connect', 'reach',
+    'get-in-touch', 'enquir', 'work-with', 'hire', 'coaching', 'consult',
+    'lets-talk', 'book', 'schedule', 'services', 'work-together',
+    'say-hello', 'privacy', 'legal', 'faq', 'support', 'help',
+    'info', 'footer', 'imprint',
+];
+
 export function extractLinkedInName(url: string): string {
     if (!url) return '';
     try {
@@ -76,5 +155,22 @@ export function extractLinkedInName(url: string): string {
         return trimmed;
     } catch (e) {
         return url;
+    }
+}
+
+export function normaliseLinkedinUrl(url: string): string | null {
+    if (!url) return null;
+    try {
+        const urlObj = new URL(url);
+        if (!urlObj.hostname.includes('linkedin.com')) return null;
+        
+        // Return exactly https://linkedin.com/in/slug (or similar)
+        const pathParts = urlObj.pathname.split('/').filter(Boolean);
+        if (pathParts.length >= 2 && pathParts[0] === 'in') {
+            return `https://www.linkedin.com/in/${pathParts[1]}`;
+        }
+        return null;
+    } catch {
+        return null;
     }
 }

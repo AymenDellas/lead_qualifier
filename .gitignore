@@ -15,18 +15,61 @@ progress/
 # TypeScript build info
 *.tsbuildinfo
 
-# Debug files
+# ── Queue & Worker Data ──
+queue/
+queue-results/
+scrape-results/
+.browser-profiles/
+_puppeteer-urls.txt
+
+# ── Debug/Test files (should never be committed) ──
+debug-*.cjs
+debug-*.png
 debug_*.html
 debug_*.txt
-dave-home.html
-test-dave.html
-
-# Test files
+debug_*.cjs
 test-*.cjs
 test-*.mjs
+test-*.html
+test-*.json
+test-*.png
 test_*.cjs
 test_*.mjs
 analyze_html.cjs
+inspect-*.cjs
+decode-*.cjs
+find-*.cjs
+check_*.cjs
+batch-*.cjs
+batch-*.txt
+quick-*.cjs
+scratch_*.cjs
+scratch_*.txt
+
+# ── Scraped data / HTML dumps ──
+*.html
+!src/**/*.html
+coach-jenn.html
+dave-home.html
+graphql-result.json
+kylie-feed.json
+result-*.json
+final-results*.txt
+
+# ── Legacy scraper files (archived) ──
+voyager-scraper.cjs
+voyager-browser.cjs
+voyager-test.cjs
+puppeteer-scraper.cjs
+
+# ── n8n workflow ──
+My workflow*.json
+
+# ── Misc ──
+*.log
+npm-debug.log*
+technical_summary.md.resolved
+api-data/
 
 # OS files
 .DS_Store
@@ -35,7 +78,3 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
-
-# Misc
-*.log
-npm-debug.log*
