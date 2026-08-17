@@ -92,7 +92,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { linkedinUrl, webhookUrl } = body;
+        const { linkedinUrl, webhookUrl, nativePostProcess } = body;
 
         if (!linkedinUrl) {
             return NextResponse.json({ error: "Missing 'linkedinUrl'" }, { status: 400 });
@@ -103,27 +103,20 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: "Invalid LinkedIn profile URL" }, { status: 400 });
         }
 
-        // Check worker is alive
-        const statusPath = path.join(RESULTS_DIR, "worker-status.json");
-        if (!fs.existsSync(statusPath)) {
-            return NextResponse.json({ error: "Worker is not running. Start it with: node worker.cjs" }, { status: 503 });
-        }
 
-        // Check worker staleness
-        try {
-            const ws = JSON.parse(fs.readFileSync(statusPath, "utf8"));
-            const updatedAt = new Date(ws.updatedAt || 0).getTime();
-            if (Date.now() - updatedAt > 90_000 && ws.status !== 'processing') {
-                return NextResponse.json({ error: "Worker appears offline (status file is stale). Restart with: node worker.cjs" }, { status: 503 });
-            }
-        } catch { /* non-fatal */ }
 
         const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
         // Drop job file into queue/
         const jobPath = path.join(QUEUE_DIR, `${jobId}.json`);
         const tmpPath = `${jobPath}.tmp`;
-        fs.writeFileSync(tmpPath, JSON.stringify({ jobId, linkedinUrl, webhookUrl: webhookUrl || null, createdAt: new Date().toISOString() }));
+        fs.writeFileSync(tmpPath, JSON.stringify({ 
+            jobId, 
+            linkedinUrl, 
+            webhookUrl: webhookUrl || null, 
+            nativePostProcess: !!nativePostProcess,
+            createdAt: new Date().toISOString() 
+        }));
         fs.renameSync(tmpPath, jobPath);
 
         console.log(`[API] Queued job ${jobId} for ${linkedinUrl}`);

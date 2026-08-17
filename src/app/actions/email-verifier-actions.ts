@@ -2,6 +2,7 @@
 
 import dns from "dns";
 import net from "net";
+import https from "https";
 import { DISPOSABLE_DOMAINS, ROLE_ACCOUNTS, FREE_PROVIDERS } from "@/lib/email-constants";
 
 // ── Configuration ──
@@ -185,7 +186,44 @@ async function verifyViaAPI(email: string): Promise<VerificationResult | null> {
 // ── Single Email Verification ──
 // ────────────────────────────────────────────────────────
 
-export async function verifyEmail(email: string): Promise<VerificationResult> {
+
+// ────────────────────────────────────────────────────────
+// ── Microsoft Office365 API Bypass (Catch-All check) ──
+// ────────────────────────────────────────────────────────
+async function checkOffice365(email: string): Promise<boolean | null> {
+    return new Promise((resolve) => {
+        const url = `https://login.microsoftonline.com/common/GetCredentialType`;
+        const data = JSON.stringify({ Username: email });
+        
+        const req = https.request(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(data)
+            }
+        }, (res) => {
+            let body = '';
+            res.on('data', chunk => body += chunk);
+            res.on('end', () => {
+                try {
+                    const json = JSON.parse(body);
+                    if (json.IfExistsResult === 0) resolve(true);
+                    else if (json.IfExistsResult === 1) resolve(false);
+                    else resolve(null);
+                } catch (e) {
+                    resolve(null);
+                }
+            });
+        });
+        
+        req.on('error', () => resolve(null));
+        req.setTimeout(5000, () => { req.destroy(); resolve(null); });
+        req.write(data);
+        req.end();
+    });
+}
+
+export async function verifyEmail(email: string, source?: string): Promise<VerificationResult> {
     const e = email.toLowerCase().trim();
 
     const checks: EmailCheckResults = {
@@ -246,7 +284,7 @@ export async function verifyEmail(email: string): Promise<VerificationResult> {
     }
     // else: DNS-only fallback (no SMTP, no API key)
 
-    return buildFinalResult(e, checks, domain);
+    return await buildFinalResult(e, checks, domain, source);
 }
 
 // ────────────────────────────────────────────────────────
@@ -254,7 +292,7 @@ export async function verifyEmail(email: string): Promise<VerificationResult> {
 // ────────────────────────────────────────────────────────
 
 export async function verifyEmailBatchFast(
-    emails: string[]
+    emails: (string | { address: string, source?: string })[]
 ): Promise<VerificationResult[]> {
     const results: VerificationResult[] = new Array(emails.length);
 
@@ -262,12 +300,15 @@ export async function verifyEmailBatchFast(
     type PreFiltered = {
         email: string; index: number; domain: string; local: string;
         checks: EmailCheckResults;
+        source?: string;
     };
 
     const candidates: PreFiltered[] = [];
 
     for (let i = 0; i < emails.length; i++) {
-        const e = emails[i].toLowerCase().trim();
+        const itemObj = typeof emails[i] === 'string' ? { address: emails[i] as string } : emails[i] as { address: string, source?: string };
+        const e = itemObj.address.toLowerCase().trim();
+        const source = itemObj.source;
         const checks: EmailCheckResults = {
             syntax: false, mxRecord: false, disposable: false,
             roleAccount: false, freeProvider: false,
@@ -276,7 +317,7 @@ export async function verifyEmailBatchFast(
 
         checks.syntax = isValidSyntax(e);
         if (!checks.syntax) {
-            results[i] = buildResult(e, checks, "INVALID", 0, "Invalid email syntax");
+            results[i] = buildResult(typeof emails[i] === "string" ? emails[i] as string : (emails[i] as any).address, checks, "INVALID", 0, "Invalid email syntax");
             continue;
         }
 
@@ -285,7 +326,7 @@ export async function verifyEmailBatchFast(
         checks.roleAccount = ROLE_ACCOUNTS.some(r => local === r || local.startsWith(r + ".") || local.startsWith(r + "+"));
         checks.freeProvider = FREE_PROVIDERS.has(domain);
 
-        candidates.push({ email: e, index: i, domain, local, checks });
+        candidates.push({ email: e, index: i, domain, local, checks, source });
     }
 
     console.log(`[BATCH] ${emails.length} emails → ${candidates.length} passed syntax check`);
@@ -334,7 +375,7 @@ export async function verifyEmailBatchFast(
         console.log(`[BATCH] Free key (100/day): https://quickemailverification.com`);
 
         for (const item of verified) {
-            results[item.index] = buildFinalResult(item.email, item.checks, item.domain);
+            results[item.index] = await buildFinalResult(item.email, item.checks, item.domain, item.source);
         }
     }
 
@@ -342,7 +383,7 @@ export async function verifyEmailBatchFast(
     for (let i = 0; i < results.length; i++) {
         if (!results[i]) {
             results[i] = {
-                email: emails[i], status: "UNKNOWN", score: 0,
+                email: typeof emails[i] === 'string' ? (emails[i] as string) : (emails[i] as any).address, status: "UNKNOWN", score: 0,
                 checks: { syntax: false, mxRecord: false, disposable: false, roleAccount: false, freeProvider: false, smtpValid: null, catchAll: null },
                 reason: "Verification incomplete",
             };
@@ -363,9 +404,10 @@ export async function verifyEmailBatchFast(
 // ────────────────────────────────────────────────────────
 
 type PreFiltered = {
-    email: string; index: number; domain: string; local: string;
-    checks: EmailCheckResults;
-};
+        email: string; index: number; domain: string; local: string;
+        checks: EmailCheckResults;
+        source?: string;
+    };
 
 async function batchApiVerify(items: PreFiltered[], results: VerificationResult[]) {
     const CONCURRENCY = 5; // Be nice to the free API
@@ -379,7 +421,7 @@ async function batchApiVerify(items: PreFiltered[], results: VerificationResult[
                 results[item.index] = apiResult;
             } else {
                 // API failed or rate-limited — fall back to DNS-only
-                results[item.index] = buildFinalResult(item.email, item.checks, item.domain);
+                results[item.index] = await buildFinalResult(item.email, item.checks, item.domain, item.source);
             }
         }));
 
@@ -432,14 +474,14 @@ async function batchSmtpVerify(items: PreFiltered[], results: VerificationResult
                 if (!smtp) {
                     item.checks.smtpValid = null;
                     item.checks.catchAll = catchAllCache.get(domain) ?? null;
-                    results[item.index] = buildFinalResult(item.email, item.checks, item.domain);
+                    results[item.index] = await buildFinalResult(item.email, item.checks, item.domain, item.source);
                 } else if (smtp.message === "GREYLISTED") {
                     greylisted.push(item);
                 } else {
                     item.checks.smtpValid = smtp.valid;
                     item.checks.catchAll = smtp.catchAll;
                     if (smtp.catchAll !== null) catchAllCache.set(domain, smtp.catchAll);
-                    results[item.index] = buildFinalResult(item.email, item.checks, item.domain);
+                    results[item.index] = await buildFinalResult(item.email, item.checks, item.domain, item.source);
                 }
             }
         }));
@@ -477,13 +519,13 @@ async function batchSmtpVerify(items: PreFiltered[], results: VerificationResult
                         item.checks.smtpValid = null;
                         item.checks.catchAll = catchAllCache.get(domain) ?? null;
                     }
-                    results[item.index] = buildFinalResult(item.email, item.checks, item.domain);
+                    results[item.index] = await buildFinalResult(item.email, item.checks, item.domain, item.source);
                 }
             } catch {
                 for (const item of domainItems) {
                     item.checks.smtpValid = null;
                     item.checks.catchAll = catchAllCache.get(domain) ?? null;
-                    results[item.index] = buildFinalResult(item.email, item.checks, item.domain);
+                    results[item.index] = await buildFinalResult(item.email, item.checks, item.domain, item.source);
                 }
             }
         }));
@@ -527,7 +569,7 @@ async function batchSmtpVerify(items: PreFiltered[], results: VerificationResult
                                 item.checks.smtpValid = smtp.valid;
                                 item.checks.catchAll = smtp.catchAll;
                                 if (smtp.catchAll !== null) catchAllCache.set(domain, smtp.catchAll);
-                                results[item.index] = buildFinalResult(item.email, item.checks, item.domain);
+                                results[item.index] = await buildFinalResult(item.email, item.checks, item.domain, item.source);
                                 resolved = true;
                             }
                         }
@@ -776,7 +818,7 @@ function buildResult(email: string, checks: EmailCheckResults, status: Verificat
     return { email, status, score, checks, reason, provider: detectProvider(domain) };
 }
 
-function buildFinalResult(email: string, checks: EmailCheckResults, domain: string): VerificationResult {
+async function buildFinalResult(email: string, checks: EmailCheckResults, domain: string, source?: string): Promise<VerificationResult> {
     let score = 0;
     const reasons: string[] = [];
 

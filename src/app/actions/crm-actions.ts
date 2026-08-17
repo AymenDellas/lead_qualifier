@@ -1,6 +1,6 @@
 "use server";
 
-import { updateLead, deleteLead, bulkDeleteLeads, getLead, LeadRecord, insertOrUpdateLead, bulkInsertOrUpdateLeads } from "@/lib/db";
+import { updateLead, deleteLead, bulkDeleteLeads, getLead, LeadRecord, insertOrUpdateLead, bulkInsertOrUpdateLeads, bulkMarkContacted } from "@/lib/db";
 import { verifyEmail } from "@/app/actions/email-verifier-actions";
 import { generateHook } from "@/lib/groqClient";
 
@@ -75,5 +75,14 @@ export async function importLeadsAction(leads: Partial<LeadRecord>[]) {
     } catch (e) {
         console.error("Failed to bulk import leads", e);
         return [];
+    }
+}
+
+export async function markLeadsContactedAction(identifiers: string[]) {
+    try {
+        return await bulkMarkContacted(identifiers);
+    } catch (e) {
+        console.error("Failed to bulk mark contacted", e);
+        return 0;
     }
 }

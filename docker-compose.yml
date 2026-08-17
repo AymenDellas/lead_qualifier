@@ -1,0 +1,43 @@
+services:
+  qualifier:
+    image: leads-qualifier:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    init: true
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.docker
+    volumes:
+      - qualifier_queue:/app/queue
+      - qualifier_results:/app/queue-results
+      - qualifier_progress:/app/progress
+      - browser_profiles:/app/.browser-profiles
+      - crm_data:/app/data
+
+  qualifier-worker:
+    image: leads-qualifier:latest
+    restart: always
+    init: true
+    command: ["sh", "-c", "rm -f /tmp/.X99-lock && Xvfb :99 -screen 0 1366x768x24 & sleep 2 && fluxbox & sleep 2 && x11vnc -display :99 -forever -nopw -quiet -listen 0.0.0.0 & export DISPLAY=:99 && touch .env.local && node worker.cjs"]
+    ports:
+      - "5900:5900"
+    env_file:
+      - .env.docker
+    volumes:
+      - qualifier_queue:/app/queue
+      - qualifier_results:/app/queue-results
+      - browser_profiles:/app/.browser-profiles
+      - crm_data:/app/data
+    shm_size: '2gb'
+    depends_on:
+      - qualifier
+
+volumes:
+  qualifier_queue:
+  qualifier_results:
+  qualifier_progress:
+  browser_profiles:
+  crm_data:

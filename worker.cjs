@@ -31,6 +31,9 @@ const RESUME_MODE = process.argv.includes('--resume');
 // ── Ensure dirs exist ──
 if (!fs.existsSync(QUEUE_DIR)) fs.mkdirSync(QUEUE_DIR, { recursive: true });
 if (!fs.existsSync(RESULTS_DIR)) fs.mkdirSync(RESULTS_DIR, { recursive: true });
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const LIMITS_FILE = path.join(DATA_DIR, 'worker-limits.json');
 
 // ── Load env ──
 function loadEnv() {
@@ -94,14 +97,8 @@ function handleStaleQueue() {
     const files = fs.readdirSync(QUEUE_DIR).filter(f => f.endsWith('.json'));
     if (files.length === 0) return;
 
-    if (RESUME_MODE) {
-        log(`📂 Resume mode: found ${files.length} pending job(s) in queue. Will process them.`);
-    } else {
-        log(`🧹 Fresh start: clearing ${files.length} stale job(s) from queue/`);
-        for (const f of files) {
-            try { fs.unlinkSync(path.join(QUEUE_DIR, f)); } catch { /* ignore */ }
-        }
-    }
+    // Always resume in production. We do not want to wipe pending jobs on container restarts.
+    log(`📂 Found ${files.length} pending job(s) in queue on startup. Resuming processing.`);
 }
 
 // ── Startup: Purge old result files ──
@@ -219,32 +216,36 @@ async function fireWebhook(webhookUrl, payload, maxRetries = 3) {
     return false;
 }
 
-// ── Website email scraping ──
-async function scrapeWebsiteForEmails(websiteUrl) {
+// ── Website email scraping (Puppeteer-powered with HTTP fallback) ──
 
-    const extractEmails = (text) => {
+// Shared email extraction helpers (used by both Puppeteer and HTTP paths)
+const emailExtractHelpers = {
+    extractEmails: (text) => {
         const regex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
         const badTlds = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'avif', 'bmp', 'ico',
             'css', 'js', 'json', 'xml', 'html', 'htm', 'php', 'asp', 'woff', 'woff2',
             'ttf', 'eot', 'otf', 'mp4', 'mp3', 'pdf', 'zip', 'doc', 'docx'];
         return [...new Set((text.match(regex) || []).map(e => e.toLowerCase()))]
             .filter(e => !badTlds.includes(e.split('.').pop()));
-    };
+    },
 
-    const isPlaceholder = (email) => {
+    isPlaceholder: (email) => {
         const skip = ['example.com', 'test.com', 'email.com', 'domain.com', 'yoursite.com',
             'sentry.io', 'wixpress.com', 'squarespace.com', 'wordpress.com', 'w3.org',
-            'schema.org', 'googleusercontent.com', 'gstatic.com'];
-        return skip.some(d => email.includes(d)) || email.startsWith('noreply') || email.startsWith('no-reply');
-    };
+            'schema.org', 'googleusercontent.com', 'gstatic.com', 'gravatar.com',
+            'bootstrapcdn.com', 'jsdelivr.net', 'cloudflare.com', 'google.com',
+            'facebook.com', 'twitter.com', 'github.com'];
+        const emailDomain = email.split('@')[1] || '';
+        return skip.some(d => emailDomain === d || emailDomain.endsWith('.' + d)) || email.startsWith('noreply') || email.startsWith('no-reply');
+    },
 
-    const stripHtml = (html) => html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    stripHtml: (html) => html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
         .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
         .replace(/<[^>]+>/g, ' ')
         .replace(/&[a-z]+;/gi, ' ')
-        .replace(/\s+/g, ' ');
+        .replace(/\s+/g, ' '),
 
-    const decodeCfEmail = (encoded) => {
+    decodeCfEmail: (encoded) => {
         try {
             const r = parseInt(encoded.substr(0, 2), 16);
             let email = '';
@@ -253,8 +254,299 @@ async function scrapeWebsiteForEmails(websiteUrl) {
             }
             return email;
         } catch { return null; }
-    };
+    },
 
+    extractAllFromHtml: (html, text, emails) => {
+        // mailto: links (including with query params like ?subject=...)
+        const mailtoRegex = /mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:\?|"|'| |&|;|$)/gi;
+        let m;
+        while ((m = mailtoRegex.exec(html)) !== null) emails.add(m[1].toLowerCase());
+
+        // Plain text emails
+        for (const e of emailExtractHelpers.extractEmails(text)) emails.add(e);
+        for (const e of emailExtractHelpers.extractEmails(html)) emails.add(e);
+
+        // Obfuscated: name [at] domain [dot] com
+        const obfRegex = /([a-zA-Z0-9._%+-]+)\s*(?:\[at\]|\(at\)|\{at\}|\bat\b)\s*([a-zA-Z0-9.-]+)\s*(?:\[dot\]|\(dot\)|\{dot\}|\bdot\b)\s*([a-zA-Z]{2,6})/gi;
+        while ((m = obfRegex.exec(text)) !== null) emails.add(`${m[1]}@${m[2]}.${m[3]}`.toLowerCase());
+
+        // Cloudflare email protection
+        const cfRegex = /\/cdn-cgi\/l\/email-protection#([a-f0-9]+)/gi;
+        while ((m = cfRegex.exec(html)) !== null) { const dec = emailExtractHelpers.decodeCfEmail(m[1]); if (dec) emails.add(dec.toLowerCase()); }
+        const dataRegex = /data-cfemail="([a-f0-9]+)"/gi;
+        while ((m = dataRegex.exec(html)) !== null) { const dec = emailExtractHelpers.decodeCfEmail(m[1]); if (dec) emails.add(dec.toLowerCase()); }
+
+        // Custom data attributes: data-email, data-contact, data-address, data-mail
+        const dataEmailRegex = /data-(?:email|contact|address|mail)\s*=\s*["']([^"']+@[^"']+)["']/gi;
+        while ((m = dataEmailRegex.exec(html)) !== null) emails.add(m[1].toLowerCase().replace(/^mailto:/i, ''));
+
+        // onclick/href attributes with email content
+        const onclickRegex = /(?:onclick|data-href)\s*=\s*["'][^"']*?([\w._%+-]+@[\w.-]+\.[\w]{2,})[^"']*?["']/gi;
+        while ((m = onclickRegex.exec(html)) !== null) emails.add(m[1].toLowerCase());
+
+        // JSON-LD structured data (Squarespace, Wix, WordPress)
+        const ldJsonRegex = /<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+        let ldMatch;
+        while ((ldMatch = ldJsonRegex.exec(html)) !== null) {
+            try {
+                const json = JSON.parse(ldMatch[1].trim());
+                const walkJson = (obj, depth = 0) => {
+                    if (depth > 10 || !obj || typeof obj !== 'object') return;
+                    for (const [key, val] of Object.entries(obj)) {
+                        if ((key === 'email' || key === 'contactPoint') && typeof val === 'string' && val.includes('@')) {
+                            const clean = val.replace(/^mailto:/i, '').toLowerCase().trim();
+                            if (!emailExtractHelpers.isPlaceholder(clean)) emails.add(clean);
+                        }
+                        if (typeof val === 'object') walkJson(val, depth + 1);
+                    }
+                };
+                walkJson(json);
+            } catch { /* invalid JSON-LD */ }
+        }
+
+        // HTML entity obfuscation decode (&#106;&#111;&#104;&#110;&#64;...)
+        const entityRegex = /(&#\d{2,3};){5,}/g;
+        const entityMatches = html.match(entityRegex) || [];
+        for (const encoded of entityMatches) {
+            const decoded = encoded.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n)));
+            for (const e of emailExtractHelpers.extractEmails(decoded)) { if (!emailExtractHelpers.isPlaceholder(e)) emails.add(e); }
+        }
+
+        // Meta tags with email content
+        const metaRegex = /<meta[^>]*content\s*=\s*["']([^"']*@[^"']+)["'][^>]*>/gi;
+        while ((m = metaRegex.exec(html)) !== null) {
+            for (const e of emailExtractHelpers.extractEmails(m[1])) { if (!emailExtractHelpers.isPlaceholder(e)) emails.add(e); }
+        }
+    }
+};
+
+// Priority paths to check (expanded from original 7 to cover more patterns)
+const CONTACT_PATHS = [
+    '/contact', '/contact-us', '/about', '/about-me', '/about-us',
+    '/get-in-touch', '/work-with-me', '/connect', '/reach-out',
+    '/lets-talk', '/lets-connect', '/hire-me', '/booking',
+    '/schedule', '/services', '/support', '/help',
+    '/team', '/start', '/inquiry', '/enquiry'
+];
+
+// Priority keywords for internal link sorting
+const LINK_PRIORITY = ['contact', 'about', 'team', 'connect', 'reach', 'get-in-touch', 
+    'info', 'work-with', 'hire', 'booking', 'schedule', 'support', 'help', 'inquiry'];
+
+// ── Puppeteer-based website scraper (renders JavaScript) ──
+async function scrapeWebsiteWithBrowser(browserInstance, websiteUrl) {
+    const baseUrl = websiteUrl.replace(/\/$/, '');
+    const domain = baseUrl.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].toLowerCase();
+    const emails = new Set();
+    const crawled = new Set();
+    let context = null;
+
+    try {
+        // Create incognito context to avoid leaking LinkedIn cookies
+        context = await browserInstance.createBrowserContext();
+        const page = await context.newPage();
+        
+        // Set reasonable viewport and user agent
+        await page.setViewport({ width: 1366, height: 768 });
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        
+        // Block heavy resources to speed up loading
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            const type = req.resourceType();
+            if (['image', 'media', 'font', 'stylesheet'].includes(type)) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
+
+        // Helper: navigate to a URL and extract HTML + text
+        const scrapePage = async (url, timeout = 15000) => {
+            try {
+                await page.goto(url, { waitUntil: 'networkidle2', timeout });
+                // Wait a bit more for lazy-loaded content
+                await sleep(1500);
+                
+                const html = await page.content();
+                const text = await page.evaluate(() => document.body ? document.body.innerText : '');
+                
+                // Also extract emails that Puppeteer can see in the rendered DOM
+                const domEmails = await page.evaluate(() => {
+                    const found = [];
+                    // All mailto: links
+                    document.querySelectorAll('a[href^="mailto:"]').forEach(a => {
+                        const email = a.href.replace('mailto:', '').split('?')[0].trim().toLowerCase();
+                        if (email && email.includes('@')) found.push(email);
+                    });
+                    // data-email and similar attributes
+                    document.querySelectorAll('[data-email], [data-contact], [data-mail], [data-address]').forEach(el => {
+                        const val = el.getAttribute('data-email') || el.getAttribute('data-contact') || 
+                                    el.getAttribute('data-mail') || el.getAttribute('data-address') || '';
+                        if (val.includes('@')) found.push(val.toLowerCase());
+                    });
+                    // Cloudflare email protection — decode in browser context
+                    document.querySelectorAll('[data-cfemail]').forEach(el => {
+                        try {
+                            const enc = el.getAttribute('data-cfemail');
+                            if (!enc) return;
+                            const r = parseInt(enc.substr(0, 2), 16);
+                            let decoded = '';
+                            for (let i = 2; i < enc.length; i += 2) {
+                                decoded += String.fromCharCode(parseInt(enc.substr(i, 2), 16) ^ r);
+                            }
+                            if (decoded.includes('@')) found.push(decoded.toLowerCase());
+                        } catch {}
+                    });
+                    // Footer text specifically (high-value area for emails)
+                    const footer = document.querySelector('footer');
+                    if (footer) {
+                        const footerText = footer.innerText || '';
+                        const re = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+                        const matches = footerText.match(re) || [];
+                        matches.forEach(m => found.push(m.toLowerCase()));
+                    }
+                    return found;
+                });
+                
+                for (const e of domEmails) emails.add(e);
+                return { html, text };
+            } catch (e) {
+                log(`  [BrowserScrape] Failed to load ${url}: ${e.message}`);
+                return null;
+            }
+        };
+
+        // ── Step 1: Scrape homepage ──
+        log(`  [BrowserScrape] Loading homepage: ${baseUrl}`);
+        const homepage = await scrapePage(baseUrl);
+        if (!homepage || homepage.html.length < 200) {
+            log(`  [BrowserScrape] Homepage too small or failed, falling back to HTTP`);
+            if (context) await context.close().catch(() => {});
+            return null; // Signal to fall back to HTTP
+        }
+        crawled.add(baseUrl);
+        emailExtractHelpers.extractAllFromHtml(homepage.html, homepage.text, emails);
+
+        // ── Step 2: Find internal links from homepage ──
+        const internalLinks = await page.evaluate((baseDomain) => {
+            const links = [];
+            document.querySelectorAll('a[href]').forEach(a => {
+                let href = a.href;
+                if (!href || href.startsWith('mailto:') || href.startsWith('tel:') || 
+                    href.startsWith('javascript:') || href.startsWith('data:')) return;
+                if (href.match(/\.(pdf|jpg|jpeg|png|gif|svg|css|js|ico|woff|mp4|zip|webp)$/i)) return;
+                try {
+                    const url = new URL(href);
+                    const linkDomain = url.hostname.replace(/^www\./, '').toLowerCase();
+                    if (linkDomain !== baseDomain && linkDomain !== 'www.' + baseDomain) return;
+                    const clean = url.origin + url.pathname.replace(/\/$/, '');
+                    links.push(clean);
+                } catch {}
+            });
+            return [...new Set(links)];
+        }, domain);
+
+        // Also grab footer links specifically (often have contact pages not in main nav)
+        const footerLinks = await page.evaluate((baseDomain) => {
+            const footer = document.querySelector('footer');
+            if (!footer) return [];
+            const links = [];
+            footer.querySelectorAll('a[href]').forEach(a => {
+                let href = a.href;
+                if (!href || href.startsWith('mailto:') || href.startsWith('tel:')) return;
+                try {
+                    const url = new URL(href);
+                    const linkDomain = url.hostname.replace(/^www\./, '').toLowerCase();
+                    if (linkDomain !== baseDomain && linkDomain !== 'www.' + baseDomain) return;
+                    links.push(url.origin + url.pathname.replace(/\/$/, ''));
+                } catch {}
+            });
+            return [...new Set(links)];
+        }, domain);
+
+        // Merge and deduplicate, prioritize contact-related pages
+        const allLinks = [...new Set([...footerLinks, ...internalLinks])].filter(l => !crawled.has(l) && l !== baseUrl);
+        allLinks.sort((a, b) => {
+            const aScore = LINK_PRIORITY.findIndex(p => a.toLowerCase().includes(p));
+            const bScore = LINK_PRIORITY.findIndex(p => b.toLowerCase().includes(p));
+            return (aScore === -1 ? 99 : aScore) - (bScore === -1 ? 99 : bScore);
+        });
+
+        // ── Step 3: Crawl top priority internal links (up to 12) ──
+        for (const pageUrl of allLinks.slice(0, 12)) {
+            if (emails.size > 0) {
+                // Already found emails — no need to crawl more aggressively
+                // But still check 1-2 more contact-type pages for better emails
+                const isContactPage = LINK_PRIORITY.slice(0, 5).some(p => pageUrl.toLowerCase().includes(p));
+                if (!isContactPage) continue;
+            }
+            crawled.add(pageUrl);
+            const pageResult = await scrapePage(pageUrl, 12000);
+            if (pageResult) {
+                emailExtractHelpers.extractAllFromHtml(pageResult.html, pageResult.text, emails);
+                log(`  [BrowserScrape] Crawled: ${pageUrl} (${emails.size} emails so far)`);
+            }
+        }
+
+        // ── Step 4: Blind-guess common contact paths not yet visited ──
+        for (const guessPath of CONTACT_PATHS) {
+            const guessUrl = baseUrl + guessPath;
+            if (crawled.has(guessUrl)) continue;
+            // If we already have emails, only try the top 3 paths
+            if (emails.size > 0 && CONTACT_PATHS.indexOf(guessPath) > 2) continue;
+            
+            crawled.add(guessUrl);
+            const guessResult = await scrapePage(guessUrl, 8000);
+            if (guessResult && guessResult.html.length > 500) {
+                emailExtractHelpers.extractAllFromHtml(guessResult.html, guessResult.text, emails);
+                log(`  [BrowserScrape] Blind guess hit: ${guessPath} (${emails.size} emails so far)`);
+            }
+        }
+
+        // Close the incognito context
+        await context.close().catch(() => {});
+        context = null;
+
+        // ── Step 5: Filter and MX-verify ──
+        const candidateEmails = [...emails].filter(e => e.includes('@') && !emailExtractHelpers.isPlaceholder(e));
+        log(`  [BrowserScrape] Raw: ${emails.size}, after filter: ${candidateEmails.length} → ${candidateEmails.join(', ') || 'none'}`);
+        
+        const dns = require('dns').promises;
+        const verifiedEmails = [];
+        // Parallelize MX lookups for speed
+        const mxResults = await Promise.allSettled(candidateEmails.map(async (email) => {
+            const emailDomain = email.split('@')[1];
+            try {
+                const records = await dns.resolveMx(emailDomain);
+                if (records && records.length > 0) return { email, ok: true };
+            } catch { /* MX failed, try A record fallback per RFC 5321 */ }
+            try {
+                const aRecords = await dns.resolve4(emailDomain);
+                if (aRecords && aRecords.length > 0) return { email, ok: true, fallback: true };
+            } catch { /* A record also failed */ }
+            return { email, ok: false };
+        }));
+        for (const r of mxResults) {
+            if (r.status === 'fulfilled' && r.value.ok) {
+                verifiedEmails.push(r.value.email);
+                log(`  [BrowserScrape] MX verified${r.value.fallback ? ' (A-record)' : ''}: ${r.value.email}`);
+            } else if (r.status === 'fulfilled') {
+                log(`  [BrowserScrape] MX failed (no records): ${r.value.email}`);
+            }
+        }
+        log(`  [BrowserScrape] Final verified: ${verifiedEmails.length}`);
+        return verifiedEmails;
+
+    } catch (e) {
+        log(`  [BrowserScrape] Fatal: ${e.message}`);
+        if (context) await context.close().catch(() => {});
+        return null; // Signal to fall back to HTTP
+    }
+}
+
+// ── HTTP fallback scraper (original logic, improved) ──
+async function scrapeWebsiteForEmails(websiteUrl) {
     try {
         const baseUrl = websiteUrl.replace(/\/$/, '');
         const domain = baseUrl.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].toLowerCase();
@@ -281,7 +573,7 @@ async function scrapeWebsiteForEmails(websiteUrl) {
         log(`  [EmailScrape] Homepage: ${homepageHtml.length} bytes from ${baseUrl}`);
 
         crawled.add(baseUrl);
-        allText += ' ' + stripHtml(homepageHtml);
+        allText += ' ' + emailExtractHelpers.stripHtml(homepageHtml);
         allHtml += homepageHtml;
 
         const hrefRegex = /href=["']([^"'#]+)["']/gi;
@@ -304,104 +596,99 @@ async function scrapeWebsiteForEmails(websiteUrl) {
             }
         }
 
-        const priority = ['contact', 'about', 'team', 'connect', 'reach', 'get-in-touch', 'info'];
+        // Also extract footer links from HTML
+        const footerMatch = homepageHtml.match(/<footer[\s\S]*?<\/footer>/i);
+        if (footerMatch) {
+            const footerHrefRegex = /href=["']([^"'#]+)["']/gi;
+            let fMatch;
+            while ((fMatch = footerHrefRegex.exec(footerMatch[0])) !== null) {
+                let href = fMatch[1].trim();
+                if (href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) continue;
+                if (href.startsWith('/')) href = baseUrl + href;
+                else if (!href.startsWith('http')) href = baseUrl + '/' + href;
+                try {
+                    const linkDomain = href.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].toLowerCase();
+                    if (linkDomain !== domain && linkDomain !== 'www.' + domain) continue;
+                } catch { continue; }
+                href = href.replace(/\/$/, '').split('?')[0].split('#')[0];
+                if (!crawled.has(href) && href !== baseUrl && !internalLinks.includes(href)) {
+                    internalLinks.unshift(href); // Footer links get priority
+                    crawled.add(href);
+                }
+            }
+            // Also extract emails directly from footer HTML
+            allText += ' ' + emailExtractHelpers.stripHtml(footerMatch[0]);
+        }
+
         internalLinks.sort((a, b) => {
-            const aScore = priority.findIndex(p => a.toLowerCase().includes(p));
-            const bScore = priority.findIndex(p => b.toLowerCase().includes(p));
+            const aScore = LINK_PRIORITY.findIndex(p => a.toLowerCase().includes(p));
+            const bScore = LINK_PRIORITY.findIndex(p => b.toLowerCase().includes(p));
             return (aScore === -1 ? 99 : aScore) - (bScore === -1 ? 99 : bScore);
         });
 
-        for (const pageUrl of internalLinks.slice(0, 8)) {
+        for (const pageUrl of internalLinks.slice(0, 12)) {
             try {
                 const pageHtml = await fetchPage(pageUrl, 15000);
                 if (pageHtml && pageHtml.length > 100) {
-                    allText += ' ' + stripHtml(pageHtml);
+                    allText += ' ' + emailExtractHelpers.stripHtml(pageHtml);
                     allHtml += pageHtml;
                 }
             } catch { /* skip */ }
         }
 
-        // Blind-guess common contact pages that might not be linked in nav
-        const blindGuesses = ['/contact', '/contact-us', '/about', '/about-me', '/get-in-touch', '/work-with-me', '/connect'];
-        for (const guessPath of blindGuesses) {
-            const guessUrl = baseUrl + guessPath;
-            if (crawled.has(guessUrl)) continue;
-            try {
-                const guessHtml = await fetchPage(guessUrl, 6000);
-                if (guessHtml && guessHtml.length > 500) {
-                    crawled.add(guessUrl);
-                    allText += ' ' + stripHtml(guessHtml);
-                    allHtml += guessHtml;
-                    log(`  [EmailScrape] Blind guess hit: ${guessPath}`);
+        // Blind-guess common contact pages (parallel batches of 5 for speed)
+        const guessUrls = CONTACT_PATHS.map(p => ({ path: p, url: baseUrl + p })).filter(g => !crawled.has(g.url));
+        for (let gi = 0; gi < guessUrls.length; gi += 5) {
+            const batch = guessUrls.slice(gi, gi + 5);
+            const results = await Promise.allSettled(batch.map(async (g) => {
+                try {
+                    const html = await fetchPage(g.url, 6000);
+                    return { path: g.path, url: g.url, html: (html && html.length > 500) ? html : null };
+                } catch { return { path: g.path, url: g.url, html: null }; }
+            }));
+            for (const r of results) {
+                if (r.status === 'fulfilled' && r.value.html) {
+                    crawled.add(r.value.url);
+                    allText += ' ' + emailExtractHelpers.stripHtml(r.value.html);
+                    allHtml += r.value.html;
+                    log(`  [EmailScrape] Blind guess hit: ${r.value.path}`);
                 }
-            } catch { /* page doesn't exist, skip */ }
+            }
         }
 
         const emails = new Set();
-        const mailtoRegex = /mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
-        let m;
-        while ((m = mailtoRegex.exec(allHtml)) !== null) emails.add(m[1].toLowerCase());
-        for (const e of extractEmails(allText)) emails.add(e);
-        for (const e of extractEmails(allHtml)) emails.add(e);
+        emailExtractHelpers.extractAllFromHtml(allHtml, allText, emails);
 
-        const obfRegex = /([a-zA-Z0-9._%+-]+)\s*(?:\[at\]|\(at\)|\{at\}|\bat\b)\s*([a-zA-Z0-9.-]+)\s*(?:\[dot\]|\(dot\)|\{dot\}|\bdot\b)\s*([a-zA-Z]{2,6})/gi;
-        while ((m = obfRegex.exec(allText)) !== null) emails.add(`${m[1]}@${m[2]}.${m[3]}`.toLowerCase());
-
-        const cfRegex = /\/cdn-cgi\/l\/email-protection#([a-f0-9]+)/gi;
-        while ((m = cfRegex.exec(allHtml)) !== null) { const dec = decodeCfEmail(m[1]); if (dec) emails.add(dec.toLowerCase()); }
-        const dataRegex = /data-cfemail="([a-f0-9]+)"/gi;
-        while ((m = dataRegex.exec(allHtml)) !== null) { const dec = decodeCfEmail(m[1]); if (dec) emails.add(dec.toLowerCase()); }
-
-        // JSON-LD structured data extraction (Squarespace, Wix, WordPress embed emails here)
-        const ldJsonRegex = /<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
-        let ldMatch;
-        while ((ldMatch = ldJsonRegex.exec(allHtml)) !== null) {
-            try {
-                const json = JSON.parse(ldMatch[1].trim());
-                const walkJson = (obj, depth = 0) => {
-                    if (depth > 10 || !obj || typeof obj !== 'object') return;
-                    for (const [key, val] of Object.entries(obj)) {
-                        if (key === 'email' && typeof val === 'string' && val.includes('@')) {
-                            const clean = val.replace(/^mailto:/i, '').toLowerCase().trim();
-                            if (!isPlaceholder(clean)) emails.add(clean);
-                        }
-                        if (typeof val === 'object') walkJson(val, depth + 1);
-                    }
-                };
-                walkJson(json);
-            } catch { /* invalid JSON-LD */ }
-        }
-
-        // HTML entity obfuscation decode (&#106;&#111;&#104;&#110;&#64;...)
-        const entityRegex = /(&#\d{2,3};){5,}/g;
-        const entityMatches = allHtml.match(entityRegex) || [];
-        for (const encoded of entityMatches) {
-            const decoded = encoded.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n)));
-            for (const e of extractEmails(decoded)) { if (!isPlaceholder(e)) emails.add(e); }
-        }
-
-        const candidateEmails = [...emails].filter(e => e.includes('@') && !isPlaceholder(e));
+        const candidateEmails = [...emails].filter(e => e.includes('@') && !emailExtractHelpers.isPlaceholder(e));
         log(`  [EmailScrape] Raw emails found: ${emails.size}, after filter: ${candidateEmails.length} → ${candidateEmails.join(', ') || 'none'}`);
         const dns = require('dns').promises;
         const verifiedEmails = [];
-        for (const email of candidateEmails) {
+        // Parallelize MX lookups for speed
+        const mxResults = await Promise.allSettled(candidateEmails.map(async (email) => {
+            const emailDomain = email.split('@')[1];
             try {
-                const emailDomain = email.split('@')[1];
                 const records = await dns.resolveMx(emailDomain);
-                if (records && records.length > 0) {
-                    verifiedEmails.push(email);
-                    log(`  [EmailScrape] MX verified: ${email}`);
-                } else {
-                    log(`  [EmailScrape] MX failed (no records): ${email}`);
-                }
-            } catch (e) { 
-                log(`  [EmailScrape] MX failed (${e.code || e.message}): ${email}`);
+                if (records && records.length > 0) return { email, ok: true };
+            } catch { /* MX failed, try A record fallback per RFC 5321 */ }
+            try {
+                const aRecords = await dns.resolve4(emailDomain);
+                if (aRecords && aRecords.length > 0) return { email, ok: true, fallback: true };
+            } catch { /* A record also failed */ }
+            return { email, ok: false };
+        }));
+        for (const r of mxResults) {
+            if (r.status === 'fulfilled' && r.value.ok) {
+                verifiedEmails.push(r.value.email);
+                log(`  [EmailScrape] MX verified${r.value.fallback ? ' (A-record)' : ''}: ${r.value.email}`);
+            } else if (r.status === 'fulfilled') {
+                log(`  [EmailScrape] MX failed (no records): ${r.value.email}`);
             }
         }
         log(`  [EmailScrape] Final verified: ${verifiedEmails.length}`);
         return verifiedEmails;
     } catch (e) { log(`  [EmailScrape] Fatal: ${e.message}`); return []; }
 }
+
 
 // ── Voyager API call via browser fetch() ──
 async function voyagerFetch(page, apiPath) {
@@ -426,11 +713,13 @@ async function voyagerFetch(page, apiPath) {
 }
 
 // ── Scrape a single profile via Voyager API ──
-async function scrapeProfile(page, profileUrl) {
+async function scrapeProfile(page, profileUrl, browserInstance) {
     const result = {
         url: profileUrl, firstName: '', lastName: '', headline: '',
         activityStatus: 'Unknown', emails: [], websites: [],
         website: '', primaryEmail: '', websiteSource: '',
+        emailSource: '',
+        latestPostText: '',
         status: 'PENDING', logs: [],
     };
     const slug = profileUrl.replace(/\/+$/, '').split('/').pop().split('?')[0];
@@ -456,7 +745,7 @@ async function scrapeProfile(page, profileUrl) {
             result.websites = websites.map(w => (typeof w === 'string' ? w : (w.url || w.label || ''))).filter(Boolean);
             if (emailAddress) {
                 const email = typeof emailAddress === 'string' ? emailAddress : (emailAddress.emailAddress || emailAddress.email || '');
-                if (email) result.emails.push(email);
+                if (email) { result.emails.push(email); result.emailSource = 'linkedin'; }
             }
             if (result.websites.length > 0) result.website = result.websites[0];
             result.logs.push(`Contact: ${result.websites.length} website(s), ${result.emails.length} email(s)`);
@@ -464,7 +753,7 @@ async function scrapeProfile(page, profileUrl) {
             result.logs.push(`Contact info failed: ${contactRes.status}`);
         }
 
-        await sleep(1500);
+        await sleep(500);
 
         // ── 2. Profile Data (name, headline, URN) ──
         result.logs.push('Fetching profile data via Voyager API...');
@@ -511,7 +800,7 @@ async function scrapeProfile(page, profileUrl) {
             result.logs.push(`Profile data failed: ${profileRes.status}`);
         }
 
-        await sleep(1500);
+        await sleep(500);
 
         // ── Website Fallback Chain (if contact modal had no website) ──
         if (result.websites.length === 0) {
@@ -601,6 +890,10 @@ async function scrapeProfile(page, profileUrl) {
             if (actRes.status === 200) {
                 const str = JSON.stringify(actRes.data);
                 
+                // --- DEBUG DUMP ---
+                fs.writeFileSync(path.join(RESULTS_DIR, 'debug-activity-feed.json'), str);
+                // ------------------
+                
                 // Method 1: Extract activity URN snowflake IDs (most reliable)
                 const activityUrns = str.match(/urn:li:activity:(\d+)/g) || [];
                 const urnDates = [];
@@ -642,6 +935,58 @@ async function scrapeProfile(page, profileUrl) {
                     result.activityStatus = 'Inactive';
                     result.logs.push('No posts found → Inactive');
                 }
+
+                // ── Extract latest post text for hook generation ──
+                try {
+                    const postTexts = [];
+                    
+                    // Helper to deeply extract text from a commentary object
+                    function extractTextFrom(val) {
+                        if (typeof val === 'string') return val;
+                        if (val && typeof val === 'object') {
+                            if (val.text && typeof val.text.text === 'string') return val.text.text;
+                            if (typeof val.text === 'string') return val.text;
+                        }
+                        return null;
+                    }
+
+                    // Recursively search the entire activity response for post commentary
+                    function searchForCommentary(obj) {
+                        if (!obj || typeof obj !== 'object') return;
+                        if (Array.isArray(obj)) {
+                            for (const item of obj) searchForCommentary(item);
+                            return;
+                        }
+                        
+                        // Skip actor/profile objects to avoid grabbing headlines
+                        const type = (obj.$type || obj['$type'] || '').toLowerCase();
+                        if (type.includes('profile') || type.includes('actor') || type.includes('member')) return;
+
+                        for (const [key, value] of Object.entries(obj)) {
+                            if (key === 'commentary' || key === 'shareCommentary') {
+                                const txt = extractTextFrom(value);
+                                if (txt && txt.length > 50) postTexts.push(txt);
+                            } else {
+                                searchForCommentary(value);
+                            }
+                        }
+                    }
+
+                    if (actRes.data) {
+                        searchForCommentary(actRes.data);
+                    }
+
+                    if (postTexts.length > 0) {
+                        // Take the longest post (usually the most substantive)
+                        postTexts.sort((a, b) => b.length - a.length);
+                        result.latestPostText = postTexts[0].substring(0, 2000);
+                        result.logs.push(`Captured latest post text (${result.latestPostText.length} chars)`);
+                    } else {
+                        result.logs.push('No post text found in activity feed');
+                    }
+                } catch (postExtractErr) {
+                    result.logs.push(`Post text extraction failed: ${postExtractErr.message}`);
+                }
             } else {
                 result.activityStatus = 'Unknown';
                 result.logs.push(`Activity check failed: ${actRes.status}`);
@@ -666,9 +1011,21 @@ async function scrapeProfile(page, profileUrl) {
                     const parsed = new URL(siteUrl);
                     const rootUrl = `${parsed.protocol}//${parsed.hostname}`;
                     result.logs.push(`Phase 2: Crawling ${rootUrl} (from ${siteUrl})`);
-                    const websiteEmails = await scrapeWebsiteForEmails(rootUrl);
+                    
+                    // Try Puppeteer-based scraper first (renders JS), fall back to HTTP
+                    let websiteEmails = null;
+                    if (browserInstance) {
+                        result.logs.push(`Phase 2: Using Puppeteer browser (JS rendering enabled)`);
+                        websiteEmails = await scrapeWebsiteWithBrowser(browserInstance, rootUrl);
+                    }
+                    if (websiteEmails === null) {
+                        result.logs.push(`Phase 2: Falling back to HTTP scraper`);
+                        websiteEmails = await scrapeWebsiteForEmails(rootUrl);
+                    }
+                    
                     if (websiteEmails.length > 0) {
                         result.emails = [...new Set([...result.emails, ...websiteEmails])];
+                        result.emailSource = 'website_scraped';
                         result.logs.push(`Phase 2: Found ${websiteEmails.length} email(s): ${websiteEmails.join(', ')}`);
                         result.website = rootUrl;
                         break;
@@ -701,6 +1058,7 @@ async function scrapeProfile(page, profileUrl) {
                         if (mxRecords && mxRecords.length > 0) {
                             // Domain accepts email — use first name guess as best bet
                             result.emails.push(guesses[0]);
+                            result.emailSource = 'pattern_guess';
                             result.logs.push(`Email guess (MX verified domain): ${guesses[0]}`);
                         }
                     } catch { /* no MX records */ }
@@ -897,6 +1255,94 @@ function getMemoryMB() {
     return Math.round(mem.rss / 1024 / 1024);
 }
 
+// ── Extracted post-processing function (runs in background while next profile scrapes) ──
+async function nativePostProcess(job, result, log) {
+    const appUrl = process.env.APP_URL || 'http://qualifier:3000';
+    const region = job.targetRegion || 'na';
+    log(`  [NativeFlow] Post-processing ${job.jobId} (region=${region}, status=${result.status})...`);
+
+    async function fetchWithRetry(url, opts, label, maxRetries = 3) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const res = await fetch(url, { ...opts, signal: AbortSignal.timeout(30000) });
+                const body = await res.text();
+                if (res.ok) {
+                    try { return { ok: true, data: JSON.parse(body) }; } catch { return { ok: true, data: body }; }
+                }
+                log(`  [NativeFlow] ${label} attempt ${attempt}/${maxRetries} failed: HTTP ${res.status} — ${body.substring(0, 200)}`);
+            } catch (e) {
+                log(`  [NativeFlow] ${label} attempt ${attempt}/${maxRetries} error: ${e.message}`);
+            }
+            if (attempt < maxRetries) await sleep(2000 * attempt);
+        }
+        return { ok: false, data: null };
+    }
+
+    try {
+        if (result.status === 'QUALIFIED') {
+            const hasWebsite = result.websites && result.websites.length > 0;
+            if (hasWebsite) {
+                log(`  [NativeFlow] QUALIFIED + Website → Generating hook from ${result.websites[0]}...`);
+                const hookResult = await fetchWithRetry(
+                    `${appUrl}/api/generate-hook`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            websiteText: result.websites[0],
+                            linkedinPostText: result.latestPostText || ''
+                        })
+                    },
+                    'Hook generation'
+                );
+                const hook = hookResult.ok ? (hookResult.data?.result?.hook || '') : '';
+                if (hook) log(`  [NativeFlow] ✅ Hook: "${hook.substring(0, 80)}..."`);
+                else log(`  [NativeFlow] ⚠️ No hook generated (will save lead without hook)`);
+
+                log(`  [NativeFlow] Pushing to CRM → /api/crm/leads/${region}_qualified`);
+                const crmResult = await fetchWithRetry(
+                    `${appUrl}/api/crm/leads/${region}_qualified`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            firstName: result.firstName,
+                            lastName: result.lastName,
+                            email: result.primaryEmail || '',
+                            all_emails: result.emails || [],
+                            email_status: result.emailSource === 'pattern_guess' ? 'GUESSED' : 'UNVERIFIED',
+                            linkedin_url: result.url,
+                            hook: hook,
+                            website: result.website || result.websites[0],
+                            website_source: result.websiteSource || ''
+                        })
+                    },
+                    'CRM save (qualified)'
+                );
+                if (crmResult.ok) log(`  [NativeFlow] ✅ Lead saved to CRM (${region}_qualified)`);
+                else log(`  [NativeFlow] ❌ CRM save FAILED after retries`);
+            } else {
+                log(`  [NativeFlow] QUALIFIED but no website — skipping (matches n8n flow)`);
+            }
+        } else {
+            log(`  [NativeFlow] NOT QUALIFIED → Pushing to /api/crm/leads/not_qualified`);
+            const crmResult = await fetchWithRetry(
+                `${appUrl}/api/crm/leads/not_qualified`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ linkedin_url: result.url })
+                },
+                'CRM save (not_qualified)'
+            );
+            if (crmResult.ok) log(`  [NativeFlow] ✅ Lead marked not_qualified in CRM`);
+            else log(`  [NativeFlow] ❌ CRM not_qualified save FAILED after retries`);
+        }
+    } catch (err) {
+        log(`  [NativeFlow] ❌ Fatal error in post-processing: ${err.message}`);
+    }
+}
+
 // ── Main Loop ──
 async function main() {
     loadEnv();
@@ -910,6 +1356,15 @@ async function main() {
 
     let totalJobsProcessed = 0;
     let cycleJobCount = 0;
+    
+    // ── Enhanced stats tracking ──
+    const sessionStartedAt = new Date().toISOString();
+    let dailyQualified = 0;
+    let dailyRejected = 0;
+    let dailyErrors = 0;
+    let lastJobDurationMs = 0;
+    let jobDurations = []; // rolling window for avg calculation
+    const pendingPostProcessing = []; // track background post-processing promises
 
     // Outer loop: manages browser lifecycle
     while (!isShuttingDown) {
@@ -1030,6 +1485,31 @@ async function main() {
                     continue;
                 }
 
+                // ── Check Daily Limit ──
+                const dailyLimit = parseInt(process.env.DAILY_SCRAPE_LIMIT || '0', 10);
+                if (dailyLimit > 0) {
+                    let limitData = { date: '', count: 0 };
+                    try {
+                        if (fs.existsSync(LIMITS_FILE)) limitData = JSON.parse(fs.readFileSync(LIMITS_FILE, 'utf8'));
+                    } catch {}
+                    
+                    const today = new Date().toISOString().split('T')[0];
+                    if (limitData.date !== today) {
+                        limitData = { date: today, count: 0 };
+                    }
+                    
+                    if (limitData.count >= dailyLimit) {
+                        writeStatus('paused', { reason: `Daily limit of ${dailyLimit} reached`, nextReset: 'midnight' });
+                        log(`⏳ Daily limit of ${dailyLimit} reached. Sleeping for 15 minutes before checking again...`);
+                        await sleep(15 * 60 * 1000);
+                        continue;
+                    }
+                    
+                    // Pre-increment to reserve the slot
+                    limitData.count++;
+                    try { fs.writeFileSync(LIMITS_FILE, JSON.stringify(limitData)); } catch {}
+                }
+
                 const jobFile = files[0];
                 const jobPath = path.join(QUEUE_DIR, jobFile);
                 
@@ -1047,9 +1527,29 @@ async function main() {
 
                 const jobId = job.jobId;
                 const profileUrl = job.linkedinUrl;
+                const jobStartTime = Date.now();
 
                 log(`Processing job ${jobId}: ${profileUrl} [${cycleJobCount + 1}/${RECYCLE_EVERY_N_JOBS} in cycle, ${getMemoryMB()} MB]`);
-                writeStatus('processing', { jobId, url: profileUrl, totalJobsProcessed, cycleJobCount });
+                
+                // Read daily stats for status
+                let dailyCount = 0;
+                let dailyLimitVal = parseInt(process.env.DAILY_SCRAPE_LIMIT || '0', 10);
+                try {
+                    if (fs.existsSync(LIMITS_FILE)) {
+                        const ld = JSON.parse(fs.readFileSync(LIMITS_FILE, 'utf8'));
+                        const today = new Date().toISOString().split('T')[0];
+                        if (ld.date === today) dailyCount = ld.count;
+                    }
+                } catch {}
+                
+                writeStatus('processing', { 
+                    jobId, url: profileUrl, totalJobsProcessed, cycleJobCount,
+                    sessionStartedAt, dailyCount, dailyLimit: dailyLimitVal,
+                    dailyQualified, dailyRejected, dailyErrors,
+                    lastJobDurationMs, avgJobDurationMs: jobDurations.length > 0 ? Math.round(jobDurations.reduce((a,b) => a+b, 0) / jobDurations.length) : 0,
+                    memoryMB: getMemoryMB(),
+                    pendingPostProcessing: pendingPostProcessing.length
+                });
 
                 // Health check: is browser/page still alive?
                 let pageAlive = false;
@@ -1063,7 +1563,7 @@ async function main() {
                 let result;
                 if (pageAlive) {
                     try {
-                        result = await scrapeProfile(page, profileUrl);
+                        result = await scrapeProfile(page, profileUrl, browser);
                     } catch (e) {
                         log(`⚠️ scrapeProfile threw: ${e.message}`);
                         result = { url: profileUrl, firstName: '', headline: '', activityStatus: 'Unknown', emails: [], websites: [], website: '', status: 'ERROR', logs: [`Fatal: ${e.message}`] };
@@ -1071,6 +1571,17 @@ async function main() {
                 } else {
                     result = { url: profileUrl, firstName: '', headline: '', activityStatus: 'Unknown', emails: [], websites: [], website: '', status: 'ERROR', logs: ['Browser page crashed before scrape'] };
                 }
+
+                // Track duration
+                const jobDuration = Date.now() - jobStartTime;
+                lastJobDurationMs = jobDuration;
+                jobDurations.push(jobDuration);
+                if (jobDurations.length > 50) jobDurations.shift(); // rolling window of 50
+
+                // Track daily result counters
+                if (result.status === 'QUALIFIED') dailyQualified++;
+                else if (result.status === 'ERROR') dailyErrors++;
+                else dailyRejected++;
 
                 totalJobsProcessed++;
                 cycleJobCount++;
@@ -1085,9 +1596,26 @@ async function main() {
                 if (job.webhookUrl) {
                     await fireWebhook(job.webhookUrl, { jobId, status: 'done', result, completedAt: new Date().toISOString() });
                 }
+                
+                // --- Fire-and-forget post-processing (runs in background while next profile scrapes) ---
+                if (job.nativePostProcess) {
+                    const ppPromise = nativePostProcess(job, result, log)
+                        .catch(err => log(`  [NativeFlow] ❌ Background error: ${err.message}`))
+                        .finally(() => {
+                            const idx = pendingPostProcessing.indexOf(ppPromise);
+                            if (idx >= 0) pendingPostProcessing.splice(idx, 1);
+                        });
+                    pendingPostProcessing.push(ppPromise);
+                }
 
-                log(`✅ Job ${jobId} done → ${result.status} | ${result.firstName} | Emails: ${result.emails.length} (Total: ${totalJobsProcessed}, Mem: ${getMemoryMB()} MB)`);
-                writeStatus('ready', { totalJobsProcessed, cycleJobCount, lastJob: jobId, memoryMB: getMemoryMB() });
+                log(`✅ Job ${jobId} done → ${result.status} | ${result.firstName} | Emails: ${result.emails.length} | ${Math.round(jobDuration/1000)}s (Total: ${totalJobsProcessed}, Mem: ${getMemoryMB()} MB)`);
+                writeStatus('ready', { 
+                    totalJobsProcessed, cycleJobCount, lastJob: jobId, memoryMB: getMemoryMB(),
+                    sessionStartedAt, dailyCount, dailyLimit: dailyLimitVal,
+                    dailyQualified, dailyRejected, dailyErrors,
+                    lastJobDurationMs, avgJobDurationMs: jobDurations.length > 0 ? Math.round(jobDurations.reduce((a,b) => a+b, 0) / jobDurations.length) : 0,
+                    pendingPostProcessing: pendingPostProcessing.length
+                });
 
                 // Check if we need to recycle the browser
                 if (!pageAlive || cycleJobCount >= RECYCLE_EVERY_N_JOBS) {
@@ -1096,7 +1624,6 @@ async function main() {
                 }
 
                 // Clear page memory between jobs: navigate back to LinkedIn feed
-                // (about:blank loses cookies and CORS blocks Voyager API calls)
                 if (!needsRecycle && pageAlive) {
                     try {
                         await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 15000 });
@@ -1104,12 +1631,20 @@ async function main() {
                 }
 
                 // Delay between profiles
-                await sleep(3000);
+                await sleep(1500);
 
             } catch (e) {
                 log(`Error in poll loop: ${e.message}`);
                 await sleep(5000);
             }
+        }
+
+        // Wait for any pending post-processing to finish before recycling
+        if (pendingPostProcessing.length > 0) {
+            log(`⏳ Waiting for ${pendingPostProcessing.length} background post-processing tasks to finish...`);
+            await Promise.allSettled(pendingPostProcessing);
+            pendingPostProcessing.length = 0;
+            log(`✅ All background tasks complete.`);
         }
 
         // Close the old browser before starting a new one — use proper Windows process killing

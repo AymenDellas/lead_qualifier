@@ -1,24 +1,23 @@
 import { NextResponse } from 'next/server';
 import { generateHook } from '@/lib/groqClient';
-import { runDorkEngine } from '@/lib/dorkEngine'; // Just to ensure imports work, though not used here
 
 export async function POST(req: Request) {
     try {
         const body = await req.json();
-        const { websiteText, apiKeyIndex } = body;
+        const { websiteText, apiKeyIndex, linkedinPostText } = body;
 
-        if (!websiteText) {
-            return NextResponse.json({ error: 'Missing websiteText' }, { status: 400 });
+        if (!websiteText && !linkedinPostText) {
+            return NextResponse.json({ error: 'Missing websiteText or linkedinPostText' }, { status: 400 });
         }
 
-        let finalContext = websiteText;
+        let finalContext = websiteText || '';
 
         // If the user passes a raw URL from n8n, fetch and parse the text automatically
-        if (websiteText.startsWith('http://') || websiteText.startsWith('https://')) {
+        if (finalContext.startsWith('http://') || finalContext.startsWith('https://')) {
             try {
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 10000);
-                const res = await fetch(websiteText, {
+                const res = await fetch(finalContext, {
                     signal: controller.signal,
                     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
                 });
@@ -41,7 +40,7 @@ export async function POST(req: Request) {
             }
         }
 
-        const result = await generateHook(finalContext, apiKeyIndex || 0);
+        const result = await generateHook(finalContext, apiKeyIndex || 0, linkedinPostText);
 
         return NextResponse.json({ success: true, result });
     } catch (e: any) {

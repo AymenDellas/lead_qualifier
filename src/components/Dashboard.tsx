@@ -59,7 +59,7 @@ async function processLeadViaWorker(linkedinUrl: string): Promise<Lead> {
     const res = await fetch('/api/process-lead', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ linkedinUrl }),
+        body: JSON.stringify({ linkedinUrl, nativePostProcess: true }),
     });
     const queued = await res.json();
     if (!res.ok || queued.error) throw new Error(queued.error || 'Failed to queue job');
@@ -155,7 +155,7 @@ export default function Dashboard() {
     const [rowLimit, setRowLimit] = useState(100);
     const [csvUrls, setCsvUrls] = useState<string[]>([]);
     const [leads, setLeads] = useState<Lead[]>([]);
-    const [logs, setLogs] = useState<{ msg: string, time: string, type: 'info' | 'success' }[]>([]);
+    const [logs, setLogs] = useState<{ msg: string, time: string, type: 'info' | 'success' | 'error', isJson?: boolean }[]>([]);
     const [isDragging, setIsDragging] = useState(false);
     const [batchInfo, setBatchInfo] = useState<string>('');
     const isPausedRef = React.useRef(false);
@@ -181,11 +181,57 @@ export default function Dashboard() {
 
     // ── Email Unbouncer state ──
     const [unbouncerInput, setUnbouncerInput] = useState('');
+    const [unbouncerSourceMap, setUnbouncerSourceMap] = useState<Record<string, string>>({});
     const [unbouncerResults, setUnbouncerResults] = useState<VerificationResult[]>([]);
     const [unbouncerProcessing, setUnbouncerProcessing] = useState(false);
     const [unbouncerProgress, setUnbouncerProgress] = useState(0);
     const [unbouncerTotal, setUnbouncerTotal] = useState(0);
     const unbouncerCancelledRef = React.useRef(false);
+
+    // ── Live Queue State ──
+    const [queueSize, setQueueSize] = useState<number>(0);
+    const [workerStatus, setWorkerStatus] = useState<any>(null);
+    const [dailyStats, setDailyStats] = useState<{ date: string; count: number; limit: number }>({ date: '', count: 0, limit: 0 });
+
+    useEffect(() => {
+        if (activeTab !== 'engine') return;
+        const fetchStatus = async () => {
+            try {
+                const res = await fetch('/api/queue-status');
+                if (res.ok) {
+                    const data = await res.json();
+                    setQueueSize(data.queueSize || 0);
+                    setWorkerStatus(data.workerStatus);
+                    if (data.dailyStats) setDailyStats(data.dailyStats);
+                    
+                    // Update isProcessing state based on active work
+                    const isWorking = (data.queueSize > 0) || (data.workerStatus && data.workerStatus.status === 'processing');
+                    setIsProcessing(isWorking);
+                    
+                    if (data.recentResults && data.recentResults.length > 0) {
+                        // Extract only valid results (sometimes recentResults has status wrappers)
+                        const extractedLeads = data.recentResults.map((r: any) => r.result ? r.result : r);
+                        setLeads(extractedLeads);
+                        
+                        // Let's also set logs nicely using the JSON strings
+                        const niceLogs = extractedLeads.map((l: any) => ({
+                            msg: JSON.stringify(l, null, 2),
+                            time: new Date().toLocaleTimeString(),
+                            type: l.status === 'QUALIFIED' ? 'success' as const : 'info' as const,
+                            isJson: true
+                        }));
+                        // Just show the latest 50 logs matching the recent results
+                        setLogs(niceLogs.reverse()); // Reverse so newest is at the bottom if we scroll down
+                    }
+                }
+            } catch (e) {
+                // ignore
+            }
+        };
+        fetchStatus();
+        const int = setInterval(fetchStatus, 3000);
+        return () => clearInterval(int);
+    }, [activeTab]);
 
     // ── Toast helpers ──
     const addToast = useCallback((message: string, type: Toast['type']) => {
@@ -285,106 +331,79 @@ export default function Dashboard() {
     };
 
     const SAVE_INTERVAL = 10;
+    
+    const handleFetchPendingLeads = async (location: string, autoStart: boolean = false) => {
+        try {
+            setLogs(prev => [...prev, { msg: `Fetching pending (${location}) leads from CRM...`, time: new Date().toLocaleTimeString(), type: 'info' }]);
+            addToast(`Fetching pending ${location} leads...`, 'info');
+            const res = await fetch(`/api/crm/leads/${location}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.length > 0) {
+                    const urls = data.map((lead: any) => lead.linkedin_url).filter(Boolean);
+                    setCsvUrls(urls);
+                    setLogs(prev => [...prev, { msg: `Found ${urls.length} pending leads in CRM.`, time: new Date().toLocaleTimeString(), type: 'success' }]);
+                    addToast(`Loaded ${urls.length} leads`, 'success');
+                    if (autoStart) {
+                        setTimeout(() => {
+                            handleStartEngine(0, [], urls, location);
+                        }, 500);
+                    }
+                } else {
+                    addToast(`No pending leads found in ${location}`, 'info');
+                }
+            } else {
+                throw new Error('Failed to fetch from CRM');
+            }
+        } catch (error: any) {
+            setLogs(prev => [...prev, { msg: `Error fetching pending leads: ${error.message}`, time: new Date().toLocaleTimeString(), type: 'error' }]);
+            addToast('Error fetching pending leads', 'error');
+        }
+    };
 
-    const handleStartEngine = async (resumeFrom = 0, existingLeads: Lead[] = []) => {
-        if (csvUrls.length === 0) {
+    const handleStartEngine = async (resumeFrom = 0, existingLeads: Lead[] = [], overrideUrls?: string[], targetRegion: string = 'na') => {
+        const targetUrls = overrideUrls || csvUrls;
+        if (targetUrls.length === 0) {
             addToast('No URLs loaded. Upload a CSV first.', 'error');
             return;
         }
 
-        // Check worker is alive
+        // Check worker is alive (soft check — don't block if status file hasn't been created yet)
         try {
             const healthRes = await fetch('/api/process-lead');
             const health = await healthRes.json();
-            if (health.worker?.stale || health.worker === 'unknown') {
-                addToast('Worker is not running! Start it with: node worker.cjs', 'error');
-                return;
+            if (health.worker && typeof health.worker === 'object' && health.worker.stale) {
+                addToast('Worker appears offline (status stale). Jobs will queue and process when worker starts.', 'info');
             }
         } catch {
-            addToast('Cannot reach API. Is the dev server running?', 'error');
-            return;
+            // API unreachable — but don't block, the batch endpoint might still work
+            addToast('Could not check worker status — proceeding anyway.', 'info');
         }
 
-        isCancelledRef.current = false;
-        setIsProcessing(true);
-        const limit = Math.min(csvUrls.length, rowLimit);
-        setProgress(resumeFrom > 0 ? Math.round((resumeFrom / limit) * 100) : 0);
-        if (resumeFrom === 0) setLeads([]);
-        else setLeads(existingLeads);
-
-        const urlsToProcess = csvUrls.slice(0, limit);
-        let processedCount = resumeFrom;
-        const allLeads: Lead[] = [...existingLeads];
+        const urlsToProcess = targetUrls;
 
         setLogs(prev => [...prev, {
-            msg: resumeFrom > 0
-                ? `Resuming from lead ${resumeFrom + 1}/${limit}...`
-                : `Engine Ignition: ${limit} leads via Worker pipeline...`,
+            msg: `Engine Ignition: Sending ${urlsToProcess.length} leads to background queue (Region: ${targetRegion})...`,
             time: new Date().toLocaleTimeString(), type: 'info'
         }]);
-        setBatchInfo(`Processing ${limit} leads via Worker`);
 
-        for (let i = resumeFrom; i < limit; i++) {
-            const url = urlsToProcess[i];
-            setLogs(prev => [...prev, { msg: `[${processedCount + 1}/${limit}] Queuing ${url}...`, time: new Date().toLocaleTimeString(), type: 'info' }]);
+        try {
+            const res = await fetch('/api/queue-batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ urls: urlsToProcess, nativePostProcess: true, targetRegion: targetRegion.toLowerCase() })
+            });
 
-            try {
-                const workerPromise = processLeadViaWorker(url);
-                const cancelPromise = new Promise((_, reject) => {
-                    const int = setInterval(() => {
-                        if (isCancelledRef.current) {
-                            clearInterval(int);
-                            reject(new Error("CANCELLED"));
-                        }
-                    }, 500);
-                });
-                const result = await Promise.race([workerPromise, cancelPromise]) as Lead;
-                allLeads.push(result);
-                setLeads([...allLeads]);
+            if (!res.ok) throw new Error("Failed to queue batch");
 
-                const newLogs = (result.logs || []).map(logMsg => ({
-                    msg: logMsg,
-                    time: new Date().toLocaleTimeString(),
-                    type: result.status === 'QUALIFIED' ? 'success' as const : 'info' as const
-                }));
-                setLogs(prev => [...prev, ...newLogs]);
-            } catch (error: any) {
-                if (error.message === "CANCELLED") {
-                    // Loop will break below at the isCancelledRef check
-                } else {
-                    setLogs(prev => [...prev, { msg: `Error processing ${url}: ${error}`, time: new Date().toLocaleTimeString(), type: 'info' }]);
-                    allLeads.push({ url, status: 'ERROR', websites: [], emails: [], logs: [`Error: ${error}`] });
-                    setLeads([...allLeads]);
-                }
-            }
-
-            processedCount++;
-            setProgress(Math.round((processedCount / limit) * 100));
-
-            if (processedCount % SAVE_INTERVAL === 0) {
-                await saveProgress(allLeads, processedCount, limit);
-                setLogs(prev => [...prev, { msg: `💾 Progress saved (${processedCount}/${limit})`, time: new Date().toLocaleTimeString(), type: 'info' }]);
-            }
-
-            if (isCancelledRef.current) {
-                await saveProgress(allLeads, processedCount, limit);
-                setLogs(prev => [...prev, { msg: `🛑 Processing cancelled at ${processedCount}/${limit}. Progress saved.`, time: new Date().toLocaleTimeString(), type: 'info' }]);
-                addToast(`Cancelled. ${processedCount} leads processed so far.`, 'info');
-                setBatchInfo('');
-                setIsProcessing(false);
-                return;
-            }
-
-            while (isPausedRef.current && !isCancelledRef.current) {
-                await new Promise(resolve => setTimeout(resolve, 500));
-            }
+            const data = await res.json();
+            addToast(`Successfully queued ${data.queuedCount} jobs`, 'success');
+            setBatchInfo(`Processing ${data.queuedCount} leads via Worker`);
+            setIsProcessing(true);
+        } catch (error: any) {
+            addToast(`Error queueing jobs: ${error.message}`, 'error');
+            setLogs(prev => [...prev, { msg: `Error: ${error.message}`, time: new Date().toLocaleTimeString(), type: 'error' }]);
         }
-
-        await saveProgress(allLeads, processedCount, limit);
-        setBatchInfo('');
-        setIsProcessing(false);
-        setLogs(prev => [...prev, { msg: `✅ Mission Complete. ${processedCount} leads processed.`, time: new Date().toLocaleTimeString(), type: 'success' }]);
-        addToast(`Processing complete! ${processedCount} leads processed.`, 'success');
     };
 
     const handleResumeFromSave = async () => {
@@ -411,7 +430,7 @@ export default function Dashboard() {
         addToast(isPausedRef.current ? 'Processing paused' : 'Processing resumed', 'info');
     };
 
-    const handleCancel = () => {
+    const handleCancel = async () => {
         isCancelledRef.current = true;
         // Unpause so the pause-wait loop exits and sees the cancel flag
         isPausedRef.current = false;
@@ -421,6 +440,13 @@ export default function Dashboard() {
             time: new Date().toLocaleTimeString(), type: 'info'
         }]);
         addToast('Cancelling after current lead...', 'info');
+
+        try {
+            await fetch('/api/clear-queue', { method: 'POST' });
+            setQueueSize(0);
+        } catch (error) {
+            // ignore
+        }
     };
 
     const handleRetryFailed = async () => {
@@ -846,16 +872,32 @@ export default function Dashboard() {
                     return h === 'email' || h === 'emails' || h === 'e-mail' || h === 'email_address' || h === 'emailaddress' || h === 'mail';
                 });
 
+                const sourceCol = results.meta?.fields?.find((_: string, i: number) => headers[i] === 'source');
                 let emails: string[] = [];
+                let sourceMap: Record<string, string> = {};
+                
                 if (emailCol) {
-                    emails = (results.data as any[])
-                        .map((row: any) => String(row[emailCol] || '').trim().toLowerCase())
-                        .filter((val: string) => val.length > 3 && val.includes('@'));
+                    const validRows = (results.data as any[])
+                        .filter(row => {
+                            const em = String(row[emailCol] || '').trim().toLowerCase();
+                            return em.length > 3 && em.includes('@');
+                        });
+                    
+                    emails = validRows.map(row => String(row[emailCol] || '').trim().toLowerCase());
+                    
+                    if (sourceCol) {
+                        validRows.forEach(row => {
+                            const em = String(row[emailCol] || '').trim().toLowerCase();
+                            const src = String(row[sourceCol] || '').trim().toLowerCase();
+                            if (src) sourceMap[em] = src;
+                        });
+                    }
                 } else {
                     addToast('No "email" column found in CSV. Expected: email, emails, e-mail, email_address, or mail.', 'error');
                     return;
                 }
 
+                setUnbouncerSourceMap(sourceMap);
                 setUnbouncerInput(emails.join('\n'));
                 addToast(`${emails.length} emails loaded from "${emailCol}" column`, 'success');
             },
@@ -1057,9 +1099,25 @@ export default function Dashboard() {
                                     </p>
                                     <p className="text-zinc-600 text-sm mt-1">CSV files only • Up to 1000 rows</p>
                                 </div>
-
+                                
+                                <div className="grid grid-cols-2 gap-4 mt-4 mb-4">
+                                    <button 
+                                        onClick={() => handleFetchPendingLeads('NA', true)}
+                                        className="bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:bg-blue-500/20 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2"
+                                    >
+                                        <Database className="w-4 h-4" />
+                                        Process Pending NA
+                                    </button>
+                                    <button 
+                                        onClick={() => handleFetchPendingLeads('UK', true)}
+                                        className="bg-accent/10 border border-accent/30 text-accent hover:bg-accent/20 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2"
+                                    >
+                                        <Database className="w-4 h-4" />
+                                        Process Pending UK
+                                    </button>
+                                </div>
                                 <div className="flex items-center gap-4">
-                                    <div className="flex-1">
+                                    <div className="flex-1 max-w-[200px]">
                                         <label className="text-xs text-zinc-500 uppercase tracking-widest block mb-2 font-bold">Row Limit</label>
                                         <input
                                             type="number"
@@ -1067,6 +1125,75 @@ export default function Dashboard() {
                                             onChange={(e) => setRowLimit(parseInt(e.target.value))}
                                             className="w-full bg-black/50 border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-1 focus:ring-white/20"
                                         />
+                                    </div>
+                                    <div className="bg-black/60 border border-zinc-800 rounded-xl p-4 flex-1">
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <Server className="w-4 h-4 text-zinc-400" />
+                                            <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Worker Monitor</span>
+                                            <div className={cn("w-2 h-2 rounded-full ml-auto", 
+                                                workerStatus?.status === 'processing' ? 'bg-emerald-500 animate-pulse' :
+                                                workerStatus?.status === 'paused' ? 'bg-amber-500' :
+                                                workerStatus?.status === 'ready' ? 'bg-blue-500' :
+                                                'bg-red-500'
+                                            )} />
+                                            <span className="text-[10px] text-zinc-500">
+                                                {workerStatus?.status === 'processing' ? 'Active' :
+                                                 workerStatus?.status === 'paused' ? 'Paused' :
+                                                 workerStatus?.status === 'ready' ? 'Idle' :
+                                                 workerStatus?.stale || !workerStatus ? 'Offline' : workerStatus?.status || 'Unknown'}
+                                            </span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                                            <div>
+                                                <span className="text-zinc-500">Queue</span>
+                                                <p className="text-white font-semibold">{queueSize} jobs</p>
+                                            </div>
+                                            <div>
+                                                <span className="text-zinc-500">Today</span>
+                                                <p className="text-white font-semibold">
+                                                    {workerStatus?.dailyCount ?? dailyStats.count}
+                                                    {(workerStatus?.dailyLimit || dailyStats.limit) > 0 && 
+                                                        <span className="text-zinc-500 font-normal"> / {workerStatus?.dailyLimit || dailyStats.limit}</span>
+                                                    }
+                                                </p>
+                                            </div>
+                                            <div>
+                                                <span className="text-zinc-500">Speed</span>
+                                                <p className="text-white font-semibold">
+                                                    {workerStatus?.avgJobDurationMs ? `~${Math.round(3600000 / workerStatus.avgJobDurationMs)}/hr` : '—'}
+                                                </p>
+                                            </div>
+                                            <div>
+                                                <span className="text-zinc-500">Memory</span>
+                                                <p className="text-white font-semibold">{workerStatus?.memoryMB ? `${workerStatus.memoryMB} MB` : '—'}</p>
+                                            </div>
+                                            <div>
+                                                <span className="text-zinc-500">Qualified</span>
+                                                <p className="text-emerald-400 font-semibold">{workerStatus?.dailyQualified ?? 0}</p>
+                                            </div>
+                                            <div>
+                                                <span className="text-zinc-500">Rejected</span>
+                                                <p className="text-red-400 font-semibold">{workerStatus?.dailyRejected ?? 0}</p>
+                                            </div>
+                                        </div>
+                                        {(workerStatus?.dailyLimit || dailyStats.limit) > 0 && (
+                                            <div className="mt-3">
+                                                <div className="w-full bg-zinc-800 rounded-full h-1.5">
+                                                    <div 
+                                                        className="bg-accent h-1.5 rounded-full transition-all duration-500" 
+                                                        style={{ width: `${Math.min(100, ((workerStatus?.dailyCount ?? dailyStats.count) / (workerStatus?.dailyLimit || dailyStats.limit)) * 100)}%` }} 
+                                                    />
+                                                </div>
+                                                <p className="text-[10px] text-zinc-600 mt-1 text-right">
+                                                    {Math.round(((workerStatus?.dailyCount ?? dailyStats.count) / (workerStatus?.dailyLimit || dailyStats.limit)) * 100)}% of daily limit
+                                                </p>
+                                            </div>
+                                        )}
+                                        {workerStatus?.status === 'processing' && workerStatus?.url && (
+                                            <div className="mt-2 pt-2 border-t border-zinc-800">
+                                                <p className="text-[10px] text-zinc-500 truncate">Scraping: {workerStatus.url.split('/in/')[1] || workerStatus.url}</p>
+                                            </div>
+                                        )}
                                     </div>
                                     {!isProcessing ? (
                                         <button
@@ -1117,8 +1244,7 @@ export default function Dashboard() {
                                     </button>
                                     <button
                                         onClick={handleClearQueue}
-                                        disabled={isProcessing}
-                                        className="flex-1 bg-red-500/10 text-red-400 h-[50px] mt-6 rounded-xl font-bold hover:bg-red-500/20 disabled:opacity-50 transition-all flex items-center justify-center gap-2 border border-red-500/30"
+                                        className="flex-1 bg-red-500/10 text-red-400 h-[50px] mt-6 rounded-xl font-bold hover:bg-red-500/20 transition-all flex items-center justify-center gap-2 border border-red-500/30"
                                         title="Empty the processing queue"
                                     >
                                         <Trash2 className="w-4 h-4" />
@@ -1186,7 +1312,13 @@ export default function Dashboard() {
                                             {log.type === 'success' ? <CheckCircle className="w-4 h-4 text-accent" /> : <Search className="w-4 h-4 text-blue-500" />}
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <p className="text-[11px] text-zinc-400 leading-tight">{log.msg}</p>
+                                            {log.isJson ? (
+                                                <pre className="text-[10px] text-zinc-300 leading-tight bg-black p-2 rounded border border-zinc-800 overflow-x-auto">
+                                                    {log.msg}
+                                                </pre>
+                                            ) : (
+                                                <p className="text-[11px] text-zinc-400 leading-tight">{log.msg}</p>
+                                            )}
                                             <p className="text-[9px] text-zinc-600 mt-1 font-mono uppercase">{log.time}</p>
                                         </div>
                                     </div>
@@ -1808,11 +1940,24 @@ export default function Dashboard() {
                     </div>
                 ) : activeTab === 'finder' ? (
                     <div className="col-span-1 md:col-span-3 lg:col-span-4">
-                        <FinderEngine />
+                        <FinderEngine onPushToEngine={(urls) => {
+                            setCsvUrls(urls);
+                            setActiveTab('engine');
+                            setTimeout(() => {
+                                handleStartEngine(0, [], urls);
+                            }, 500);
+                        }} />
                     </div>
                 ) : activeTab === 'crm' ? (
                     <div className="col-span-1 md:col-span-3 lg:col-span-4">
-                        <CrmDatabase />
+                        <CrmDatabase onPushToEngine={(urls) => {
+                            setCsvUrls(urls);
+                            setActiveTab('engine');
+                            // Start processing automatically with the new urls
+                            setTimeout(() => {
+                                handleStartEngine(0, [], urls);
+                            }, 500);
+                        }} />
                     </div>
                 ) : null}
             </div>

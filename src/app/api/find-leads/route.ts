@@ -7,7 +7,7 @@ import { insertOrUpdateLead } from '@/lib/db';
 export async function POST(req: Request) {
     try {
         const body = await req.json();
-        const { job_titles, locations, max_urls_target, negative_keywords } = body;
+        const { job_titles, locations, max_urls_target, max_pages_per_dork, negative_keywords } = body;
 
         if (!job_titles || !locations) {
             return NextResponse.json({ error: 'Missing job_titles or locations' }, { status: 400 });
@@ -36,6 +36,7 @@ export async function POST(req: Request) {
             job_titles,
             locations,
             max_urls_target: max_urls_target || 500,
+            max_pages_per_dork: max_pages_per_dork || 20,
             negative_keywords: negative_keywords || []
         };
 
@@ -57,16 +58,35 @@ export async function POST(req: Request) {
         // Run in background
         Promise.resolve().then(async () => {
             try {
-                const results = await runDorkEngine(config, apiKey, (found, totalQueries, qIdx, query) => {
-                    fs.writeFileSync(progressFile, JSON.stringify({
-                        status: 'running',
-                        jobId,
-                        found,
-                        totalQueries,
-                        currentQuery: query,
-                        results: [] // Don't write all results on every tick to save IO
-                    }));
-                });
+                const { getAllLeads, insertOrUpdateLead } = await import('@/lib/db');
+                const existingLeads = await getAllLeads();
+                const existingUrls = new Set(existingLeads.map(l => l.linkedin_url));
+
+                const results = await runDorkEngine(
+                    config, 
+                    apiKey, 
+                    (found, totalQueries, qIdx, query) => {
+                        fs.writeFileSync(progressFile, JSON.stringify({
+                            status: 'running',
+                            jobId,
+                            found,
+                            totalQueries,
+                            currentQuery: query,
+                            results: [] // Don't write all results on every tick to save IO
+                        }));
+                    },
+                    async (url, location) => {
+                        // LIVE DB INSERTION
+                        if (!existingUrls.has(url)) {
+                            existingUrls.add(url); // prevent duplicate inserts in this run
+                            await insertOrUpdateLead({
+                                linkedin_url: url,
+                                location: location,
+                                pipeline_status: 'INBOX'
+                            }).catch(e => console.error("Live DB Insert failed:", e));
+                        }
+                    }
+                );
 
                 fs.writeFileSync(progressFile, JSON.stringify({
                     status: 'done',
@@ -74,21 +94,6 @@ export async function POST(req: Request) {
                     found: results.length,
                     results
                 }));
-
-                // Auto-Push to CRM if not duplicate
-                const { getAllLeads } = await import('@/lib/db');
-                const existingLeads = await getAllLeads();
-                const existingUrls = new Set(existingLeads.map(l => l.linkedin_url));
-
-                for (const r of results) {
-                    if (!existingUrls.has(r.url)) {
-                        await insertOrUpdateLead({
-                            linkedin_url: r.url,
-                            location: r.location,
-                            pipeline_status: 'INBOX'
-                        });
-                    }
-                }
 
             } catch (err: any) {
                 fs.writeFileSync(progressFile, JSON.stringify({

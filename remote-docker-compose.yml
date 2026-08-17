@@ -1,0 +1,66 @@
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    restart: always
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    environment:
+      - GENERIC_TIMEZONE=Africa/Casablanca
+      - TZ=Africa/Casablanca
+      - EXECUTIONS_TIMEOUT=86400
+      - EXECUTIONS_TIMEOUT_MAX=86400
+      - NODE_FUNCTION_ALLOW_EXTERNAL=*
+      - N8N_SECURE_COOKIE=false
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  qualifier:
+    build:
+      context: ./leads_qualifierV2
+      dockerfile: Dockerfile
+    restart: always
+    init: true
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./leads_qualifierV2/.env.docker
+    volumes:
+      - qualifier_queue:/app/queue
+      - qualifier_results:/app/queue-results
+      - qualifier_progress:/app/progress
+      - browser_profiles:/app/.browser-profiles
+      - crm_data:/app/data
+    depends_on:
+      - n8n
+  qualifier-worker:
+    build:
+      context: ./leads_qualifierV2
+      dockerfile: Dockerfile
+    restart: always
+    init: true
+    command: ["sh", "-c", "rm -f /tmp/.X99-lock && Xvfb :99 -screen 0 1366x768x24 & sleep 2 && fluxbox & sleep 2 && x11vnc -display :99 -forever -nopw -quiet -listen 0.0.0.0 & export DISPLAY=:99 && touch .env.local && node worker.cjs"]
+    ports:
+      - "5900:5900"
+    env_file:
+      - ./leads_qualifierV2/.env.docker
+    volumes:
+      - qualifier_queue:/app/queue
+      - qualifier_results:/app/queue-results
+      - browser_profiles:/app/.browser-profiles
+      - crm_data:/app/data
+    shm_size: '2gb'
+    depends_on:
+      - qualifier
+
+volumes:
+  n8n_data:
+  qualifier_queue:
+  qualifier_results:
+  qualifier_progress:
+  browser_profiles:
+  crm_data:

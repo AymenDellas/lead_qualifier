@@ -5,16 +5,30 @@ import { Radar, Search, MessageCircle, Play, Loader2, Copy, AlertCircle, Upload,
 import { cn } from "@/lib/utils";
 import Papa from "papaparse";
 
-export default function FinderEngine() {
+export default function FinderEngine({ onPushToEngine }: { onPushToEngine?: (urls: string[]) => void }) {
     // Discovery State
     const [niches, setNiches] = useState<string[]>(['Coach']);
     const [locations, setLocations] = useState<string[]>(['US']);
     const [target, setTarget] = useState(200);
+    const [maxPages, setMaxPages] = useState(20);
     const [nicheInput, setNicheInput] = useState('');
     const [locInput, setLocInput] = useState('');
     const [discovering, setDiscovering] = useState(false);
     const [discoveryStatus, setDiscoveryStatus] = useState('');
+    const [discoveryJobId, setDiscoveryJobId] = useState<string | null>(null);
+    const [discoveryProgress, setDiscoveryProgress] = useState<any>(null);
     
+    // Auto-reconnect to running job on mount
+    React.useEffect(() => {
+        const savedJobId = localStorage.getItem('leadFinderJobId');
+        if (savedJobId) {
+            setDiscoveryJobId(savedJobId);
+            setDiscovering(true);
+            setDiscoveryStatus('Reconnecting to background discovery task...');
+            pollDiscoveryStatus(savedJobId);
+        }
+    }, []);
+
     // Single Hook State
     const [websiteUrl, setWebsiteUrl] = useState('');
     const [generating, setGenerating] = useState(false);
@@ -53,16 +67,59 @@ export default function FinderEngine() {
             const res = await fetch('/api/find-leads', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job_titles: niches, locations, max_urls_target: target })
+                body: JSON.stringify({ job_titles: niches, locations, max_urls_target: target, max_pages_per_dork: maxPages })
             });
             const data = await res.json();
-            if (data.error) throw new Error(data.error);
-            setDiscoveryStatus('Discovery launched. The background worker is running. Check queue-results folder.');
+            setDiscoveryJobId(data.jobId);
+            localStorage.setItem('leadFinderJobId', data.jobId);
+            setDiscoveryStatus('Discovery launched. The background worker is running. Leads are saving to the CRM live!');
+            pollDiscoveryStatus(data.jobId);
         } catch (e: any) {
             setDiscoveryStatus(`Error: ${e.message}`);
-        } finally {
             setDiscovering(false);
         }
+    };
+
+    const pollDiscoveryStatus = async (jobId: string) => {
+        try {
+            const res = await fetch(`/api/find-leads/status?jobId=${jobId}`);
+            const data = await res.json();
+            
+            if (data && data.status) {
+                setDiscoveryProgress(data);
+                if (data.status === 'running') {
+                    setTimeout(() => pollDiscoveryStatus(jobId), 3000);
+                } else if (data.status === 'done') {
+                    setDiscoveryStatus(`Discovery completed. Found ${data.found} leads.`);
+                    setDiscovering(false);
+                    localStorage.removeItem('leadFinderJobId');
+                } else if (data.status === 'error') {
+                    setDiscoveryStatus(`Discovery failed: ${data.error}`);
+                    setDiscovering(false);
+                    localStorage.removeItem('leadFinderJobId');
+                } else {
+                    setTimeout(() => pollDiscoveryStatus(jobId), 3000);
+                }
+            } else {
+                setTimeout(() => pollDiscoveryStatus(jobId), 3000);
+            }
+        } catch (e) {
+            setTimeout(() => pollDiscoveryStatus(jobId), 5000);
+        }
+    };
+
+    const downloadDiscoveryCSV = () => {
+        if (!discoveryProgress || !discoveryProgress.leads || discoveryProgress.leads.length === 0) return;
+        const csvContent = "data:text/csv;charset=utf-8," 
+            + "LinkedIn URL,Location\n"
+            + discoveryProgress.leads.map((l: any) => `${l.url},${l.location}`).join("\n");
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `Leads_Discovery_${new Date().getTime()}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     };
 
     // Single Hook Handler
@@ -214,6 +271,14 @@ export default function FinderEngine() {
                         />
                     </div>
 
+                    <div>
+                        <label className="block text-sm text-zinc-400 mb-2">Max Pages per Query (Depth)</label>
+                        <input 
+                            type="number" value={maxPages} onChange={e => setMaxPages(parseInt(e.target.value))}
+                            className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-2 focus:outline-none focus:border-zinc-700"
+                        />
+                    </div>
+
                     <button 
                         onClick={handleDiscover}
                         disabled={discovering || niches.length === 0 || locations.length === 0}
@@ -224,8 +289,50 @@ export default function FinderEngine() {
                     </button>
 
                     {discoveryStatus && (
-                        <div className="p-4 bg-black border border-zinc-800 rounded-xl text-sm font-mono text-zinc-400">
-                            &gt; {discoveryStatus}
+                        <div className="p-4 bg-black border border-zinc-800 rounded-xl text-sm font-mono text-zinc-400 space-y-2">
+                            <div>&gt; {discoveryStatus}</div>
+                            {discoveryProgress && (
+                                <div className="mt-4 p-3 bg-zinc-900 rounded-lg border border-zinc-800">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <span className="text-zinc-300">Progress:</span>
+                                        <span className="text-blue-400 font-bold">{discoveryProgress.found} Leads Found</span>
+                                    </div>
+                                    {discoveryProgress.status === 'running' && discoveryProgress.totalQueries > 0 && (
+                                        <div className="text-xs text-zinc-500 mb-2">
+                                            Currently querying: <span className="text-zinc-300">{discoveryProgress.currentQuery}</span>
+                                        </div>
+                                    )}
+                                    {discoveryProgress.results && discoveryProgress.results.length > 0 && (
+                                        <div className="mt-3 max-h-32 overflow-y-auto space-y-1">
+                                            {discoveryProgress.results.map((r: any, idx: number) => (
+                                                <div key={idx} className="text-xs flex gap-2">
+                                                    <span className="text-zinc-500">[{r.location}]</span>
+                                                    <a href={r.url} target="_blank" className="text-zinc-300 hover:text-white truncate">{r.url}</a>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    <div className="mt-4 border-t border-zinc-800 pt-3 flex gap-2">
+                                        <button 
+                                            onClick={downloadDiscoveryCSV}
+                                            className="px-4 py-2 bg-zinc-800 text-white rounded-xl text-sm hover:bg-zinc-700 transition-colors flex items-center gap-2"
+                                        >
+                                            <Download className="w-4 h-4" /> Export CSV
+                                        </button>
+                                        {onPushToEngine && (
+                                            <button 
+                                                onClick={() => {
+                                                    const urls = discoveryProgress.results.map((r: any) => r.url).filter(Boolean);
+                                                    onPushToEngine(urls);
+                                                }}
+                                                className="px-4 py-2 bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-xl text-sm hover:bg-blue-500/30 transition-colors flex items-center gap-2"
+                                            >
+                                                <Radar className="w-4 h-4" /> Process in Engine
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
