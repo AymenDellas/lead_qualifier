@@ -21,6 +21,7 @@ final-*
 *.txt
 !_puppeteer-urls.txt
 .env.local
+.env*.local
 .env.example
 .browser-profiles/
 queue/

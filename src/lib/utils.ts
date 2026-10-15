@@ -59,30 +59,6 @@ export function validateEmail(email: string): boolean {
 }
 
 /**
- * Verify an email domain has valid MX records (DNS check).
- * Returns true if the domain can receive email.
- * Safe to call from server actions only (uses Node dns module).
- */
-export async function verifyEmailDomain(email: string): Promise<boolean> {
-    try {
-        const dns = await import('dns');
-        const domain = email.split('@')[1];
-        if (!domain) return false;
-        return new Promise((resolve) => {
-            dns.resolveMx(domain, (err, addresses) => {
-                if (err || !addresses || addresses.length === 0) {
-                    resolve(false);
-                } else {
-                    resolve(true);
-                }
-            });
-        });
-    } catch {
-        return false;
-    }
-}
-
-/**
  * Generate common email guesses from a first name, last name hint, and domain.
  * Returns a list of plausible email addresses to verify.
  */
@@ -162,7 +138,8 @@ export function normaliseLinkedinUrl(url: string): string | null {
     if (!url) return null;
     try {
         const urlObj = new URL(url);
-        if (!urlObj.hostname.includes('linkedin.com')) return null;
+        if (!['http:', 'https:'].includes(urlObj.protocol) || urlObj.username || urlObj.password
+            || !(urlObj.hostname === 'linkedin.com' || urlObj.hostname.endsWith('.linkedin.com'))) return null;
         
         // Return exactly https://linkedin.com/in/slug (or similar)
         const pathParts = urlObj.pathname.split('/').filter(Boolean);

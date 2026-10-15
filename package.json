@@ -1,37 +1,52 @@
 {
-  "name": "revlane-dashboard",
+  "name": "compel-dashboard",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
-    "lint": "next lint"
+    "lint": "next lint",
+    "backup": "node scripts/backup-db.mjs",
+    "check-env": "node scripts/check-env.mjs",
+    "worker": "node scripts/linkedin-worker-supervisor.cjs",
+    "worker:single": "node worker.cjs",
+    "test:workers": "node --test tests/workers/*.test.cjs",
+    "case-study-worker": "node case-study-worker.cjs",
+    "test:copy-studio": "node scripts/copy-studio-tests.mjs",
+    "test:copy-studio:browser": "playwright test -c playwright.copy-studio.config.ts",
+    "test:qev": "node --test scripts/check-quickemailverification.cjs tests/email-verification/*.test.cjs"
   },
   "dependencies": {
+    "@qwen-code/qwen-code": "0.24.6",
     "@tailwindcss/postcss": "^4.1.18",
     "@tailwindcss/vite": "^4.1.18",
     "@types/papaparse": "^5.5.2",
     "axios": "^1.13.6",
     "better-sqlite3": "^12.11.1",
+    "cheerio": "^1.2.0",
     "clsx": "latest",
     "got-scraping": "^4.2.1",
     "groq-sdk": "^1.3.0",
     "https-proxy-agent": "^7.0.6",
+    "imapflow": "^1.7.6",
+    "ipaddr.js": "^2.5.0",
     "lucide": "latest",
     "lucide-react": "latest",
     "next": "latest",
     "papaparse": "^5.5.3",
-    "pg": "^8.22.0",
+    "pg": "^8.23.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "react": "latest",
     "react-dom": "latest",
     "sqlite": "^5.1.1",
     "sqlite3": "^6.0.1",
-    "tailwind-merge": "latest"
+    "tailwind-merge": "latest",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "latest",
     "@types/pg": "^8.20.0",
@@ -43,6 +58,7 @@
     "postcss": "^8.5.6",
     "puppeteer": "^24.38.0",
     "tailwindcss": "^4.1.18",
+    "tsx": "^4.23.15",
     "typescript": "latest"
   }
 }

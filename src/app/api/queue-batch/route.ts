@@ -1,54 +1,14 @@
-import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
-
-export const dynamic = "force-dynamic";
-
-const PROJECT_ROOT = process.cwd();
-const QUEUE_DIR = path.join(PROJECT_ROOT, "queue");
-const RESULTS_DIR = path.join(PROJECT_ROOT, "queue-results");
-
-export async function POST(request: NextRequest) {
-    try {
-        const body = await request.json();
-        const { urls, nativePostProcess, targetRegion } = body;
-
-        if (!urls || !Array.isArray(urls)) {
-            return NextResponse.json({ error: "Missing or invalid 'urls' array" }, { status: 400 });
-        }
-
-        if (!fs.existsSync(QUEUE_DIR)) fs.mkdirSync(QUEUE_DIR, { recursive: true });
-        if (!fs.existsSync(RESULTS_DIR)) fs.mkdirSync(RESULTS_DIR, { recursive: true });
-
-        const queuedJobs = [];
-
-        for (const url of urls) {
-            if (!url.includes('linkedin.com/in/')) continue;
-
-            const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-            const jobPath = path.join(QUEUE_DIR, `${jobId}.json`);
-            const tmpPath = `${jobPath}.tmp`;
-            
-            fs.writeFileSync(tmpPath, JSON.stringify({ 
-                jobId, 
-                linkedinUrl: url, 
-                nativePostProcess: !!nativePostProcess,
-                targetRegion: targetRegion || 'na', // Default to na if not provided
-                createdAt: new Date().toISOString() 
-            }));
-            fs.renameSync(tmpPath, jobPath);
-            queuedJobs.push(jobId);
-        }
-
-        console.log(`[API] Queued batch of ${queuedJobs.length} jobs`);
-
-        return NextResponse.json({
-            status: "success",
-            queuedCount: queuedJobs.length,
-            jobs: queuedJobs
-        });
-    } catch (error) {
-        console.error('[API] Batch POST error:', error);
-        return NextResponse.json({ error: "Internal error" }, { status: 500 });
-    }
+import { NextResponse } from 'next/server';
+import { pool } from '@/lib/pg_setup';
+import { requireWorkerAdmin } from '@/lib/worker-admin';
+import { enqueue, retryFailed } from '@/lib/linkedin-workers.cjs';
+export const dynamic = 'force-dynamic';
+export async function POST(request: Request) {
+ await requireWorkerAdmin();
+ try {
+  const body=await request.json();
+  if(body.action==='retry_failed')return NextResponse.json({status:'success',...await retryFailed(pool)});
+  const result=await enqueue(pool,body.urls,{nativePostProcess:!!body.nativePostProcess,targetRegion:body.targetRegion});
+  return NextResponse.json({status:'success',...result});
+ }catch(error){return NextResponse.json({error:error instanceof Error ? error.message : 'Could not queue profiles.'},{status:400});}
 }

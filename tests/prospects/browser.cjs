@@ -1,0 +1,92 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const puppeteer = require('puppeteer');
+const output = path.resolve('tmp/prospect-review');
+fs.mkdirSync(output, { recursive: true });
+(async () => {
+    const fixture = require('./fixtures.cjs').prospect('preview-executive');
+    const pool = new (require('pg').Pool)({ connectionString: 'postgresql://test:test@127.0.0.1:55461/postgres?sslmode=disable' });
+    await pool.query('UPDATE leads SET prospect_assessment=$1,prospect_review=NULL WHERE id=$2', [JSON.stringify(fixture.prospect_assessment), fixture.id]);
+    await pool.end();
+    const browser = await puppeteer.launch({ headless: true });
+    const page = await browser.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.setRequestInterception(true);
+    let simulateError = false;
+    page.on('request', request => {
+        if (request.url().includes('/api/queue-status')) return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ queueSize: 0, workerStatus: null, recentResults: [] }) });
+        if (request.url().includes('/api/prospects?') && simulateError) return request.respond({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'TEST · Temporary shortlist failure' }) });
+        if (request.url().includes('/api/prospects/jobs')) return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ jobs: [], worker: null }) });
+        request.continue();
+    });
+    const clickText = async (selector, text) => {
+        const clicked = await page.evaluate((selector, text) => {
+            const button = [...document.querySelectorAll(selector)].find(el => el.textContent.trim() === text);
+            if (!button) return false; button.click(); return true;
+        }, selector, text);
+        assert.ok(clicked, `Button ${text} exists`);
+    };
+    const waitText = text => page.waitForFunction(text => document.body.innerText.includes(text), { timeout: 30000 }, text);
+    try {
+        await page.setViewport({ width: 1440, height: 1000 });
+        await page.goto('http://localhost:3020', { waitUntil: 'networkidle2', timeout: 120000 });
+        await page.waitForSelector('button', { timeout: 90000 });
+        await clickText('button', 'Prospects');
+        await waitText('TEST · Ava Morgan');
+        await page.screenshot({ path: path.join(output, 'desktop.png'), fullPage: true });
+        const desktop = await page.evaluate(() => ({ viewport: innerWidth, width: document.documentElement.scrollWidth, rows: document.querySelectorAll('.prospect-table tbody tr').length }));
+        assert.ok(desktop.width <= desktop.viewport); assert.equal(desktop.rows, 2);
+        await clickText('button', 'TEST · Ava Morgan');
+        await page.waitForSelector('[role=dialog]');
+        await waitText('Business evidence');
+        await page.screenshot({ path: path.join(output, 'evidence.png') });
+        assert.equal(await page.$eval('[role=dialog]', el => el.getAttribute('aria-modal')), 'true');
+        await clickText('button', 'Review findings');
+        await page.select('.prospect-fact-edit select', 'OBSERVED');
+        await clickText('button', 'Save evidence & recalculate');
+        await waitText('Add an evidence note');
+        await page.screenshot({ path: path.join(output, 'validation.png') });
+        await page.select('.prospect-fact-edit select', '');
+        await page.select('.prospect-fact:nth-child(3) .prospect-fact-edit select', 'UNKNOWN');
+        await clickText('button', 'Save evidence & recalculate');
+        await waitText('An attributable coaching-client example needs confirmation.');
+        await page.waitForFunction(() => !document.querySelector('[aria-label="Close prospect review"]').disabled);
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => !document.querySelector('[role=dialog]'));
+        await page.click('.prospect-priority:nth-child(2)');
+        await waitText('TEST · Sam Lane');
+        // The saved override moves Ava from A to B immediately.
+        await waitText('TEST · Ava Morgan');
+        await page.screenshot({ path: path.join(output, 'investigate.png'), fullPage: true });
+        await clickText('.prospect-segments button', 'Career coaching');
+        await waitText('No investigate prospects here.');
+        await page.screenshot({ path: path.join(output, 'empty.png'), fullPage: true });
+        await clickText('.prospect-segments button', 'All three segments');
+        await waitText('TEST · Sam Lane');
+        simulateError = true;
+        await clickText('.prospect-priority', 'Nurture1');
+        await waitText('TEST · Temporary shortlist failure');
+        await page.screenshot({ path: path.join(output, 'error.png'), fullPage: true });
+        simulateError = false; await clickText('button', 'Retry');
+        await waitText('TEST · Robin Park');
+        await clickText('.prospect-priority', 'Not researched1');
+        await waitText('TEST · Casey Quinn');
+        await page.setViewport({ width: 390, height: 844 });
+        await page.screenshot({ path: path.join(output, 'mobile.png'), fullPage: true });
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+        await clickText('button', 'TEST · Casey Quinn');
+        await page.waitForSelector('[role=dialog]');
+        await page.screenshot({ path: path.join(output, 'mobile-review.png') });
+        assert.ok(await page.evaluate(() => document.querySelector('[role=dialog]').getBoundingClientRect().width <= innerWidth));
+        assert.deepEqual(errors, []);
+        console.log('PASS desktop/mobile shortlist, segmentation, evidence drawer, keyboard close, validation, persisted manual review, empty/error recovery and page width');
+        console.log(`Screenshots: ${output}`);
+    } catch (error) {
+        await page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true });
+        fs.writeFileSync(path.join(output, 'failure.txt'), await page.evaluate(() => document.body.innerText));
+        throw error;
+    } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exit(1); });

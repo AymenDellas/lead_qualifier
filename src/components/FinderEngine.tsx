@@ -1,32 +1,52 @@
 "use client";
+import { AI_HOOK_GENERATION_ENABLED } from "@/lib/hook-settings";
 
 import React, { useState, useRef } from "react";
-import { Radar, Search, MessageCircle, Play, Loader2, Copy, AlertCircle, Upload, CheckCircle, StopCircle, Download } from "lucide-react";
+import { Radar, Search, MessageCircle, Play, Loader2, Copy, AlertCircle, Upload, StopCircle, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Papa from "papaparse";
 
 export default function FinderEngine({ onPushToEngine }: { onPushToEngine?: (urls: string[]) => void }) {
     // Discovery State
-    const [niches, setNiches] = useState<string[]>(['Coach']);
-    const [locations, setLocations] = useState<string[]>(['US']);
+    const [niches, setNiches] = useState<string[]>(['Executive Coach', 'Career Coach', 'Business Coach']);
+    const [locations, setLocations] = useState<string[]>(['US', 'UK', 'Canada']);
     const [target, setTarget] = useState(200);
-    const [maxPages, setMaxPages] = useState(20);
+    // Google's index for one dork runs out around page 3-5; deeper paging mostly
+    // re-serves profiles already seen and costs a Serper credit each time.
+    const [maxPages, setMaxPages] = useState(4);
+    // Rows below this fit score are not written at all. 20 admits "matched a role
+    // word and nothing else"; raising it trades volume for precision, and because
+    // the score is stored, the real selectivity is the queue order, not this.
+    const [minFitScore, setMinFitScore] = useState(20);
+    const [cancelling, setCancelling] = useState(false);
     const [nicheInput, setNicheInput] = useState('');
     const [locInput, setLocInput] = useState('');
     const [discovering, setDiscovering] = useState(false);
     const [discoveryStatus, setDiscoveryStatus] = useState('');
+    const [discoveryError, setDiscoveryError] = useState('');
     const [discoveryJobId, setDiscoveryJobId] = useState<string | null>(null);
     const [discoveryProgress, setDiscoveryProgress] = useState<any>(null);
+    const keptTarget = discoveryProgress?.target;
+    const hasKeptTarget = Number.isSafeInteger(keptTarget) && keptTarget > 0;
+    const launchingRef = useRef(false);
+    const pollingGenerationRef = useRef(0);
+    const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     
     // Auto-reconnect to running job on mount
     React.useEffect(() => {
-        const savedJobId = localStorage.getItem('leadFinderJobId');
+        const generation = ++pollingGenerationRef.current;
+        let savedJobId: string | null = null;
+        try { savedJobId = localStorage.getItem('leadFinderJobId'); } catch { /* Storage is optional. */ }
         if (savedJobId) {
             setDiscoveryJobId(savedJobId);
             setDiscovering(true);
             setDiscoveryStatus('Reconnecting to background discovery task...');
-            pollDiscoveryStatus(savedJobId);
+            pollDiscoveryStatus(savedJobId, true, generation);
         }
+        return () => {
+            pollingGenerationRef.current++;
+            if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+        };
     }, []);
 
     // Single Hook State
@@ -60,66 +80,160 @@ export default function FinderEngine({ onPushToEngine }: { onPushToEngine?: (url
     };
 
     const handleDiscover = async () => {
+        if (launchingRef.current || discovering) return;
         if (niches.length === 0 || locations.length === 0) return;
+        if (!Number.isSafeInteger(target) || target < 1) {
+            setDiscoveryError('Enter a positive whole number for the kept leads target.');
+            return;
+        }
+        launchingRef.current = true;
+        const generation = ++pollingGenerationRef.current;
+        if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
         setDiscovering(true);
+        setDiscoveryError('');
+        setDiscoveryJobId(null);
+        setCancelling(false);
+        setDiscoveryProgress(null);
         setDiscoveryStatus('Starting Dork Engine...');
         try {
             const res = await fetch('/api/find-leads', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job_titles: niches, locations, max_urls_target: target, max_pages_per_dork: maxPages })
+                body: JSON.stringify({
+                    job_titles: niches, locations,
+                    kept_leads_target: target, max_pages_per_dork: maxPages,
+                    min_fit_score: minFitScore,
+                })
             });
-            const data = await res.json();
+            const data = await res.json().catch(() => ({ error: `The server returned an unreadable response (HTTP ${res.status}).` }));
+            if (!res.ok || data.error) throw new Error(data.error || `Search could not start (HTTP ${res.status}).`);
+            if (typeof data.jobId !== 'string') throw new Error('The server did not return a search job. Try again.');
+            try { localStorage.setItem('leadFinderJobId', data.jobId); } catch { /* Do not stop an accepted search when storage is unavailable. */ }
+            if (generation !== pollingGenerationRef.current) return;
             setDiscoveryJobId(data.jobId);
-            localStorage.setItem('leadFinderJobId', data.jobId);
-            setDiscoveryStatus('Discovery launched. The background worker is running. Leads are saving to the CRM live!');
-            pollDiscoveryStatus(data.jobId);
+            setDiscoveryStatus(`Searching for ${(data.target ?? target).toLocaleString()} kept leads. Country searches expand into states and provinces when needed. Leads save to the CRM live.`);
+            pollDiscoveryStatus(data.jobId, false, generation);
         } catch (e: any) {
-            setDiscoveryStatus(`Error: ${e.message}`);
+            if (generation !== pollingGenerationRef.current) return;
+            setDiscoveryError(`Search could not start: ${e.message}`);
+            setDiscoveryStatus('');
             setDiscovering(false);
+        } finally {
+            launchingRef.current = false;
         }
     };
 
-    const pollDiscoveryStatus = async (jobId: string) => {
+    /**
+     * Stops a running discovery. Previously the only way to stop one was to kill the
+     * process — the engine had no cancel path at all, so a mis-typed niche burned the
+     * whole Serper budget for the run.
+     */
+    const handleCancelDiscovery = async () => {
+        if (!discoveryJobId) return;
+        setCancelling(true);
         try {
-            const res = await fetch(`/api/find-leads/status?jobId=${jobId}`);
+            const response = await fetch(`/api/find-leads?jobId=${encodeURIComponent(discoveryJobId)}`, { method: 'DELETE' });
+            if (!response.ok) throw new Error(`The server returned HTTP ${response.status}.`);
+            setDiscoveryStatus('Cancelling — the engine stops after the page in flight.');
+        } catch (e: any) {
+            setDiscoveryError(`Cancel failed: ${e.message}`);
+            setCancelling(false);
+        }
+    };
+
+    const pollDiscoveryStatus = async (jobId: string, restoreSettings = false, generation = pollingGenerationRef.current) => {
+        if (generation !== pollingGenerationRef.current) return;
+        const schedule = (delay: number) => {
+            pollTimerRef.current = setTimeout(() => pollDiscoveryStatus(jobId, false, generation), delay);
+        };
+        const clearSavedJob = () => {
+            try { localStorage.removeItem('leadFinderJobId'); } catch { /* Storage is optional. */ }
+            setDiscoveryJobId(null);
+        };
+        try {
+            const res = await fetch(`/api/find-leads/status?jobId=${encodeURIComponent(jobId)}`);
             const data = await res.json();
+            if (generation !== pollingGenerationRef.current) return;
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
             
             if (data && data.status) {
                 setDiscoveryProgress(data);
+                if (restoreSettings && data.config) {
+                    if (Array.isArray(data.config.job_titles)) setNiches(data.config.job_titles);
+                    if (Array.isArray(data.config.locations)) setLocations(data.config.locations);
+                    if (Number.isSafeInteger(data.target) && data.target > 0) setTarget(data.target);
+                    if (Number.isSafeInteger(data.config.max_pages_per_dork)) setMaxPages(data.config.max_pages_per_dork);
+                    if (typeof data.config.min_fit_score === 'number') setMinFitScore(data.config.min_fit_score);
+                }
                 if (data.status === 'running') {
-                    setTimeout(() => pollDiscoveryStatus(jobId), 3000);
-                } else if (data.status === 'done') {
-                    setDiscoveryStatus(`Discovery completed. Found ${data.found} leads.`);
+                    setDiscoveryError('');
+                    schedule(3000);
+                } else if (data.status === 'done' || data.status === 'cancelled') {
+                    // "Found 180" on its own says nothing about whether the floor is
+                    // set right; the denominator is what makes it actionable.
+                    const verb = data.status === 'cancelled' ? 'Stopped'
+                        : data.stopReason === 'search_exhausted' ? 'Available searches exhausted'
+                        : data.targetReached ? 'Kept target reached' : 'Available searches finished';
+                    setDiscoveryStatus(
+                        `${verb}. Kept ${(data.found ?? 0).toLocaleString()}${data.target ? ` / ${data.target.toLocaleString()}` : ''}, scored ${data.scored ?? 0}, ` +
+                        `rejected ${data.rejected ?? 0} · ${data.creditsSpent ?? 0} Serper credits.`
+                    );
                     setDiscovering(false);
-                    localStorage.removeItem('leadFinderJobId');
+                    setDiscoveryError('');
+                    setCancelling(false);
+                    clearSavedJob();
                 } else if (data.status === 'error') {
-                    setDiscoveryStatus(`Discovery failed: ${data.error}`);
+                    setDiscoveryError(`Search stopped: ${data.error || 'The search could not continue.'}`);
+                    setDiscoveryStatus('');
                     setDiscovering(false);
-                    localStorage.removeItem('leadFinderJobId');
+                    setCancelling(false);
+                    clearSavedJob();
+                } else if (data.status === 'unknown') {
+                    setDiscoveryError('The saved search could not be found. You can start a new search.');
+                    setDiscoveryStatus('');
+                    setDiscovering(false);
+                    setCancelling(false);
+                    clearSavedJob();
                 } else {
-                    setTimeout(() => pollDiscoveryStatus(jobId), 3000);
+                    schedule(3000);
                 }
             } else {
-                setTimeout(() => pollDiscoveryStatus(jobId), 3000);
+                throw new Error('The server did not return a search status.');
             }
         } catch (e) {
-            setTimeout(() => pollDiscoveryStatus(jobId), 5000);
+            if (generation !== pollingGenerationRef.current) return;
+            setDiscoveryError('Could not read the search status. Retrying automatically.');
+            schedule(5000);
         }
     };
 
     const downloadDiscoveryCSV = () => {
-        if (!discoveryProgress || !discoveryProgress.leads || discoveryProgress.leads.length === 0) return;
-        const csvContent = "data:text/csv;charset=utf-8," 
-            + "LinkedIn URL,Location\n"
-            + discoveryProgress.leads.map((l: any) => `${l.url},${l.location}`).join("\n");
-        const encodedUri = encodeURI(csvContent);
+        // The progress file writes `results`, never `leads` — reading the wrong key
+        // made this button a silent no-op on every run since it was added.
+        const rows = discoveryProgress?.results;
+        if (!rows || rows.length === 0) return;
+        // Provenance travels with the export, so a spot-check outside the app can
+        // still answer "which dork found this, and why did it score that?".
+        const csv = Papa.unparse(rows.map((l: any) => ({
+            linkedin_url: l.url,
+            location: l.location,
+            fit_score: l.fitScore ?? '',
+            reasons: (l.fitReasons || []).map((r: any) => `${r.id}:${r.w}`).join(' '),
+            template_id: l.templateId ?? '',
+            niche: l.niche ?? '',
+            page: l.page ?? '',
+            rank: l.rank ?? '',
+            headline: l.title ?? '',
+        })));
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
-        link.setAttribute("href", encodedUri);
-        link.setAttribute("download", `Leads_Discovery_${new Date().getTime()}.csv`);
+        link.href = url;
+        link.download = `Leads_Discovery_${new Date().getTime()}.csv`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        URL.revokeObjectURL(url);
     };
 
     // Single Hook Handler
@@ -219,229 +333,405 @@ export default function FinderEngine({ onPushToEngine }: { onPushToEngine?: (url
         a.click();
     };
 
+    /*
+     * A one-word niche can never earn the exact-phrase weight, because the scorer
+     * skips a single-word phrase that is also a role stem ("coach" appears in half
+     * of LinkedIn). It also stays low-confidence, which leaves the employer-shape
+     * penalty switched on. The same profile therefore scores up to 25 points lower
+     * under "Coach" than under "Business Coach" — against an observed ceiling
+     * around 55, that is the difference between a usable ranking and a flat one.
+     * Saying so at the input is the only place it can change the outcome.
+     */
+    const weakNiches = niches.filter(n => n.trim().split(/\s+/).length === 1);
+
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full max-w-7xl mx-auto p-4 pt-0">
-            {/* LEAD FINDER */}
-            <div className="bg-[#111] border border-zinc-800 rounded-2xl p-6">
-                <div className="flex items-center gap-3 mb-6 pb-4 border-b border-zinc-800/50">
-                    <Radar className="w-5 h-5 text-blue-500" />
-                    <h2 className="text-xl font-semibold">Lead Discovery Engine</h2>
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-4 items-start">
+            {/* ── Search ─────────────────────────────────────────────────── */}
+            <section className="panel">
+                <div className="panel-head">
+                    <Radar className="w-3.5 h-3.5 text-[var(--text-faint)]" />
+                    Search
+                    <span className="hint">Google, not LinkedIn</span>
                 </div>
 
-                <div className="space-y-6">
+                <div className="panel-body space-y-4">
                     <div>
-                        <label className="block text-sm text-zinc-400 mb-2">Job Titles / Niches</label>
-                        <div className="flex flex-wrap gap-2 mb-2">
-                            {niches.map(n => (
-                                <span key={n} className="px-3 py-1 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-full text-sm flex items-center gap-2">
-                                    {n}
-                                    <button onClick={() => setNiches(niches.filter(x => x !== n))} className="hover:text-blue-200">×</button>
-                                </span>
-                            ))}
+                        <label className="field-label" htmlFor="finder-niche">Niche</label>
+                        <div className="flex flex-wrap gap-1.5 mb-3" aria-label="Coaching search presets">
+                            {[
+                                { label: 'All three segments', titles: ['Executive Coach', 'Career Coach', 'Business Coach'] },
+                                { label: 'Executive', titles: ['Executive Coach', 'Leadership Coach'] },
+                                { label: 'Career', titles: ['Career Coach', 'Career Transition Coach'] },
+                                { label: 'Business', titles: ['Business Coach', 'Entrepreneur Coach'] },
+                            ].map(preset => <button key={preset.label} className="btn btn-ghost !text-xs" disabled={discovering} onClick={() => setNiches(preset.titles)}>{preset.label}</button>)}
                         </div>
-                        <input 
+                        {niches.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mb-2">
+                                {niches.map(n => (
+                                    <span key={n} className="badge badge-idle !text-[11px] !py-1 !px-2 gap-1.5">
+                                        {n}
+                                        <button
+                                            onClick={() => setNiches(niches.filter(x => x !== n))}
+                                            className="text-[var(--text-faint)] hover:text-[var(--text)] transition-colors"
+                                            aria-label={`Remove ${n}`}
+                                        >×</button>
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+                        <input
+                            id="finder-niche"
                             value={nicheInput} onChange={e => setNicheInput(e.target.value)} onKeyDown={handleAddNiche}
-                            placeholder="Type niche and press Enter..."
-                            className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-2 focus:outline-none focus:border-blue-500/50"
+                            placeholder="Business Coach — then press Enter"
+                            className="field w-full"
                         />
+                        {weakNiches.length > 0 ? (
+                            <p className="field-hint !text-[var(--warn)]">
+                                {weakNiches.map(n => `"${n}"`).join(', ')} {weakNiches.length === 1 ? 'is' : 'are'} a single word.
+                                Two words score the same person up to 25 points higher and make the ranking
+                                usable — try &ldquo;Business Coach&rdquo; or &ldquo;Executive Coach&rdquo;.
+                            </p>
+                        ) : (
+                            <p className="field-hint">Search results are candidates. Independent ownership, a paid offer and client evidence are checked during qualification.</p>
+                        )}
                     </div>
 
                     <div>
-                        <label className="block text-sm text-zinc-400 mb-2">Locations</label>
-                        <div className="flex flex-wrap gap-2 mb-2">
-                            {locations.map(l => (
-                                <span key={l} className="px-3 py-1 bg-accent/10 text-accent border border-accent/20 rounded-full text-sm flex items-center gap-2">
-                                    {l}
-                                    <button onClick={() => setLocations(locations.filter(x => x !== l))} className="hover:text-accent">×</button>
-                                </span>
-                            ))}
-                        </div>
-                        <input 
+                        <label className="field-label" htmlFor="finder-loc">Location</label>
+                        {locations.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mb-2">
+                                {locations.map(l => (
+                                    <span key={l} className="badge badge-idle !text-[11px] !py-1 !px-2 gap-1.5">
+                                        {l}
+                                        <button
+                                            onClick={() => setLocations(locations.filter(x => x !== l))}
+                                            className="text-[var(--text-faint)] hover:text-[var(--text)] transition-colors"
+                                            aria-label={`Remove ${l}`}
+                                        >×</button>
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+                        <input
+                            id="finder-loc"
                             value={locInput} onChange={e => setLocInput(e.target.value)} onKeyDown={handleAddLoc}
-                            placeholder="Type location and press Enter..."
-                            className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-2 focus:outline-none focus:border-accent/50"
+                            placeholder="US — then press Enter"
+                            className="field w-full"
                         />
                     </div>
 
-                    <div>
-                        <label className="block text-sm text-zinc-400 mb-2">Target Volume</label>
-                        <input 
-                            type="number" value={target} onChange={e => setTarget(parseInt(e.target.value))}
-                            className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-2 focus:outline-none focus:border-zinc-700"
-                        />
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                            <label className="field-label" htmlFor="finder-target">Kept leads target</label>
+                            <input
+                                id="finder-target"
+                                type="number" min="1" step="1" value={target} onChange={e => setTarget(parseInt(e.target.value) || 0)}
+                                className="field w-full num"
+                            />
+                        </div>
+                        <div>
+                            <label className="field-label" htmlFor="finder-pages">Pages per query</label>
+                            <input
+                                id="finder-pages"
+                                type="number" min="1" max="10" value={maxPages} onChange={e => setMaxPages(parseInt(e.target.value) || 1)}
+                                className="field w-full num"
+                            />
+                        </div>
+                        <div>
+                            <label className="field-label" htmlFor="finder-floor">Min score</label>
+                            <input
+                                id="finder-floor"
+                                type="number" min="0" max="100" value={minFitScore} onChange={e => setMinFitScore(parseInt(e.target.value) || 0)}
+                                className="field w-full num"
+                            />
+                        </div>
                     </div>
+                    <p className="field-hint !mt-0">
+                        The target counts unique kept profiles after scoring. Rejected profiles and
+                        repeated results do not count. Each query uses your page limit; US and Canada
+                        searches expand into states and provinces if needed. Profiles below the minimum
+                        score are not kept. Expansion uses additional search credits.
+                    </p>
 
-                    <div>
-                        <label className="block text-sm text-zinc-400 mb-2">Max Pages per Query (Depth)</label>
-                        <input 
-                            type="number" value={maxPages} onChange={e => setMaxPages(parseInt(e.target.value))}
-                            className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-2 focus:outline-none focus:border-zinc-700"
-                        />
-                    </div>
-
-                    <button 
-                        onClick={handleDiscover}
-                        disabled={discovering || niches.length === 0 || locations.length === 0}
-                        className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
-                    >
-                        {discovering ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5 fill-current" />}
-                        {discovering ? 'Launching Discovery...' : 'Start Discovery Engine'}
-                    </button>
-
-                    {discoveryStatus && (
-                        <div className="p-4 bg-black border border-zinc-800 rounded-xl text-sm font-mono text-zinc-400 space-y-2">
-                            <div>&gt; {discoveryStatus}</div>
-                            {discoveryProgress && (
-                                <div className="mt-4 p-3 bg-zinc-900 rounded-lg border border-zinc-800">
-                                    <div className="flex justify-between items-center mb-2">
-                                        <span className="text-zinc-300">Progress:</span>
-                                        <span className="text-blue-400 font-bold">{discoveryProgress.found} Leads Found</span>
-                                    </div>
-                                    {discoveryProgress.status === 'running' && discoveryProgress.totalQueries > 0 && (
-                                        <div className="text-xs text-zinc-500 mb-2">
-                                            Currently querying: <span className="text-zinc-300">{discoveryProgress.currentQuery}</span>
-                                        </div>
-                                    )}
-                                    {discoveryProgress.results && discoveryProgress.results.length > 0 && (
-                                        <div className="mt-3 max-h-32 overflow-y-auto space-y-1">
-                                            {discoveryProgress.results.map((r: any, idx: number) => (
-                                                <div key={idx} className="text-xs flex gap-2">
-                                                    <span className="text-zinc-500">[{r.location}]</span>
-                                                    <a href={r.url} target="_blank" className="text-zinc-300 hover:text-white truncate">{r.url}</a>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                    <div className="mt-4 border-t border-zinc-800 pt-3 flex gap-2">
-                                        <button 
-                                            onClick={downloadDiscoveryCSV}
-                                            className="px-4 py-2 bg-zinc-800 text-white rounded-xl text-sm hover:bg-zinc-700 transition-colors flex items-center gap-2"
-                                        >
-                                            <Download className="w-4 h-4" /> Export CSV
-                                        </button>
-                                        {onPushToEngine && (
-                                            <button 
-                                                onClick={() => {
-                                                    const urls = discoveryProgress.results.map((r: any) => r.url).filter(Boolean);
-                                                    onPushToEngine(urls);
-                                                }}
-                                                className="px-4 py-2 bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-xl text-sm hover:bg-blue-500/30 transition-colors flex items-center gap-2"
-                                            >
-                                                <Radar className="w-4 h-4" /> Process in Engine
-                                            </button>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
+                    {discoveryError && (
+                        <div role="alert" className="flex items-start gap-2 rounded-lg border border-[var(--bad)] bg-[var(--bad-dim)] p-3 text-sm text-[var(--bad)]">
+                            <AlertCircle className="w-4 h-4 flex-none mt-0.5" />
+                            <span className="break-words">{discoveryError}</span>
+                        </div>
+                    )}
+                    {!discovering ? (
+                        <button
+                            onClick={handleDiscover}
+                            disabled={niches.length === 0 || locations.length === 0 || !Number.isSafeInteger(target) || target < 1}
+                            className="btn btn-primary btn-lg w-full"
+                        >
+                            <Play className="w-3.5 h-3.5" />
+                            Start searching
+                        </button>
+                    ) : (
+                        <div className="flex gap-2">
+                            <div className="btn btn-outline btn-lg flex-1 !cursor-default">
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" /> {discoveryJobId ? 'Searching' : 'Starting…'}
+                            </div>
+                            <button
+                                onClick={handleCancelDiscovery}
+                                disabled={cancelling || !discoveryJobId}
+                                className="btn btn-danger btn-lg"
+                            >
+                                <StopCircle className="w-3.5 h-3.5" /> {cancelling ? 'Stopping' : 'Stop'}
+                            </button>
                         </div>
                     )}
                 </div>
-            </div>
 
-            {/* HOOK GENERATOR */}
-            <div className="bg-[#111] border border-zinc-800 rounded-2xl p-6 h-fit">
-                <div className="flex items-center justify-between mb-6 pb-4 border-b border-zinc-800/50">
-                    <div className="flex items-center gap-3">
-                        <MessageCircle className="w-5 h-5 text-purple-500" />
-                        <h2 className="text-xl font-semibold">Hook Generator</h2>
+                {discoveryStatus && (
+                    <div className="panel-note !text-[var(--text-dim)]">{discoveryStatus}</div>
+                )}
+            </section>
+
+            {/* ── Progress ───────────────────────────────────────────────── */}
+            {discoveryProgress && (
+                <section className={cn("panel", discovering && "rail-live")}>
+                    <div className="panel-head">
+                        Found so far
+                        {discovering && (
+                            <span className="hint flex items-center gap-1.5">
+                                <span className="dot-live" aria-hidden />
+                                Running
+                            </span>
+                        )}
                     </div>
-                    <div className="flex bg-black rounded-lg p-1 border border-zinc-800">
-                        <button onClick={() => setBulkMode(false)} className={cn("px-3 py-1 text-sm rounded-md transition-all", !bulkMode ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300")}>Single</button>
-                        <button onClick={() => setBulkMode(true)} className={cn("px-3 py-1 text-sm rounded-md transition-all", bulkMode ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300")}>Bulk</button>
+
+                    <div className="panel-body space-y-4">
+                        {/* Kept, scored and rejected together. "Found 180" on its own
+                            can't tell you whether the score floor is doing anything. */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            <div>
+                                <p className="num text-[20px] text-[var(--signal)]">{discoveryProgress.found ?? 0}</p>
+                                <p className="label-micro mt-1">Kept</p>
+                                {hasKeptTarget && <p className="text-[11.5px] text-[var(--text-faint)] mt-1 num">of {keptTarget.toLocaleString()}</p>}
+                            </div>
+                            <div>
+                                <p className="num text-[20px] text-[var(--text)]">{discoveryProgress.scored ?? 0}</p>
+                                <p className="label-micro mt-1">Scored</p>
+                            </div>
+                            <div>
+                                <p className="num text-[20px] text-[var(--text-dim)]">{discoveryProgress.rejected ?? 0}</p>
+                                <p className="label-micro mt-1">Rejected</p>
+                            </div>
+                            <div>
+                                <p className="num text-[20px] text-[var(--warn)]">{discoveryProgress.creditsSpent ?? 0}</p>
+                                <p className="label-micro mt-1">Credits</p>
+                            </div>
+                        </div>
+
+                        {hasKeptTarget && (
+                            <div>
+                                <div className="bar-track">
+                                    <div
+                                        className="bar-fill"
+                                        style={{ width: `${Math.min(100, Math.round(((discoveryProgress.found ?? 0) / keptTarget) * 100))}%` }}
+                                    />
+                                </div>
+                                <p className="text-[11.5px] text-[var(--text-dim)] mt-2 num">
+                                    {(discoveryProgress.found ?? 0).toLocaleString()} of {keptTarget.toLocaleString()} kept
+                                    {' · '}{Math.max(0, keptTarget - (discoveryProgress.found ?? 0)).toLocaleString()} remaining
+                                </p>
+                                {discoveryProgress.status === 'running' && (
+                                    <p className="text-[11.5px] text-[var(--text-faint)] mt-1 break-words">
+                                        {discoveryProgress.searchPhase === 'regional' ? 'Searching states and provinces' : 'Searching countries'}
+                                        {discoveryProgress.searchArea && <> · {discoveryProgress.searchArea}</>}
+                                        {' · Query '}<span className="num">{discoveryProgress.queryIndex ?? 0}</span>
+                                        {' of up to '}<span className="num">{discoveryProgress.totalQueries}</span>
+                                    </p>
+                                )}
+                                {discoveryProgress.stopReason === 'search_exhausted' && <p className="text-[11.5px] text-[var(--warn)] mt-1">Available searches exhausted before reaching the kept target.</p>}
+                            </div>
+                        )}
+
+                        {discoveryProgress.results && discoveryProgress.results.length > 0 && (
+                            <div className="max-h-56 overflow-y-auto -mx-1 px-1">
+                                {discoveryProgress.results.slice(0, 50).map((r: any, idx: number) => (
+                                    <div key={idx} className="flex gap-2.5 items-center py-1 text-[12px]">
+                                        <span
+                                            className={cn(
+                                                "num w-6 text-right font-semibold flex-none",
+                                                (r.fitScore ?? 0) >= 45 ? "text-[var(--signal)]"
+                                                    : (r.fitScore ?? 0) >= 30 ? "text-[var(--text)]"
+                                                        : "text-[var(--text-faint)]",
+                                            )}
+                                            title={(r.fitReasons || []).map((x: any) => `${x.id} ${x.w >= 0 ? '+' : ''}${x.w}${x.hit ? ` (${x.hit})` : ''}`).join('\n')}
+                                        >
+                                            {r.fitScore ?? '—'}
+                                        </span>
+                                        <span className="text-[var(--text-faint)] flex-none">{r.location}</span>
+                                        <a
+                                            href={r.url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="text-[var(--text-dim)] hover:text-[var(--text)] transition-colors truncate"
+                                        >
+                                            {r.url.replace(/^https?:\/\/(www\.)?linkedin\.com\/in\//, '')}
+                                        </a>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        <div className="flex flex-wrap gap-2 pt-1">
+                            <button onClick={downloadDiscoveryCSV} className="btn btn-outline">
+                                <Download className="w-3.5 h-3.5" /> {['done', 'cancelled'].includes(discoveryProgress.status) ? 'Export all kept' : 'Export shown'}
+                            </button>
+                            {onPushToEngine && (
+                                <button
+                                    onClick={() => {
+                                        const urls = discoveryProgress.results.map((r: any) => r.url).filter(Boolean);
+                                        onPushToEngine(urls);
+                                    }}
+                                    className="btn btn-outline"
+                                >
+                                    <Radar className="w-3.5 h-3.5" /> Scrape these now
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="panel-note">
+                        Everything found is saved to Leads as it arrives — you don&apos;t have to
+                        wait here or export anything.
+                    </div>
+                </section>
+            )}
+
+            {/* ── Opening lines ──────────────────────────────────────────── */}
+            <section className={cn("panel", discoveryProgress && "xl:col-start-2")}>
+                <div className="panel-head">
+                    <MessageCircle className="w-3.5 h-3.5 text-[var(--text-faint)]" />
+                    Opening lines
+                    <div className="seg ml-auto">
+                        <button onClick={() => setBulkMode(false)} className={cn("seg-item", !bulkMode && "seg-item-active")}>One</button>
+                        <button onClick={() => setBulkMode(true)} className={cn("seg-item", bulkMode && "seg-item-active")}>Many</button>
                     </div>
                 </div>
 
                 {!bulkMode ? (
-                    <div className="space-y-6">
+                    <div className="panel-body space-y-3">
                         <div>
-                            <label className="block text-sm text-zinc-400 mb-2">Target Website URL</label>
-                            <input 
+                            <label className="field-label" htmlFor="hook-url">Their website</label>
+                            <input
+                                id="hook-url"
                                 value={websiteUrl} onChange={e => setWebsiteUrl(e.target.value)}
                                 placeholder="https://their-website.com"
-                                className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 focus:outline-none focus:border-purple-500/50"
+                                className="field w-full"
                             />
                         </div>
 
-                        <button 
+                        <button
                             onClick={handleGenerateHook}
-                            disabled={generating || !websiteUrl}
-                            className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                            disabled={!AI_HOOK_GENERATION_ENABLED || generating || !websiteUrl}
+                            className="btn btn-outline w-full"
                         >
-                            {generating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
-                            Generate Hook
+                            {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                            {AI_HOOK_GENERATION_ENABLED ? 'Write an opening line' : 'AI hooks disabled'}
                         </button>
 
                         {hookResult && !hookResult.error && (
-                            <div className="p-5 bg-black border border-zinc-800 rounded-xl space-y-4">
-                                <div className="flex justify-between items-start">
-                                    <div className="text-sm font-medium text-purple-400">Generated Hook</div>
-                                    <button onClick={() => navigator.clipboard.writeText(hookResult.hook)} className="text-zinc-500 hover:text-white"><Copy className="w-4 h-4" /></button>
+                            <div className="rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface-2)] p-4">
+                                <div className="flex items-start justify-between gap-3">
+                                    <p className="text-[14px] text-[var(--text)] leading-relaxed">&ldquo;{hookResult.hook}&rdquo;</p>
+                                    <button
+                                        onClick={() => navigator.clipboard.writeText(hookResult.hook)}
+                                        className="btn btn-ghost !p-1.5 flex-none"
+                                        title="Copy"
+                                    >
+                                        <Copy className="w-3.5 h-3.5" />
+                                    </button>
                                 </div>
-                                <p className="text-zinc-100 font-medium">"{hookResult.hook}"</p>
                             </div>
                         )}
 
                         {hookResult?.error && (
-                            <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex gap-3">
-                                <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                            <div className="rounded-[var(--radius-sm)] border border-[rgba(229,107,107,0.3)] bg-[var(--bad-dim)] p-3 flex gap-2.5 text-[12.5px] text-[var(--bad)]">
+                                <AlertCircle className="w-4 h-4 flex-none mt-px" />
                                 {hookResult.error}
                             </div>
                         )}
                     </div>
                 ) : (
-                    <div className="space-y-6">
-                        <div className="p-6 border-2 border-dashed border-zinc-800 rounded-xl flex flex-col items-center justify-center bg-black/50">
-                            <Upload className="w-8 h-8 text-zinc-500 mb-3" />
-                            <input type="file" accept=".csv" onChange={handleBulkFile} className="mb-2 w-full max-w-[250px] text-sm text-zinc-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-zinc-800 file:text-white hover:file:bg-zinc-700" />
-                            <p className="text-xs text-zinc-600 mt-2">Requires a column named "URL" or "Website"</p>
+                    <div className="panel-body space-y-3">
+                        <div className="drop px-5 py-6 text-center">
+                            <Upload className="w-5 h-5 text-[var(--text-faint)] mx-auto mb-2.5" />
+                            <input
+                                type="file"
+                                accept=".csv"
+                                onChange={handleBulkFile}
+                                className="block mx-auto text-[12px] text-[var(--text-dim)] file:mr-3 file:py-1.5 file:px-3 file:rounded-[var(--radius-sm)] file:border file:border-[var(--line-strong)] file:text-[12px] file:font-medium file:bg-transparent file:text-[var(--text-dim)] file:cursor-pointer hover:file:bg-[var(--surface-3)]"
+                            />
+                            <p className="text-[11.5px] text-[var(--text-faint)] mt-2.5">
+                                Needs a column called URL or Website
+                            </p>
                         </div>
-                        
-                        <div className="flex gap-4">
-                            <div className="flex-1">
-                                <label className="block text-xs text-zinc-500 mb-1">Start Row</label>
-                                <input type="number" min="1" value={startRow} onChange={e => setStartRow(e.target.value === '' ? '' : parseInt(e.target.value))} className="w-full bg-black border border-zinc-800 rounded-xl px-3 py-2 text-sm focus:border-purple-500/50" />
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="field-label" htmlFor="bulk-start">From row</label>
+                                <input
+                                    id="bulk-start"
+                                    type="number" min="1" value={startRow}
+                                    onChange={e => setStartRow(e.target.value === '' ? '' : parseInt(e.target.value))}
+                                    className="field w-full num"
+                                />
                             </div>
-                            <div className="flex-1">
-                                <label className="block text-xs text-zinc-500 mb-1">End Row (Optional)</label>
-                                <input type="number" min="1" value={endRow} onChange={e => setEndRow(e.target.value === '' ? '' : parseInt(e.target.value))} placeholder="All" className="w-full bg-black border border-zinc-800 rounded-xl px-3 py-2 text-sm focus:border-purple-500/50" />
+                            <div>
+                                <label className="field-label" htmlFor="bulk-end">To row</label>
+                                <input
+                                    id="bulk-end"
+                                    type="number" min="1" value={endRow}
+                                    onChange={e => setEndRow(e.target.value === '' ? '' : parseInt(e.target.value))}
+                                    placeholder="All"
+                                    className="field w-full num"
+                                />
                             </div>
                         </div>
 
                         {!isBulkProcessing ? (
-                            <button 
-                                onClick={runBulkHooks}
-                                disabled={!csvFile}
-                                className="w-full py-3 bg-purple-600/20 text-purple-400 hover:bg-purple-600/30 border border-purple-500/30 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
-                            >
-                                <Play className="w-5 h-5" />
-                                Start Bulk Generation
+                            <button onClick={runBulkHooks} disabled={!AI_HOOK_GENERATION_ENABLED || !csvFile} title="AI hook generation is disabled" className="btn btn-outline w-full">
+                                <Play className="w-3.5 h-3.5" />
+                                Write them all
                             </button>
                         ) : (
-                            <div className="space-y-4">
-                                <div className="flex items-center justify-between text-sm">
-                                    <span className="text-purple-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin"/> Processing...</span>
-                                    <span>{bulkProgress}%</span>
+                            <div className="space-y-2.5">
+                                <div className="bar-track">
+                                    <div className="bar-fill" style={{ width: `${bulkProgress}%` }} />
                                 </div>
-                                <div className="w-full bg-black/50 rounded-full h-2">
-                                    <div className="bg-purple-500 h-2 rounded-full transition-all" style={{ width: `${bulkProgress}%` }}></div>
+                                <div className="flex items-center justify-between text-[11.5px] text-[var(--text-faint)]">
+                                    <span className="flex items-center gap-1.5">
+                                        <Loader2 className="w-3 h-3 animate-spin" /> Writing
+                                    </span>
+                                    <span className="num">{bulkProgress}%</span>
                                 </div>
-                                <button onClick={() => { cancelBulkRef.current = true; setIsBulkProcessing(false); }} className="w-full py-2 bg-red-500/10 text-red-400 rounded-xl flex items-center justify-center gap-2 text-sm">
-                                    <StopCircle className="w-4 h-4" /> Cancel Run
+                                <button
+                                    onClick={() => { cancelBulkRef.current = true; setIsBulkProcessing(false); }}
+                                    className="btn btn-danger w-full"
+                                >
+                                    <StopCircle className="w-3.5 h-3.5" /> Stop
                                 </button>
                             </div>
                         )}
 
                         {bulkResults.length > 0 && !isBulkProcessing && (
-                            <div className="p-4 bg-accent/10 border border-accent/20 rounded-xl flex items-center justify-between">
-                                <span className="text-accent text-sm flex items-center gap-2"><CheckCircle className="w-4 h-4"/> Finished {bulkResults.length} hooks</span>
-                                <button onClick={downloadBulkCSV} className="px-3 py-1.5 bg-accent/20 text-accent rounded-lg text-sm flex items-center gap-2 hover:bg-accent/30">
-                                    <Download className="w-4 h-4" /> Download
+                            <div className="flex items-center justify-between gap-3 pt-1">
+                                <span className="mark mark-ok">
+                                    <span className="num">{bulkResults.length}</span>&nbsp;written
+                                </span>
+                                <button onClick={downloadBulkCSV} className="btn btn-outline">
+                                    <Download className="w-3.5 h-3.5" /> Download
                                 </button>
                             </div>
                         )}
                     </div>
                 )}
-            </div>
+            </section>
         </div>
     );
 }

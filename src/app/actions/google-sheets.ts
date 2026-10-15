@@ -6,6 +6,10 @@
  */
 
 import crypto from 'crypto';
+import { getAllLeads, isProvenContacted } from "@/lib/db";
+import { hasFreshSmtpProof } from '@/lib/email-verification-proof';
+import { hasQualifiedEmail } from '@/lib/prospect-qualification.cjs';
+import { assessmentForLead } from '@/lib/prospect-store';
 
 // ── Google Auth via Service Account JWT ──
 
@@ -133,20 +137,22 @@ async function ensureSheetsExist(token: string, spreadsheetId: string, requiredT
 }
 
 async function clearAndWriteSheet(token: string, spreadsheetId: string, sheetName: string, rows: string[][]): Promise<void> {
-    const encodedSheetName = encodeURIComponent(sheetName);
-    const range = `'${encodedSheetName}'!A:Z`;
-    
-    await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?key=`,
+    const clearRange = `'${sheetName}'!A:Z`;
+    const clearResponse = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(clearRange)}:clear`,
         {
-            method: 'PUT',
+            method: 'POST',
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ range: `'${sheetName}'!A:Z`, majorDimension: 'ROWS', values: [] }),
-        }
-    ).catch(() => { });
+            body: '{}',
+        },
+    );
+    if (!clearResponse.ok) {
+        const err = await clearResponse.text();
+        throw new Error(`Failed to clear ${sheetName}: ${clearResponse.status} — ${err}`);
+    }
 
     const writeRange = `'${sheetName}'!A1`;
-    const writeRangeEncoded = `'${encodedSheetName}'!A1`;
+    const writeRangeEncoded = encodeURIComponent(writeRange);
     const response = await fetch(
         `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${writeRangeEncoded}?valueInputOption=USER_ENTERED`,
         {
@@ -202,11 +208,21 @@ export async function exportToGoogleSheets(leads: any[]): Promise<{ success: boo
             };
         }
 
+        // The caller supplies presentation fields, but it must never be able to
+        // forge verification fields and create a sendable row. Verification is
+        // resolved from the CRM database by exact email address.
+        const crmLeads = (await getAllLeads()).map(lead => ({ ...lead, prospect_assessment: assessmentForLead(lead) }));
+        const crmLeadByEmail = new Map(
+            crmLeads
+                .filter(lead => Boolean(lead.email))
+                .map(lead => [lead.email.trim().toLowerCase(), lead]),
+        );
+
         console.log('Google Sheets: Authenticating...');
         const token = await getAccessToken(creds);
 
         // 3-Tab Architecture setup
-        const outreachHeaders = ['First Name', 'Last Name', 'Company', 'Website', 'Email', 'All Emails', 'Hook', 'Website Source', 'LinkedIn URL'];
+        const outreachHeaders = ['First Name', 'Last Name', 'Company', 'Website', 'Email', 'All Emails', 'Hook', 'Website Source', 'LinkedIn URL', 'Verification Method', 'Verified At', 'Verification Expires At'];
         const enrichmentHeaders = ['First Name', 'Last Name', 'Company', 'Website', 'Email', 'All Emails', 'Hook', 'Website Source', 'LinkedIn URL', 'Verification Status', 'Enrichment Status'];
         const inboxHeaders = ['Date Added', 'LinkedIn URL', 'Niche/Job Title', 'Status', 'Website Source'];
         
@@ -225,16 +241,28 @@ export async function exportToGoogleSheets(leads: any[]): Promise<{ success: boo
             const hook = lead.hook || '';
             const websiteSource = lead.website_source || '';
             const status = lead.status || '';
+            const verifiedLead = crmLeadByEmail.get(email.trim().toLowerCase());
+            const expiresAt = verifiedLead?.email_verification_expires_at || '';
+            const smtpConfirmed = verifiedLead && hasFreshSmtpProof(verifiedLead)
+                && hasQualifiedEmail(verifiedLead)
+                && !verifiedLead.do_not_contact && !isProvenContacted(verifiedLead);
 
-            const hasValidEmail = !!email;
+            // Never place DNS-only, guessed, or stale SMTP results in
+            // the outreach tab. That sheet is a send list, not a review queue.
+            const hasValidEmail = !!email && smtpConfirmed;
             const hasHook = !!hook;
 
-            if (hasValidEmail && hasHook) {
-                // Fully qualified
-                outreachRows.push([firstName, lastName, company, website, email, allEmails, hook, websiteSource, linkedinUrl]);
+            if (hasValidEmail) {
+                outreachRows.push([
+                    firstName, lastName, company, website, email, allEmails, hook, websiteSource, linkedinUrl,
+                    verifiedLead.email_verification_method || '', verifiedLead.email_verified_at || '', expiresAt,
+                ]);
             } else if (firstName || website || email || hook || allEmails) {
-                // Needs work / missing components
-                const vStatus = hasValidEmail ? 'Valid' : 'Missing Email';
+                const vStatus = !email
+                    ? 'Missing Email'
+                    : smtpConfirmed
+                        ? 'Business qualified; direct SMTP confirmed'
+                        : 'Do not send — business fit, email ownership and direct SMTP proof required';
                 const eStatus = hasHook ? 'Has Hook' : 'Missing Hook';
                 enrichmentRows.push([firstName, lastName, company, website, email, allEmails, hook, websiteSource, linkedinUrl, vStatus, eStatus]);
             } else {
@@ -256,9 +284,12 @@ export async function exportToGoogleSheets(leads: any[]): Promise<{ success: boo
         const sheetIds = await ensureSheetsExist(token, spreadsheetId, sheetNames);
 
         console.log(`Google Sheets: Writing data...`);
-        if (outreachRows.length > 1) await clearAndWriteSheet(token, spreadsheetId, sheetNames[0], outreachRows);
-        if (enrichmentRows.length > 1) await clearAndWriteSheet(token, spreadsheetId, sheetNames[1], enrichmentRows);
-        if (inboxRows.length > 1) await clearAndWriteSheet(token, spreadsheetId, sheetNames[2], inboxRows);
+        // Always rewrite every tab, including headers-only tabs. Otherwise a
+        // previously valid address could remain in Outreach after it expires or
+        // is downgraded in the CRM.
+        await clearAndWriteSheet(token, spreadsheetId, sheetNames[0], outreachRows);
+        await clearAndWriteSheet(token, spreadsheetId, sheetNames[1], enrichmentRows);
+        await clearAndWriteSheet(token, spreadsheetId, sheetNames[2], inboxRows);
 
         await formatSheets(token, spreadsheetId, sheetIds);
 

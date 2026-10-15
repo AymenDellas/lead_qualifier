@@ -10,9 +10,13 @@ services:
       - "3000:3000"
     env_file:
       - .env.docker
+      - path: .env.docker.local
+        required: false
     volumes:
       - qualifier_queue:/app/queue
       - qualifier_results:/app/queue-results
+      - case_study_queue:/app/case-study-queue
+      - case_study_results:/app/case-study-results
       - qualifier_progress:/app/progress
       - browser_profiles:/app/.browser-profiles
       - crm_data:/app/data
@@ -21,7 +25,7 @@ services:
     image: leads-qualifier:latest
     restart: always
     init: true
-    command: ["sh", "-c", "rm -f /tmp/.X99-lock && Xvfb :99 -screen 0 1366x768x24 & sleep 2 && fluxbox & sleep 2 && x11vnc -display :99 -forever -nopw -quiet -listen 0.0.0.0 & export DISPLAY=:99 && touch .env.local && node worker.cjs"]
+    command: ["sh", "-c", "rm -f /tmp/.X99-lock && Xvfb :99 -screen 0 1366x768x24 & sleep 2 && fluxbox & sleep 2 && x11vnc -display :99 -forever -nopw -quiet -listen 0.0.0.0 & export DISPLAY=:99 && touch .env.local && node scripts/linkedin-worker-supervisor.cjs"]
     ports:
       - "5900:5900"
     env_file:
@@ -35,9 +39,31 @@ services:
     depends_on:
       - qualifier
 
+  case-study-worker:
+    profiles: ["case-study"]
+    image: leads-qualifier:latest
+    restart: always
+    init: true
+    command: ["sh", "-c", "rm -f /tmp/.X100-lock && Xvfb :100 -screen 0 1366x768x24 & sleep 2 && fluxbox & sleep 2 && x11vnc -display :100 -forever -nopw -quiet -listen 0.0.0.0 & export DISPLAY=:100 && touch .env.local && node case-study-worker.cjs"]
+    ports:
+      - "5901:5900"
+    env_file:
+      - .env.docker
+    volumes:
+      - case_study_queue:/app/case-study-queue
+      - case_study_results:/app/case-study-results
+      - case_study_browser_profiles:/app/.browser-profiles-case-study
+      - crm_data:/app/data
+    shm_size: '2gb'
+    depends_on:
+      - qualifier
+
 volumes:
   qualifier_queue:
   qualifier_results:
+  case_study_queue:
+  case_study_results:
   qualifier_progress:
   browser_profiles:
+  case_study_browser_profiles:
   crm_data:

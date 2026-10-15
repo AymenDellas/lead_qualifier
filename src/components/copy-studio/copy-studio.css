@@ -1,0 +1,1498 @@
+/* Copy Studio shares Compel's palette and typography. Every rule is scoped so
+   loading the tab cannot restyle the dashboard's other workspaces. */
+.copy-studio {
+  color: var(--text);
+  font: inherit;
+  min-width: 0;
+}
+.copy-studio *,
+.copy-studio *::before,
+.copy-studio *::after {
+  box-sizing: border-box;
+}
+.copy-studio h2,
+.copy-studio h3,
+.copy-studio p {
+  margin: 0;
+}
+.copy-studio button,
+.copy-studio input,
+.copy-studio textarea,
+.copy-studio select {
+  font: inherit;
+}
+.copy-studio button,
+.copy-studio summary {
+  cursor: pointer;
+}
+.copy-studio button:disabled,
+.copy-studio fieldset:disabled {
+  cursor: not-allowed;
+}
+.copy-studio button:disabled {
+  opacity: 0.5;
+}
+.copy-studio svg {
+  flex-shrink: 0;
+}
+.copy-studio fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.copy-studio input:not([type='checkbox']):not([type='radio']),
+.copy-studio textarea,
+.copy-studio select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: 13px;
+}
+.copy-studio textarea {
+  resize: vertical;
+  line-height: 1.65;
+  min-height: 88px;
+}
+.copy-studio input::placeholder,
+.copy-studio textarea::placeholder {
+  color: var(--text-faint);
+}
+.copy-studio input:focus,
+.copy-studio textarea:focus,
+.copy-studio select:focus {
+  border-color: var(--signal);
+  outline: 2px solid var(--signal-dim);
+}
+.copy-studio input[type='checkbox'],
+.copy-studio input[type='radio'] {
+  accent-color: var(--signal);
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.copy-studio input:disabled,
+.copy-studio textarea:disabled {
+  background: var(--surface-2);
+}
+.copy-studio .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.copy-studio .small {
+  font-size: 12px;
+}
+.copy-studio .muted {
+  color: var(--text-dim);
+  line-height: 1.65;
+}
+.copy-studio .eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  color: var(--text-faint);
+}
+.copy-studio .button,
+.copy-studio .icon-button,
+.copy-studio .text-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+.copy-studio .button.primary {
+  background: var(--signal);
+  color: var(--surface-1);
+  border-color: var(--signal);
+}
+.copy-studio .button.primary:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+.copy-studio .button.secondary {
+  background: var(--surface-1);
+  color: var(--text);
+  border-color: var(--line);
+}
+.copy-studio .button.subtle,
+.copy-studio .icon-button {
+  color: var(--text-dim);
+  background: transparent;
+}
+.copy-studio .button.secondary:hover,
+.copy-studio .button.subtle:hover,
+.copy-studio .icon-button:hover {
+  background: var(--surface-2);
+}
+.copy-studio .icon-button {
+  width: 32px;
+  min-height: 32px;
+  padding: 7px;
+  flex-shrink: 0;
+}
+.copy-studio .text-button {
+  background: transparent;
+  color: var(--signal);
+  padding-inline: 0;
+}
+.copy-studio .small-button {
+  min-height: 32px;
+  padding: 6px 9px;
+}
+.copy-studio .copy-project-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 16px;
+}
+.copy-studio .copy-project-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 180px;
+  max-width: 360px;
+  flex: 1;
+}
+.copy-studio .copy-project-picker select {
+  padding-block: 8px;
+}
+.copy-studio .copy-tools {
+  position: relative;
+}
+.copy-studio .copy-tools summary {
+  list-style: none;
+}
+.copy-studio summary::-webkit-details-marker {
+  display: none;
+}
+.copy-studio .copy-tools-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 25;
+  padding: 6px;
+  width: 195px;
+}
+.copy-studio .copy-tools-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  text-align: left;
+  font-size: 12px;
+}
+.copy-studio .copy-tools-menu button:hover {
+  background: var(--surface-2);
+}
+.copy-studio .topbar-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.copy-studio .save-status,
+.copy-studio .provider-status {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.copy-studio .provider-status {
+  color: var(--success);
+}
+.copy-studio .provider-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.copy-studio .provider-status.offline {
+  color: var(--text-faint);
+}
+.copy-studio .save-failed {
+  color: var(--bad);
+}
+.copy-studio .page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 26px 0 22px;
+}
+.copy-studio .page-header > div:first-child {
+  min-width: 0;
+  flex: 1;
+}
+.copy-studio .page-header .eyebrow {
+  margin-bottom: 5px;
+}
+.copy-studio .page-header input.project-title {
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 3px;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+.copy-studio .page-header input.project-title:focus {
+  background: var(--surface-1);
+}
+.copy-studio .page-header p {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-top: 5px;
+}
+.copy-studio .page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.copy-studio .delete-project:hover {
+  color: var(--bad);
+}
+.copy-studio .editor-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.8fr) minmax(0, 1.25fr);
+  gap: 22px;
+  align-items: start;
+}
+.copy-studio .brief-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  min-width: 0;
+}
+.copy-studio .draft-panel {
+  min-width: 0;
+}
+.copy-studio .panel-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 18px;
+  border-bottom: 1px solid var(--line);
+}
+.copy-studio .panel-heading h2 {
+  font-size: 15px;
+  font-weight: 650;
+}
+.copy-studio .panel-heading p {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 3px;
+}
+.copy-studio .panel-number {
+  width: 28px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  color: var(--signal);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: 11px var(--font-mono);
+}
+.copy-studio .draft-heading {
+  padding: 8px 0 19px;
+  border: 0;
+}
+.copy-studio .word-count {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.copy-studio .import-trigger {
+  display: flex;
+  align-items: center;
+  text-align: left;
+  gap: 10px;
+  width: calc(100% - 36px);
+  margin: 18px;
+  padding: 13px;
+  border: 1px solid var(--signal-line);
+  border-radius: var(--radius-sm);
+  background: var(--signal-dim);
+  color: var(--signal);
+}
+.copy-studio .import-trigger strong {
+  display: block;
+  font-size: 12px;
+}
+.copy-studio .import-trigger small {
+  display: block;
+  color: var(--text-dim);
+  font-size: 10px;
+  margin-top: 3px;
+}
+.copy-studio .import-trigger > svg:last-child {
+  margin-left: auto;
+}
+.copy-studio .import-icon {
+  display: flex;
+}
+.copy-studio .source-note {
+  display: flex;
+  gap: 7px;
+  margin: 0 18px 14px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.copy-studio .source-note span {
+  overflow-wrap: anywhere;
+}
+.copy-studio .source-note button {
+  color: var(--signal);
+  margin-left: auto;
+}
+.copy-studio .original-reference {
+  margin: 0 18px 22px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.copy-studio .reference-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.copy-studio .reference-heading strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+.copy-studio .reference-title {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  margin-bottom: 12px;
+}
+.copy-studio .source-coverage { overflow-wrap: anywhere; }
+.copy-studio .source-coverage > ul { max-height: 20rem; overflow-y: auto; padding-left: 1.2rem; line-height: 1.6; }
+.copy-studio .source-coverage li + li { margin-top: .65rem; }
+.copy-studio .reference-preview {
+  margin: 14px 0;
+}
+.copy-studio .reference-preview summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.copy-studio .reference-preview textarea {
+  margin-top: 10px;
+}
+.copy-studio .brief-fields {
+  padding: 0 18px;
+}
+.copy-studio .field-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 20px 0 12px;
+}
+.copy-studio .field-group-header:first-child {
+  margin-top: 0;
+}
+.copy-studio .template-options {
+  display: grid;
+  gap: 7px;
+}
+.copy-studio .template-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.copy-studio .template-option.selected {
+  border-color: var(--signal-line);
+  background: var(--signal-dim);
+}
+.copy-studio .template-option input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+.copy-studio .template-option:focus-within {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+.copy-studio .template-glyph {
+  font-size: 20px;
+  color: var(--signal);
+  width: 24px;
+  text-align: center;
+}
+.copy-studio .template-option strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+}
+.copy-studio .template-option small {
+  display: block;
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+.copy-studio .radio-mark {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  margin-left: auto;
+}
+.copy-studio .selected .radio-mark {
+  border-color: var(--signal);
+}
+.copy-studio .radio-mark span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--signal);
+}
+.copy-studio .completion {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.copy-studio .completion.complete {
+  color: var(--success);
+}
+.copy-studio .field {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  margin: 0 0 16px;
+  box-shadow: none;
+  color: var(--text);
+}
+.copy-studio .field label,
+.copy-studio .section-editor label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 0 0 7px;
+}
+.copy-studio .field label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.copy-studio .required {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+.copy-studio .optional {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+.copy-studio .field-hint,
+.copy-studio .field-error {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+.copy-studio .field-error {
+  color: var(--bad);
+}
+.copy-studio .invalid input,
+.copy-studio .invalid textarea {
+  border-color: var(--bad);
+}
+.copy-studio .brief-accordion {
+  border-top: 1px solid var(--line);
+}
+.copy-studio .brief-accordion summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 15px 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-dim);
+  list-style: none;
+}
+.copy-studio .brief-accordion summary span {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.copy-studio .accordion-content > p {
+  margin-bottom: 14px;
+}
+.copy-studio .generate-bar {
+  padding: 16px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+  border-radius: 0 0 var(--radius) var(--radius);
+  text-align: center;
+}
+.copy-studio .generate-button {
+  width: 100%;
+  min-height: 42px;
+}
+.copy-studio .generate-button > svg:last-child {
+  margin-left: auto;
+}
+.copy-studio .generate-bar p {
+  margin-top: 9px;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+.copy-studio .draft-empty {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  padding: 24px;
+}
+.copy-studio .empty-intro h3 {
+  font-size: 28px;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
+  margin-top: 12px;
+  font-weight: 600;
+}
+.copy-studio .empty-intro p {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.7;
+  max-width: 46ch;
+}
+.copy-studio .page-preview-illustration {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  margin: 24px 0;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.copy-studio .mini-browser {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.copy-studio .mini-browser i {
+  width: 4px;
+  height: 4px;
+  background: var(--line-strong);
+  border-radius: 50%;
+}
+.copy-studio .mini-browser span {
+  font-size: 8px;
+  color: var(--text-faint);
+  margin-left: auto;
+}
+.copy-studio .mini-page {
+  padding: 20px 24px;
+}
+.copy-studio .mini-eyebrow {
+  width: 25%;
+  height: 4px;
+  background: var(--signal-line);
+  margin-bottom: 10px;
+}
+.copy-studio .mini-headline {
+  width: 72%;
+  height: 10px;
+  background: var(--line-strong);
+  border-radius: 2px;
+  margin: 5px 0;
+}
+.copy-studio .mini-headline.short-line {
+  width: 53%;
+  margin-bottom: 13px;
+}
+.copy-studio .mini-line {
+  width: 85%;
+  height: 4px;
+  background: var(--line);
+  margin: 6px 0;
+}
+.copy-studio .mini-line.medium-line {
+  width: 70%;
+}
+.copy-studio .mini-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--signal-dim);
+  color: var(--signal);
+  padding: 6px 9px;
+  border-radius: 4px;
+  margin-top: 9px;
+  font-size: 8px;
+}
+.copy-studio .mini-cards {
+  display: none;
+}
+.copy-studio .floating-proof {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--surface-1);
+}
+.copy-studio .outline-title {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.copy-studio .outline-title span {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.copy-studio .outline-card ol {
+  list-style: none;
+  padding: 0;
+  margin: 14px 0 0;
+}
+.copy-studio .outline-card li {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 11px 0;
+  border-top: 1px solid var(--line);
+}
+.copy-studio .outline-card li > span {
+  font: 10px var(--font-mono);
+  color: var(--text-faint);
+}
+.copy-studio .outline-card li strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+}
+.copy-studio .outline-card li small {
+  display: block;
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.5;
+  margin-top: 3px;
+}
+.copy-studio .outline-card li svg {
+  margin-left: auto;
+  color: var(--line-strong);
+}
+.copy-studio .empty-footer {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+  padding-top: 15px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.copy-studio .empty-footer button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--signal);
+  font-weight: 600;
+}
+.copy-studio .generation-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px;
+  margin-bottom: 14px;
+  border: 1px solid var(--signal-line);
+  background: var(--signal-dim);
+  border-radius: var(--radius);
+}
+.copy-studio .generation-progress strong {
+  font-size: 12px;
+  display: block;
+}
+.copy-studio .generation-progress small {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 5px;
+}
+.copy-studio .generation-progress .icon-button {
+  margin-left: auto;
+}
+.copy-studio .progress-orbit {
+  color: var(--signal);
+}
+.copy-studio .strategy-card {
+  padding: 20px;
+  border: 1px solid var(--signal-line);
+  background: var(--signal-dim);
+  border-radius: var(--radius);
+}
+.copy-studio .strategy-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--signal);
+}
+.copy-studio .strategy-title .eyebrow {
+  color: var(--signal);
+}
+.copy-studio .strategy-card h3 {
+  margin-top: 13px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.55;
+}
+.copy-studio .strategy-card > p {
+  font-size: 12px;
+  line-height: 1.75;
+  color: var(--text-dim);
+  margin-top: 8px;
+}
+.copy-studio .strategy-card summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 13px;
+  font-size: 11px;
+  color: var(--signal);
+}
+.copy-studio .strategy-card dl {
+  border-top: 1px solid var(--signal-line);
+  margin: 13px 0 0;
+  padding-top: 12px;
+  font-size: 12px;
+}
+.copy-studio .strategy-card dt {
+  font-weight: 650;
+  margin-top: 8px;
+}
+.copy-studio .strategy-card dd {
+  margin: 3px 0 0;
+  color: var(--text-dim);
+  line-height: 1.7;
+}
+.copy-studio .draft-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+  align-items: center;
+  margin: 17px 0 10px;
+}
+.copy-studio .segmented {
+  display: inline-flex;
+  gap: 3px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  padding: 3px;
+  border-radius: var(--radius-sm);
+}
+.copy-studio .segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  padding: 6px 10px;
+  border-radius: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.copy-studio .segmented button.active {
+  background: var(--surface-1);
+  color: var(--signal);
+  box-shadow: 0 1px 2px var(--line);
+}
+.copy-studio .review-status {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 13px;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+.copy-studio .design-prompt-panel {
+  min-width: 0;
+  padding: 20px 0;
+  border-top: 1px solid var(--line);
+}
+.copy-studio .design-prompt-heading h3 {
+  font-size: 18px;
+  line-height: 1.4;
+}
+.copy-studio .design-prompt-heading p {
+  margin-top: 8px;
+  max-width: 60ch;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.copy-studio .design-prompt-constraints {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+.copy-studio .design-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0;
+}
+.copy-studio .design-prompt-text {
+  margin: 8px 0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.copy-studio .draft-actions > .segmented {
+  flex-wrap: wrap;
+}
+.copy-studio .copy-sections {
+  display: grid;
+  gap: 14px;
+}
+.copy-studio .copy-section {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  min-width: 0;
+}
+.copy-studio .section-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--line);
+}
+.copy-studio .section-label {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.copy-studio .section-tools {
+  display: flex;
+  align-items: center;
+}
+.copy-studio .rewrite-menu {
+  position: relative;
+}
+.copy-studio .rewrite-menu summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 5px;
+  color: var(--text-dim);
+}
+.copy-studio .rewrite-options {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 15;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 20px var(--line);
+  border-radius: var(--radius-sm);
+  width: 178px;
+  padding: 5px;
+}
+.copy-studio .rewrite-options button {
+  display: block;
+  padding: 9px;
+  width: 100%;
+  text-align: left;
+  font-size: 12px;
+  border-radius: 4px;
+}
+.copy-studio .rewrite-options button:hover {
+  background: var(--surface-2);
+}
+.copy-studio .section-copy,
+.copy-studio .section-editor {
+  padding: 20px;
+}
+.copy-studio .section-copy h3 {
+  font-size: 19px;
+  line-height: 1.4;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+.copy-studio .section-copy p {
+  white-space: pre-line;
+  font-size: 13px;
+  line-height: 1.85;
+  color: var(--text-dim);
+  margin-top: 13px;
+  overflow-wrap: anywhere;
+}
+.copy-studio .section-copy ul,
+.copy-studio .preview-section ul {
+  list-style: disc;
+  padding-left: 18px;
+  margin: 13px 0 0;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--text-dim);
+}
+.copy-studio .section-copy li,
+.copy-studio .preview-section li {
+  padding: 3px 0;
+}
+.copy-studio .draft-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--signal-dim);
+  color: var(--signal);
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  padding: 9px 12px;
+  margin-top: 17px;
+}
+.copy-studio .section-editor label {
+  margin-bottom: 14px;
+}
+.copy-studio .section-editor input,
+.copy-studio .section-editor textarea {
+  margin-top: 6px;
+  font-weight: 400;
+}
+.copy-studio .omitted-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  padding: 16px;
+  color: var(--text-faint);
+}
+.copy-studio .omitted-section {
+  background: var(--surface-2);
+}
+.copy-studio .section-issues {
+  border-top: 1px solid var(--line);
+  padding: 13px;
+  background: var(--warn-dim);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.copy-studio .section-issues p {
+  display: flex;
+  align-items: start;
+  gap: 7px;
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.copy-studio .page-preview {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface-1);
+}
+.copy-studio .preview-section {
+  padding: 28px;
+  border-bottom: 1px solid var(--line);
+}
+.copy-studio .preview-section:last-child {
+  border: 0;
+}
+.copy-studio .preview-hero,
+.copy-studio .preview-cta {
+  background: var(--surface-2);
+}
+.copy-studio .preview-section h3 {
+  font-size: 22px;
+  line-height: 1.35;
+  font-weight: 650;
+}
+.copy-studio .preview-section p {
+  font-size: 13px;
+  line-height: 1.85;
+  white-space: pre-line;
+  color: var(--text-dim);
+  margin-top: 15px;
+}
+.copy-studio .writer-notes {
+  margin-top: 16px;
+  padding: 17px 20px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.copy-studio .writer-notes summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.copy-studio .writer-notes summary svg:last-child {
+  margin-left: auto;
+}
+.copy-studio .writer-notes ul,
+.copy-studio .import-warnings ul {
+  list-style: disc;
+  padding-left: 17px;
+  margin-top: 12px;
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--text-dim);
+}
+.copy-studio .writer-notes > p {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-top: 12px;
+}
+.copy-studio .notice {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.copy-studio .notice.error {
+  background: var(--bad-dim);
+  color: var(--bad);
+}
+.copy-studio .notice.warning {
+  background: var(--warn-dim);
+  color: var(--warn);
+}
+.copy-studio .settings-card {
+  display: flex;
+  align-items: start;
+  gap: 15px;
+  padding: 20px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 22px;
+}
+.copy-studio .settings-card > div {
+  flex: 1;
+}
+.copy-studio .settings-card h2 {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 650;
+}
+.copy-studio .settings-card p {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.8;
+  margin-top: 8px;
+}
+.copy-studio .settings-card code {
+  color: var(--text);
+  font-size: 10px;
+}
+.copy-studio .settings-card .button {
+  margin-top: 12px;
+}
+.copy-studio .workspace-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.copy-studio .workspace-footer span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.copy-studio .toast {
+  position: fixed;
+  bottom: 22px;
+  right: 22px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 44px);
+  padding: 13px 17px;
+  border: 1px solid var(--signal-line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--signal);
+  box-shadow: 0 8px 28px var(--line);
+  font-size: 12px;
+  z-index: 60;
+}
+.copy-studio .import-dialog {
+  margin: auto;
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  padding: 26px;
+  background: var(--surface-1);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.copy-studio .import-dialog::backdrop {
+  background: color-mix(in srgb, var(--text) 40%, transparent);
+}
+.copy-studio .dialog-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.copy-studio .dialog-header h2 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  margin-top: 6px;
+}
+.copy-studio .import-dialog .muted {
+  font-size: 13px;
+  margin-bottom: 18px;
+}
+.copy-studio .onboarding-trigger {
+  margin-bottom: 8px;
+}
+.copy-studio .onboarding-status {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 8px 18px 12px;
+}
+.copy-studio .onboarding-unlink {
+  margin: 0 18px;
+}
+.copy-studio .offer-scope {
+  margin: 22px 0;
+  padding: 0 18px;
+}
+.copy-studio .offer-scope legend {
+  padding: 0;
+}
+.copy-studio .offer-mode-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 12px 0 8px;
+}
+.copy-studio .offer-mode-options label,
+.copy-studio .onboarding-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  min-height: 36px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.copy-studio .offer-mode-options label.selected {
+  color: var(--text);
+}
+.copy-studio .onboarding-options {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 16px 0;
+}
+.copy-studio .onboarding-option,
+.copy-studio .offer-choice {
+  display: flex;
+  align-items: start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.copy-studio .onboarding-option.selected {
+  border-color: var(--signal-line);
+  background: var(--signal-dim);
+}
+.copy-studio .onboarding-option span,
+.copy-studio .offer-choice span {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.copy-studio .onboarding-option strong,
+.copy-studio .offer-choice strong {
+  font-size: 13px;
+}
+.copy-studio .onboarding-option small,
+.copy-studio .offer-choice small {
+  display: block;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+.copy-studio .onboarding-option .onboarding-match {
+  color: var(--signal);
+}
+.copy-studio .onboarding-review {
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+  margin-top: 20px;
+}
+.copy-studio .onboarding-review h3 {
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+.copy-studio .onboarding-check {
+  margin-top: 14px;
+}
+.copy-studio .onboarding-client-notes {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.copy-studio .selected-offer-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 12px 0;
+  font-size: 12px;
+}
+.copy-studio .import-tabs {
+  margin-bottom: 22px;
+}
+.copy-studio .dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  margin-top: 22px;
+  padding-top: 18px;
+}
+.copy-studio .dialog-footer > span {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.copy-studio .extraction-source {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  font-size: 12px;
+  padding: 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.copy-studio .extraction-source a {
+  margin-left: auto;
+  color: var(--signal);
+  white-space: nowrap;
+}
+.copy-studio .selection-actions {
+  display: flex;
+  gap: 15px;
+  font-size: 11px;
+  padding: 18px 0 10px;
+}
+.copy-studio .selection-actions button {
+  color: var(--signal);
+}
+.copy-studio .selection-actions span {
+  margin-left: auto;
+  color: var(--text-faint);
+}
+.copy-studio .extracted-fields {
+  display: grid;
+  gap: 10px;
+}
+.copy-studio .extracted-field {
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.copy-studio .extracted-field.is-selected {
+  border-color: var(--signal-line);
+  background: var(--signal-dim);
+}
+.copy-studio .extracted-field label {
+  display: flex;
+  gap: 10px;
+  cursor: pointer;
+}
+.copy-studio .extracted-field label span {
+  min-width: 0;
+}
+.copy-studio .extracted-field label strong {
+  font-size: 12px;
+}
+.copy-studio .extracted-field label small {
+  display: block;
+  color: var(--warn);
+  font-size: 10px;
+  margin-top: 3px;
+}
+.copy-studio .extracted-field label p {
+  font-size: 12px;
+  line-height: 1.7;
+  margin-top: 7px;
+  white-space: pre-line;
+}
+.copy-studio .extracted-field details {
+  margin: 10px 0 0 26px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.copy-studio .extracted-field blockquote {
+  border-left: 2px solid var(--signal-line);
+  margin-top: 9px;
+  padding-left: 10px;
+  line-height: 1.7;
+}
+.copy-studio .import-warnings {
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--warn);
+}
+.copy-studio .spin {
+  animation: copy-studio-spin 1s linear infinite;
+}
+@keyframes copy-studio-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (min-width: 1800px) {
+  .copy-studio .editor-grid {
+    grid-template-columns: 440px minmax(0, 1fr);
+  }
+}
+@media (max-width: 1150px) {
+  .copy-studio .editor-grid {
+    grid-template-columns: minmax(285px, 0.9fr) minmax(0, 1fr);
+    gap: 16px;
+  }
+  .copy-studio .topbar-status {
+    width: 100%;
+    margin-left: 0;
+    padding-top: 3px;
+  }
+  .copy-studio .draft-empty {
+    padding: 20px;
+  }
+}
+@media (max-width: 760px) {
+  .copy-studio .editor-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .copy-studio .copy-project-picker {
+    width: 100%;
+    max-width: none;
+    flex-basis: 100%;
+  }
+  .copy-studio .copy-project-toolbar {
+    gap: 9px;
+    padding: 12px;
+  }
+  .copy-studio .topbar-status {
+    width: auto;
+    margin-left: auto;
+    gap: 7px;
+    flex-direction: column;
+    font-size: 10px;
+  }
+  .copy-studio .page-header {
+    padding-top: 22px;
+    gap: 10px;
+  }
+  .copy-studio .page-header > div:first-child {
+    flex-basis: 100%;
+  }
+  .copy-studio .draft-heading {
+    margin-top: 10px;
+  }
+  .copy-studio .copy-tools-menu {
+    left: 0;
+    right: auto;
+  }
+  .copy-studio .import-dialog {
+    padding: 20px;
+  }
+  .copy-studio .dialog-header h2 {
+    font-size: 20px;
+  }
+  .copy-studio .outline-title {
+    flex-wrap: wrap;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .copy-studio .spin {
+    animation: none;
+  }
+}

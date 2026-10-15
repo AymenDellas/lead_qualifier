@@ -1,0 +1,50 @@
+.overview-hero {
+  position: relative;
+  overflow: hidden;
+  padding: clamp(24px, 4vw, 40px);
+  border: 1px solid #304b79;
+  border-radius: 18px;
+  background: linear-gradient(112deg, #182942 0%, #20385f 62%, #2b4775 100%);
+  color: #ffffff;
+  box-shadow: 0 14px 30px rgba(25, 42, 72, 0.16);
+}
+
+.overview-hero h2 { color: #ffffff; }
+.overview-hero-copy { color: #d4def0; font-size: 14.5px; }
+
+.overview-hero .btn-primary {
+  background: #ffffff;
+  border-color: #ffffff;
+  color: #213b70;
+  box-shadow: 0 6px 18px rgba(7, 17, 37, 0.18);
+}
+
+.overview-hero .btn-primary:hover:not(:disabled) {
+  background: #e8efff;
+  border-color: #e8efff;
+  color: #1c315a;
+}
+
+.overview-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(194, 213, 255, 0.14);
+  color: #d4e2ff;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+}
+
+.overview-hero-orb {
+  position: absolute;
+  width: 330px;
+  height: 330px;
+  right: -60px;
+  top: -120px;
+  border-radius: 50%;
+  border: 55px solid rgba(177, 199, 255, 0.09);
+  box-shadow: 0 0 0 52px rgba(177, 199, 255, 0.045);
+}

@@ -1,4 +1,11 @@
 import { normaliseLinkedinUrl } from './utils';
+import { countrySearchExpansion } from './discovery-locations';
+import {
+  scoreDiscoveryResult,
+  DEFAULT_MIN_FIT_SCORE,
+  type DiscoveryScore,
+  type ScoreReason,
+} from './discovery-score';
 
 // ═════════════════════════════════════════════════════════════════
 //  TYPES
@@ -8,9 +15,14 @@ export interface SearchConfig {
   job_titles: string[];
   locations: string[];
   max_urls_target?: number;
+  /** Unique accepted profiles to keep, after scoring. max_urls_target is the legacy alias. */
+  kept_leads_target?: number;
   max_pages_per_dork?: number;
-  prequalify?: boolean;
   negative_keywords?: string[];
+  /** Rows scoring below this are not written at all. Defaults to DEFAULT_MIN_FIT_SCORE. */
+  min_fit_score?: number;
+  /** Groups every row a single run produced, so a run can be evaluated as a unit. */
+  run_id?: string;
 }
 
 interface NicheSignals {
@@ -19,9 +31,63 @@ interface NicheSignals {
   titles_lower: string[];
 }
 
-interface DorkResult {
+/** A scored, accepted discovery result, carrying everything needed to attribute it. */
+export interface DiscoveredLead {
   url: string;
   location: string;
+  templateId: string;
+  query: string;
+  niche: string;
+  page: number;
+  /** 1-based position within its SERP page. */
+  rank: number;
+  title: string;
+  snippet: string;
+  fitScore: number;
+  fitReasons: ScoreReason[];
+  confidence: 'high' | 'low' | 'none';
+  /** Distinct templates that surfaced this profile during this run. */
+  seenCount: number;
+  runId: string;
+}
+
+export interface DorkProgress {
+  found: number;
+  target: number;
+  remaining: number;
+  searchPhase: 'country' | 'regional';
+  searchArea: string;
+  /** Candidates evaluated — the honest denominator. "Found 180" alone says nothing
+   *  about whether the fit floor is set sensibly; "scored 640, kept 180" does. */
+  scored: number;
+  rejected: number;
+  totalQueries: number;
+  queryIndex: number;
+  query: string;
+  templateId: string;
+  /** One Serper credit per page fetched. */
+  creditsSpent: number;
+}
+
+export interface DorkRunStats {
+  runId: string;
+  templates: number;
+  creditsSpent: number;
+  scored: number;
+  kept: number;
+  rejected: number;
+  belowFloor: number;
+  rejectsByReason: Record<string, number>;
+  cancelled: boolean;
+  target: number;
+  targetReached: boolean;
+  stopReason: 'target_reached' | 'search_exhausted' | 'cancelled';
+  queriesCompleted: number;
+}
+
+export interface DorkRunResult {
+  leads: DiscoveredLead[];
+  stats: DorkRunStats;
 }
 
 
@@ -55,77 +121,10 @@ const NEGATIVE_KEYWORDS = [
 ];
 
 
-// ═════════════════════════════════════════════════════════════════
-//  LOCATION ALIASES
-//  Expands short location names (e.g. "US") into an array of
-//  city/state/country names so result filtering doesn't reject
-//  someone in "San Francisco, California" when searching for "US".
-// ═════════════════════════════════════════════════════════════════
-
-const LOCATION_ALIASES: Record<string, string[]> = {
-  'us': [
-    'united states', 'usa', 'u.s.', 'america',
-    'new york', 'los angeles', 'chicago', 'houston', 'phoenix',
-    'philadelphia', 'san antonio', 'san diego', 'dallas', 'san jose',
-    'austin', 'jacksonville', 'san francisco', 'columbus', 'charlotte',
-    'indianapolis', 'seattle', 'denver', 'washington', 'boston',
-    'nashville', 'detroit', 'portland', 'las vegas', 'memphis',
-    'louisville', 'baltimore', 'milwaukee', 'albuquerque', 'tucson',
-    'fresno', 'sacramento', 'atlanta', 'miami', 'raleigh',
-    'minneapolis', 'tampa', 'orlando', 'pittsburgh', 'cleveland',
-    'st. louis', 'kansas city', 'colorado springs', 'omaha',
-    'california', 'texas', 'florida', 'illinois', 'pennsylvania',
-    'ohio', 'georgia', 'north carolina', 'michigan', 'new jersey',
-    'virginia', 'arizona', 'massachusetts', 'tennessee', 'indiana',
-    'missouri', 'maryland', 'wisconsin', 'colorado', 'minnesota',
-    'south carolina', 'alabama', 'louisiana', 'kentucky', 'oregon',
-    'oklahoma', 'connecticut', 'iowa', 'utah', 'nevada', 'arkansas',
-    'kansas', 'mississippi', 'nebraska', 'new mexico', 'idaho', 'hawaii',
-    'greater new york', 'greater los angeles', 'greater chicago',
-    'greater boston', 'greater seattle', 'greater denver',
-    'greater atlanta', 'greater miami', 'greater dallas',
-    'san francisco bay', 'silicon valley', 'tri-state',
-  ],
-  'uk': [
-    'united kingdom', 'england', 'scotland', 'wales', 'northern ireland',
-    'great britain', 'britain',
-    'london', 'birmingham', 'manchester', 'glasgow', 'newcastle',
-    'sheffield', 'leeds', 'liverpool', 'bristol', 'edinburgh',
-    'cardiff', 'belfast', 'nottingham', 'leicester', 'coventry',
-    'bradford', 'brighton', 'oxford', 'cambridge', 'reading',
-    'southampton', 'portsmouth', 'exeter', 'york', 'bath',
-    'norwich', 'plymouth', 'aberdeen', 'dundee', 'swansea',
-    'surrey', 'kent', 'essex', 'sussex', 'hampshire',
-    'devon', 'cornwall', 'lancashire', 'yorkshire', 'hertfordshire',
-    'greater london', 'greater manchester',
-    'west midlands', 'east midlands', 'south east', 'south west',
-    'north west', 'north east', 'east anglia',
-  ],
-  'canada': [
-    'toronto', 'vancouver', 'montreal', 'calgary', 'edmonton',
-    'ottawa', 'winnipeg', 'quebec', 'hamilton', 'kitchener',
-    'victoria', 'halifax', 'oshawa', 'windsor', 'saskatoon',
-    'regina', 'kelowna', 'quebec city', 'barrie', 'london, on',
-    'ontario', 'british columbia', 'alberta', 'nova scotia',
-    'manitoba', 'saskatchewan', 'new brunswick', 'prince edward island',
-    'greater toronto', 'greater vancouver', 'greater montreal',
-  ],
-  'australia': [
-    'sydney', 'melbourne', 'brisbane', 'perth', 'adelaide',
-    'canberra', 'hobart', 'darwin', 'gold coast', 'newcastle',
-    'new south wales', 'victoria', 'queensland', 'western australia',
-    'south australia', 'tasmania', 'greater sydney', 'greater melbourne',
-  ],
-};
-
-function expandLocation(location: string): string[] {
-  const lower = location.toLowerCase().trim();
-  const aliases = LOCATION_ALIASES[lower];
-  if (aliases) {
-    return [lower, ...aliases];
-  }
-  return [lower];
-}
+// LOCATION_ALIASES and expandLocation were deleted here. They built a large
+// city/state expansion for every location, passed it into isResultRelevant as
+// `locationVariants`, and that parameter was never read: geo filtering is done by
+// Google, because the location string is already in the dork.
 
 
 // ═════════════════════════════════════════════════════════════════
@@ -156,121 +155,191 @@ const GENERIC_WORDS = new Set([
 
 // ═════════════════════════════════════════════════════════════════
 //  QUERY TEMPLATE GENERATOR
-//  107 elite dork patterns per title × location combination.
-//  Organized by category so each template hits a DIFFERENT slice
-//  of Google's LinkedIn index.
 // ═════════════════════════════════════════════════════════════════
 
-function buildQueryBank(title: string, loc: string, negString: string): string[] {
+/** A dork plus the stable id that credit is attributed to. */
+export interface QueryTemplate {
+  /** Stable across runs and re-orderings — derived from category + driver word,
+   *  never an array index, or every historical number reassigns when the bank
+   *  changes. */
+  id: string;
+  query: string;
+}
+
+function slug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+/**
+ * Builds the dork bank for one title × location.
+ *
+ * ## Why this is 35 templates and not 107
+ *
+ * The old bank spent most of its budget re-asking the same question. Category 2
+ * appended `"Experience"`, `"About"`, `"Skills"`, `"Contact info"`, `"Connections"`,
+ * `"Activity"`, `"Education"` — words that appear on *every* LinkedIn profile. Those
+ * eleven templates were eleven near-identical queries against one slice of the
+ * index, and the same is true of the ten generic business nouns in Category 7
+ * (`company`, `services`, `solutions`, `group`…). Paging them to exhaustion is
+ * exactly why the three-dry-pages abort tripped constantly.
+ *
+ * What survives is the templates that change the *semantic target* — who the person
+ * is, what they say they do, what they are certified in, what they sell. Categories
+ * were kept in proportion to how directly they speak to the ICP (solo operator,
+ * actively practising, sells a paid offer), so the identity and first-person verb
+ * groups are the largest.
+ *
+ * Three structural exclusions stay in the query string (`-dir -jobs -pulse`) because
+ * they are URL-shaped and cannot suppress a real practitioner. Topical negatives are
+ * applied to the parsed headline instead — see `runDorkEngine`.
+ */
+function buildQueryBank(title: string, loc: string, negString: string): QueryTemplate[] {
   const T = title;
   const L = loc;
   const N = negString;
+  const out: QueryTemplate[] = [];
+  const add = (id: string, query: string) => out.push({ id, query });
 
-  const queries: string[] = [];
+  // ─── Core operators (3) ───────────────────────────────────
+  // `inurl:linkedin.com/in` and `"T" AND "L"` were dropped: the first duplicates
+  // `site:` against the same index path, and Google treats a bare AND as implicit.
+  add('core-plain', `site:linkedin.com/in "${T}" "${L}"${N}`);
+  add('core-intitle', `site:linkedin.com/in intitle:"${T}" "${L}"${N}`);
+  add('core-clean', `site:linkedin.com/in "${T}" "${L}" -dir -jobs -pulse${N}`);
 
-  // ─── CATEGORY 1: CORE OPERATORS (5) ───────────────────────
-  // Each uses a different Google operator → different index path
-  queries.push(
-    `site:linkedin.com/in "${T}" "${L}"${N}`,
-    `site:linkedin.com/in intitle:"${T}" "${L}"${N}`,
-    `inurl:linkedin.com/in "${T}" "${L}"${N}`,
-    `site:linkedin.com/in "${T}" AND "${L}"${N}`,
-    `site:linkedin.com/in "${T}" "${L}" -dir -jobs -pulse${N}`,
-  );
+  // ─── Location phrasing (2) ────────────────────────────────
+  // LinkedIn writes locations two ways. The rest ("Metropolitan", "based in",
+  // "Location * L") matched almost nothing.
+  add('loc-greater', `site:linkedin.com/in "${T}" "Greater ${L}"${N}`);
+  add('loc-area', `site:linkedin.com/in "${T}" "${L} Area"${N}`);
 
-  // ─── CATEGORY 2: LINKEDIN PROFILE SECTIONS (11) ──────────
-  // Target different indexed sections of LinkedIn profiles
-  for (const section of [
-    'Experience', 'About', 'Skills', 'Contact info', 'Connections',
-    'Activity', 'Education', 'Certifications', 'Recommendations',
-    'Honors', 'Projects'
-  ]) {
-    queries.push(`site:linkedin.com/in "${T}" "${L}" "${section}"${N}`);
-  }
-
-  // ─── CATEGORY 3: LOCATION FORMAT VARIATIONS (7) ──────────
-  queries.push(
-    `site:linkedin.com/in "${T}" "Greater ${L}"${N}`,
-    `site:linkedin.com/in "${T}" "${L} Area"${N}`,
-    `site:linkedin.com/in "${T}" "Greater ${L} Area"${N}`,
-    `site:linkedin.com/in "${T}" "${L} Metropolitan"${N}`,
-    `site:linkedin.com/in "${T}" near "${L}"${N}`,
-    `site:linkedin.com/in intitle:"${T}" "Location * ${L}"${N}`,
-    `site:linkedin.com/in "${T}" "based in ${L}"${N}`,
-  );
-
-  // ─── CATEGORY 4: PROFESSIONAL IDENTITY (18) ──────────────
-  // Keywords that indicate someone is ACTIVELY practicing this role
+  // ─── Professional identity (8) ────────────────────────────
+  // Every one of these is a *solo* marker, which is the ICP signal hardest to
+  // recover later. `CEO` was dropped as corporate-shaped; speaker/author/
+  // award-winning skew to public figures who don't reply to cold email.
   for (const signal of [
-    'helping', 'founder', 'CEO', 'owner', 'speaker', 'author',
-    'certified', 'specialist', 'expert', 'freelance', 'independent',
-    'self-employed', 'entrepreneur', 'practitioner', 'dedicated',
-    'award-winning', 'published', 'licensed'
+    'founder', 'owner', 'self-employed', 'independent',
+    'freelance', 'entrepreneur', 'practitioner', 'certified',
   ]) {
-    queries.push(`site:linkedin.com/in "${T}" "${L}" "${signal}"${N}`);
+    add(`id-${slug(signal)}`, `site:linkedin.com/in "${T}" "${L}" "${signal}"${N}`);
   }
 
-  // ─── CATEGORY 5: ACTION/SERVICE VERBS (14) ───────────────
-  // Words people use in headlines to describe what they DO
+  // ─── First-person service verbs (6) ───────────────────────
+  // The strongest headline-level evidence that one person delivers the work.
   for (const verb of [
-    'I help', 'I work with', 'specializing in', 'empowering',
-    'transforming', 'supporting', 'guiding', 'enabling',
-    'passionate about', 'committed to', 'focused on',
-    'working with', 'partnering with', 'dedicated to'
+    'I help', 'I work with', 'helping', 'specializing in',
+    'working with', 'supporting',
   ]) {
-    queries.push(`site:linkedin.com/in "${T}" "${L}" "${verb}"${N}`);
+    add(`verb-${slug(verb)}`, `site:linkedin.com/in "${T}" "${L}" "${verb}"${N}`);
   }
 
-  // ─── CATEGORY 6: CREDENTIAL & SENIORITY (14) ─────────────
-  // Title modifiers that find different people
-  for (const prefix of [
-    'certified', 'senior', 'lead', 'head', 'principal', 'master'
-  ]) {
-    queries.push(`site:linkedin.com/in "${prefix} ${T}" "${L}"${N}`);
-  }
-  // Certification acronyms common in coaching/consulting
-  for (const cert of ['ICF', 'PCC', 'ACC', 'MCC', 'CPC', 'NLP', 'MBA', 'PhD']) {
-    queries.push(`site:linkedin.com/in "${T}" "${cert}" "${L}"${N}`);
+  // ─── Coaching credentials (6) ─────────────────────────────
+  // MBA and PhD were dropped — they pull corporate and academic profiles. The
+  // `senior/lead/head/principal/master ${T}` prefixes went with them: those
+  // describe a rank inside someone else's organisation, the opposite of the ICP.
+  for (const cert of ['ICF', 'PCC', 'ACC', 'MCC', 'CPC', 'NLP']) {
+    add(`cert-${slug(cert)}`, `site:linkedin.com/in "${T}" "${cert}" "${L}"${N}`);
   }
 
-  // ─── CATEGORY 7: BUSINESS SIGNALS (10) ───────────────────
-  for (const biz of [
-    'company', 'agency', 'firm', 'studio', 'consulting',
-    'services', 'solutions', 'group', 'institute', 'academy'
-  ]) {
-    queries.push(`site:linkedin.com/in "${T}" "${L}" "${biz}"${N}`);
+  // ─── The offer being sold (4) ─────────────────────────────
+  for (const cs of ['clients', 'program', 'workshop', 'retreat']) {
+    add(`offer-${slug(cs)}`, `site:linkedin.com/in "${T}" "${L}" "${cs}"${N}`);
   }
 
-  // ─── CATEGORY 8: CLIENT/DELIVERY (10) ────────────────────
-  for (const cs of [
-    'clients', 'results', 'transformation', 'program',
-    'workshop', 'retreat', 'course', 'webinar', 'podcast', 'blog'
-  ]) {
-    queries.push(`site:linkedin.com/in "${T}" "${L}" "${cs}"${N}`);
+  // ─── Boolean combos (2) ───────────────────────────────────
+  add('bool-1on1', `site:linkedin.com/in "${T}" "${L}" ("1:1" OR "one-on-one")${N}`);
+  add('bool-nohire', `site:linkedin.com/in "${T}" "${L}" -recruit -hiring -job${N}`);
+
+  // ─── Niche depth (4) ──────────────────────────────────────
+  // "discovery call" and "strategy session" name a paid entry point; the other
+  // two are vocabulary a practising coach uses and a corporate employee does not.
+  for (const nd of ['discovery call', 'strategy session', 'mindset', 'accountability']) {
+    add(`depth-${slug(nd)}`, `site:linkedin.com/in "${T}" "${L}" "${nd}"${N}`);
   }
 
-  // ─── CATEGORY 9: BOOLEAN COMBOS (8) ─────────────────────
-  queries.push(
-    `site:linkedin.com/in ("${T}" OR "${T}s") "${L}"${N}`,
-    `site:linkedin.com/in intitle:"${T}" AND "${L}" -company -jobs${N}`,
-    `site:linkedin.com/in "${T}" "${L}" -recruit -hiring -job${N}`,
-    `site:linkedin.com/in "${T}" "${L}" ("website" OR "blog")${N}`,
-    `site:linkedin.com/in "${T}" "${L}" ("book" OR "author")${N}`,
-    `site:linkedin.com/in "${T}" "${L}" ("TEDx" OR "keynote")${N}`,
-    `site:linkedin.com/in "${T}" "${L}" ("training" OR "workshop")${N}`,
-    `site:linkedin.com/in "${T}" "${L}" ("1:1" OR "one-on-one")${N}`,
-  );
+  return out; // 35 templates
+}
 
-  // ─── CATEGORY 10: NICHE-DEPTH (10) ──────────────────────
-  for (const nd of [
-    'mindset', 'growth', 'accountability', 'clarity',
-    'breakthrough', 'strategy session', 'discovery call',
-    'high-performance', 'goal-setting', 'work-life balance'
-  ]) {
-    queries.push(`site:linkedin.com/in "${T}" "${L}" "${nd}"${N}`);
+/**
+ * Templates in the original country bank, derived rather than hardcoded.
+ * The full run's denominator additionally includes conditional geographical reserve queries.
+ */
+export function queryBankSize(): number {
+  return buildQueryBank('x', 'y', '').length;
+}
+
+export function keptLeadTarget(config: Pick<SearchConfig, 'kept_leads_target' | 'max_urls_target'>): number {
+  const target = config.kept_leads_target ?? config.max_urls_target ?? 500;
+  if (!Number.isSafeInteger(target) || target < 1) throw new Error('Kept leads target must be a positive whole number.');
+  return target;
+}
+
+interface DiscoveryQuery {
+  templateId: string;
+  query: string;
+  location: string;
+  niche: string;
+  searchPhase: 'country' | 'regional';
+  searchArea: string;
+}
+
+/** The regional reserve is only searched if country queries do not fill the kept target. */
+export function buildDiscoverySearchPlan(config: SearchConfig): DiscoveryQuery[] {
+  const negatives = (config.negative_keywords || []).slice(0, 10);
+  const negString = negatives.length ? ' ' + negatives.map(n => `-"${n}"`).join(' ') : '';
+  const countryQueries: DiscoveryQuery[] = [];
+  const aliasQueries: DiscoveryQuery[] = [];
+  const regionalQueries: DiscoveryQuery[] = [];
+  const seen = new Set<string>();
+  const add = (bank: DiscoveryQuery[], query: DiscoveryQuery) => {
+    const key = query.query.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!seen.has(key)) { seen.add(key); bank.push(query); }
+  };
+  for (const title of config.job_titles) {
+    const countries = new Set<string>();
+    for (const loc of config.locations) {
+      const expansion = countrySearchExpansion(loc);
+      const countryKey = expansion?.country || loc.toLowerCase().trim();
+      if (countries.has(countryKey)) continue;
+      countries.add(countryKey);
+      for (const t of buildQueryBank(title, loc, negString)) {
+        add(countryQueries, { templateId: t.id, query: t.query, location: loc, niche: title, searchPhase: 'country', searchArea: loc });
+      }
+      if (!expansion) continue;
+      for (const alias of expansion.aliases) {
+        for (const t of buildQueryBank(title, alias, negString)) {
+          add(aliasQueries, { templateId: t.id, query: t.query, location: loc, niche: title, searchPhase: 'country', searchArea: alias });
+        }
+      }
+      for (const region of expansion.regions) {
+        const base = `site:linkedin.com/in "${title}" ${expansion.constraint} "${region}"${negString}`;
+        const reserve = [
+          ['regional-plain', base],
+          ['regional-intitle', `site:linkedin.com/in intitle:"${title}" ${expansion.constraint} "${region}"${negString}`],
+          ['regional-owner', `${base} ("founder" OR "owner" OR "independent" OR "self-employed")`],
+          ['regional-credential', `${base} ("ICF" OR "PCC" OR "ACC" OR "MCC")`],
+          ['regional-1on1', `${base} ("1:1" OR "one-on-one")`],
+        ];
+        for (const [templateId, query] of reserve) {
+          add(regionalQueries, { templateId, query, location: loc, niche: title, searchPhase: 'regional', searchArea: `${region}, ${expansion.country}` });
+        }
+      }
+    }
   }
-
-  return queries; // 107 templates total
+  // Keep country-first staging, with diversity across titles and locations within each stage.
+  return [countryQueries, aliasQueries, regionalQueries].flatMap(bank => {
+    const groups = new Map<string, DiscoveryQuery[]>();
+    for (const query of bank) {
+      const key = `${query.niche}|${query.location}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(query);
+    }
+    const buckets = [...groups.values()];
+    const result: DiscoveryQuery[] = [];
+    const depth = Math.max(0, ...buckets.map(bucket => bucket.length));
+    for (let i = 0; i < depth; i++) for (const bucket of buckets) if (bucket[i]) result.push(bucket[i]);
+    return result;
+  });
 }
 
 
@@ -341,56 +410,38 @@ function extractHeadlineFromGoogleTitle(googleTitle: string): string | null {
 }
 
 /**
- * Check if a Google result is relevant to our niche.
+ * Scores one SERP result.
  *
- * IMPORTANT: We do NOT hard-reject based on location here.
- * The Google query itself already includes the location string,
- * so Google handles geo-filtering. This function focuses purely
- * on NICHE relevance (is this person actually a coach/consultant/etc).
+ * Location is deliberately not re-checked: the dork already contains the location
+ * string, so Google has done the geo filtering, and a second pass over free-text
+ * location strings only ever throws away good leads.
+ *
+ * Replaces the old `isResultRelevant`, which answered a yes/no question and then
+ * discarded the `confidence` it had just computed — the engine ignored the return
+ * value's second field entirely. That distinction is now the difference between
+ * weights A1 and A2, and it is persisted.
  */
-function isResultRelevant(
+function evaluateResult(
   item: any,
   nicheSignals: NicheSignals,
-  location: string,
-  locationVariants: string[]
-): { isRelevant: boolean, confidence: string } {
-  const title = item.title || "";
-  const snippet = (item.snippet || "").toLowerCase();
+  seenCount: number,
+): DiscoveryScore {
   const link = (item.link || "").toLowerCase();
-
-  // Hard reject noise domains
-  if (isNoiseDomain(link)) return { isRelevant: false, confidence: 'none' };
-
-  // Extract the LinkedIn headline from Google's title tag
-  const headline = extractHeadlineFromGoogleTitle(title);
-
-  // Check if any negative keyword appears prominently
-  const combined = `${(headline || '').toLowerCase()} ${snippet}`;
-
-  if (headline) {
-    // HIGH confidence: headline directly contains a niche phrase
-    for (const phrase of nicheSignals.phrases) {
-      if (headline.includes(phrase)) return { isRelevant: true, confidence: 'high' };
-    }
-    // LOW confidence: headline contains a role word
-    for (const rw of nicheSignals.role_words) {
-      const regex = new RegExp(`\\b${rw}\\b`);
-      if (regex.test(headline)) return { isRelevant: true, confidence: 'low' };
-    }
-    // If we got a headline but it doesn't match at all → reject
-    return { isRelevant: false, confidence: 'none' };
+  if (isNoiseDomain(link)) {
+    return { score: 0, reasons: [], reject: 'no_headline_match', confidence: 'none' };
   }
 
-  // No headline parsed → check title + snippet for niche phrases
-  const fullText = `${title.toLowerCase()} ${snippet}`;
-  for (const phrase of nicheSignals.phrases) {
-    if (fullText.includes(phrase)) return { isRelevant: true, confidence: 'low' };
-  }
-  for (const rw of nicheSignals.role_words) {
-    if (fullText.includes(rw)) return { isRelevant: true, confidence: 'low' };
-  }
-
-  return { isRelevant: false, confidence: 'none' };
+  const title = item.title || "";
+  return scoreDiscoveryResult(
+    {
+      headline: extractHeadlineFromGoogleTitle(title),
+      title,
+      snippet: item.snippet || "",
+      seenCount,
+    },
+    { phrases: [...nicheSignals.phrases], roleWords: [...nicheSignals.role_words] },
+    NEGATIVE_KEYWORDS,
+  );
 }
 
 
@@ -398,87 +449,84 @@ function isResultRelevant(
 //  SERPER API SEARCH
 // ═════════════════════════════════════════════════════════════════
 
-async function serperSearch(query: string, apiKeys: string | string[], page: number = 1): Promise<any[]> {
-  const url = "https://google.serper.dev/search";
-  const payload = { q: query, num: 10, page };
-  const keys = Array.isArray(apiKeys) ? apiKeys : [apiKeys];
+class DiscoveryCancelledError extends Error {}
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const apiKey = keys[Math.floor(Math.random() * keys.length)];
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'X-API-KEY': apiKey,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
+/** One pool per run: exhausted/invalid keys are skipped on every subsequent page. */
+export function createSerperSearcher(apiKeys: string | string[]) {
+  const keys = [...new Set((Array.isArray(apiKeys) ? apiKeys : [apiKeys]).map(key => key.trim()).filter(Boolean))];
+  if (!keys.length) throw new Error('No Serper search API keys are configured.');
+  const disabled = new Map<string, string>();
+  let nextKey = 0;
+  const unavailable = () => new Error(`All configured Serper API keys are unavailable: ${[...new Set(disabled.values())].join('; ')}. Add credits or update an available key before retrying.`);
 
-      if (res.status === 429) {
-        const wait = 10000 * Math.pow(2, attempt);
-        console.log(`[DorkEngine] Rate limited, waiting ${wait / 1000}s...`);
-        await new Promise(r => setTimeout(r, wait));
-        continue;
+  return async (query: string, page = 1, onAttempt?: () => void | Promise<void>): Promise<any[]> => {
+    let lastError = 'The search service could not be reached.';
+    for (let round = 0; round < 3; round++) {
+      if (disabled.size === keys.length) throw unavailable();
+      const order = Array.from({ length: keys.length }, (_, index) => (nextKey + index) % keys.length);
+      let retryDelay = 0;
+      for (const index of order) {
+        const key = keys[index];
+        if (disabled.has(key)) continue;
+        nextKey = (index + 1) % keys.length;
+        await onAttempt?.();
+        let response: Response;
+        let data: any;
+        try {
+          response = await fetch('https://google.serper.dev/search', {
+            method: 'POST',
+            headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ q: query, num: 10, page }),
+            signal: AbortSignal.timeout(20_000),
+          });
+          data = await response.json().catch(() => null);
+        } catch {
+          lastError = 'Serper request timed out or could not reach the search service.';
+          retryDelay = Math.max(retryDelay, 5000);
+          continue;
+        }
+        if (response.status === 200) return Array.isArray(data?.organic) ? data.organic : [];
+
+        let message = typeof data?.message === 'string' ? data.message : typeof data?.error === 'string' ? data.error : '';
+        for (const configuredKey of keys) message = message.replaceAll(configuredKey, '[redacted]');
+        message = message.replace(/[\r\n\t]/g, ' ').slice(0, 300);
+        lastError = `Serper search failed (HTTP ${response.status})${message ? ': ' + message : '.'}`;
+        const exhausted = response.status === 400 && /(?:not enough|insufficient|out of|exhausted|no remaining) credits|credits? (?:exhausted|depleted)|quota (?:exceeded|exhausted)/i.test(message);
+        if (exhausted || [401, 402, 403].includes(response.status)) {
+          disabled.set(key, lastError);
+          continue;
+        }
+        if (response.status === 429) {
+          retryDelay = Math.max(retryDelay, 10000 * Math.pow(2, round));
+          continue;
+        }
+        if (response.status >= 500) {
+          retryDelay = Math.max(retryDelay, 5000);
+          continue;
+        }
+        // A malformed request will fail for every key; surface it immediately.
+        throw new Error(`Search could not finish: ${lastError}`);
       }
-
-      if (res.status !== 200) {
-        console.error(`[DorkEngine] Serper API Error: ${res.status} - ${await res.text()}`);
-        return [];
+      if (disabled.size === keys.length) throw unavailable();
+      if (round < 2 && retryDelay) {
+        await onAttempt?.();
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
       }
-
-      const data = await res.json();
-      return data.organic || [];
-    } catch (e) {
-      console.error(`[DorkEngine] Serper Request Failed:`, e);
-      await new Promise(r => setTimeout(r, 5000));
     }
-  }
-  return [];
+    throw new Error(`Search could not finish after retries: ${lastError}`);
+  };
 }
 
 
-// ═════════════════════════════════════════════════════════════════
-//  LAYER 2: PRE-QUALIFICATION VIA GOOGLE
-//  Re-searches each candidate's LinkedIn slug to verify their
-//  headline actually matches the target niche.
-// ═════════════════════════════════════════════════════════════════
-
-async function prequalifyViaGoogle(
-  url: string,
-  apiKeys: string | string[],
-  nicheSignals: NicheSignals
-): Promise<{ url: string, passed: boolean, reason: string }> {
-  try {
-    const slugMatch = url.match(/\/in\/([\w-]+)/);
-    if (!slugMatch) return { url, passed: true, reason: 'bad_url' };
-
-    const slug = slugMatch[1];
-    const query = `site:linkedin.com/in/${slug}`;
-
-    const results = await serperSearch(query, apiKeys, 1);
-
-    if (results.length === 0) return { url, passed: true, reason: 'not_indexed' };
-
-    const googleTitle = results[0].title || '';
-    const headline = extractHeadlineFromGoogleTitle(googleTitle);
-
-    if (!headline) return { url, passed: true, reason: 'parse_failed' };
-
-    for (const phrase of nicheSignals.phrases) {
-      if (headline.includes(phrase)) return { url, passed: true, reason: `verified:${phrase}` };
-    }
-
-    for (const rw of nicheSignals.role_words) {
-      const regex = new RegExp(`\\b${rw}\\b`);
-      if (regex.test(headline)) return { url, passed: true, reason: `verified:${rw}` };
-    }
-
-    return { url, passed: false, reason: `off_niche:${headline.substring(0, 60)}` };
-  } catch (e: any) {
-    return { url, passed: true, reason: `error:${e.message.substring(0, 40)}` };
-  }
-}
+// `prequalifyViaGoogle` was deleted here.
+//
+// It re-searched every candidate's own slug — a full Serper credit each — purely
+// to re-read the headline that the original result had already returned in its
+// title tag, which `extractHeadlineFromGoogleTitle` parses for free. It also
+// failed open on every error path (`bad_url`, `not_indexed`, `parse_failed`,
+// `error:*` all returned `passed: true`), so it rejected almost nothing while
+// roughly doubling the credit cost of a run. Everything it checked, the scorer now
+// does at zero marginal cost.
 
 
 // ═════════════════════════════════════════════════════════════════
@@ -488,82 +536,167 @@ async function prequalifyViaGoogle(
 export async function runDorkEngine(
   config: SearchConfig,
   apiKeys: string | string[],
-  onProgress?: (found: number, totalQueries: number, qIdx: number, query: string) => void,
-  onLeadFound?: (url: string, location: string) => void
-): Promise<DorkResult[]> {
+  onProgress?: (p: DorkProgress) => void | Promise<void>,
+  onLeadFound?: (lead: DiscoveredLead) => void | Promise<void>,
+  shouldCancel?: () => boolean,
+): Promise<DorkRunResult> {
   const nicheSignals = extractNicheSignals(config.job_titles);
-  const negatives = (config.negative_keywords || NEGATIVE_KEYWORDS).slice(0, 8);
-  const negString = negatives.length > 0 ? ' ' + negatives.map(n => `-"${n}"`).join(' ') : '';
+  // Only terms the caller explicitly asks for go into the query string.
+  //
+  // The obvious "fix" here is to make NEGATIVE_KEYWORDS apply — it never has, since
+  // `config.negative_keywords || NEGATIVE_KEYWORDS` sees an empty array as truthy.
+  // But applying it here is a recall regression, not a fix: `-"recruiter"` against
+  // site:linkedin.com/in drops any profile whose indexed text mentions a recruiter
+  // anywhere — a coach who posted about hiring, or one with a recruiter in "People
+  // also viewed". Every term shrinks every template's reach, and the SERP is paid
+  // for either way. The blocklist is applied by the scorer instead, against the
+  // parsed headline, where it means what it is supposed to mean — this person's
+  // stated job is not our ICP — and costs nothing.
+  const queries = buildDiscoverySearchPlan(config);
+  const maxTarget = keptLeadTarget(config);
+  const maxPages = config.max_pages_per_dork ?? 4;
+  if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 10) throw new Error('Pages per search must be a whole number from 1 to 10.');
+  const minFitScore = config.min_fit_score ?? DEFAULT_MIN_FIT_SCORE;
+  if (!Number.isFinite(minFitScore) || minFitScore < 0 || minFitScore > 100) throw new Error('Minimum score must be from 0 to 100.');
+  const runId = config.run_id || `run-${Date.now()}`;
+  const serperSearch = createSerperSearcher(apiKeys);
 
-  // ── Build the full query bank ──
-  const queries: { query: string, location: string }[] = [];
-  for (const title of config.job_titles) {
-    for (const loc of config.locations) {
-      const templates = buildQueryBank(title, loc, negString);
-      for (const q of templates) {
-        queries.push({ query: q, location: loc });
-      }
-    }
-  }
+  /** url → the accepted lead, so a re-find can bump seenCount without a second write. */
+  const kept = new Map<string, DiscoveredLead>();
+  const stats: DorkRunStats = {
+    runId,
+    templates: queries.length,
+    creditsSpent: 0,
+    scored: 0,
+    kept: 0,
+    rejected: 0,
+    belowFloor: 0,
+    rejectsByReason: {},
+    cancelled: false,
+    target: maxTarget,
+    targetReached: false,
+    stopReason: 'search_exhausted',
+    queriesCompleted: 0,
+  };
 
-  // Shuffle for diversity — ensures we hit different categories
-  // even if we stop early after reaching the target
-  queries.sort(() => Math.random() - 0.5);
+  const report = async (qIdx: number, qObj: DiscoveryQuery) => { await onProgress?.({
+    found: kept.size,
+    target: maxTarget,
+    remaining: Math.max(0, maxTarget - kept.size),
+    searchPhase: qObj.searchPhase,
+    searchArea: qObj.searchArea,
+    scored: stats.scored,
+    rejected: stats.rejected + stats.belowFloor,
+    totalQueries: queries.length,
+    queryIndex: qIdx + 1,
+    query: qObj.query,
+    templateId: qObj.templateId,
+    creditsSpent: stats.creditsSpent,
+  }); };
 
-  const maxTarget = config.max_urls_target || 5000;
-  const maxPages = config.max_pages_per_dork || 20;
-  const prequalEnabled = config.prequalify !== false;
+  console.log(`[DorkEngine] ${queries.length} queries, target ${maxTarget}, maxPages ${maxPages}, fit floor ${minFitScore}`);
 
-  // Pre-compute location expansions for each location
-  const locationExpansions = new Map<string, string[]>();
-  for (const loc of config.locations) {
-    locationExpansions.set(loc, expandLocation(loc));
-  }
-
-  const allUrls = new Map<string, string>(); // url → location
-  let prequalPending = new Set<string>();
-  const pendingLocations = new Map<string, string>();
-
-  console.log(`[DorkEngine] Starting with ${queries.length} queries, target: ${maxTarget}, maxPages: ${maxPages}`);
-
+  outer:
   for (let qIdx = 0; qIdx < queries.length; qIdx++) {
     const qObj = queries[qIdx];
-
-    if (allUrls.size + prequalPending.size >= maxTarget) break;
-
-    const locVariants = locationExpansions.get(qObj.location) || [qObj.location.toLowerCase()];
+    if (kept.size >= maxTarget) break;
+    if (shouldCancel?.()) { stats.cancelled = true; break; }
 
     let queryDryPages = 0;
     for (let page = 1; page <= maxPages; page++) {
-      if (allUrls.size + prequalPending.size >= maxTarget) break;
+      if (kept.size >= maxTarget) break;
+      if (shouldCancel?.()) { stats.cancelled = true; break outer; }
 
-      const results = await serperSearch(qObj.query, apiKeys, page);
+      let results: any[];
+      try {
+        results = await serperSearch(qObj.query, page, async () => {
+          if (shouldCancel?.()) throw new DiscoveryCancelledError('Discovery stopped.');
+          await report(qIdx, qObj);
+        });
+      } catch (error) {
+        if (error instanceof DiscoveryCancelledError) { stats.cancelled = true; break outer; }
+        throw error;
+      }
+      stats.creditsSpent++;
+      stats.queriesCompleted = qIdx + 1;
 
-      if (results.length === 0) break;
+      if (results.length === 0) { await report(qIdx, qObj); break; }
 
       let newThisPage = 0;
 
-      for (const item of results) {
-        const link = item.link || '';
-        const norm = normaliseLinkedinUrl(link);
+      for (let rank = 0; rank < results.length; rank++) {
+        // The target counts kept profiles, and no extra row from this page is written after it is met.
+        if (kept.size >= maxTarget) break;
+        if (shouldCancel?.()) { stats.cancelled = true; await report(qIdx, qObj); break outer; }
+        const item = results[rank];
+        const norm = normaliseLinkedinUrl(item.link || '');
         if (!norm) continue;
 
-        const { isRelevant } = isResultRelevant(item, nicheSignals, qObj.location, locVariants);
-
-        if (isRelevant) {
-          if (!allUrls.has(norm) && !prequalPending.has(norm)) {
-            if (prequalEnabled) {
-              prequalPending.add(norm);
-              pendingLocations.set(norm, qObj.location);
-            } else {
-              allUrls.set(norm, qObj.location);
-              if (onLeadFound) onLeadFound(norm, qObj.location);
+        // A re-find is not a new lead, but it *is* evidence (weight A8): a profile
+        // several distinct dorks can reach is well indexed, which usually means an
+        // established practitioner rather than a stub.
+        //
+        // The re-score is what makes A8 reachable at all. Scoring happens on first
+        // sighting, when the count is always 1, so without this the weight could
+        // never fire. It runs once, at the 1→2 transition — A8 is a flat bonus, so
+        // later sightings change nothing and re-scoring them would be waste.
+        const already = kept.get(norm);
+        if (already) {
+          already.seenCount++;
+          if (already.seenCount === 2) {
+            const rescored = evaluateResult(item, nicheSignals, already.seenCount);
+            if (!rescored.reject && rescored.score > already.fitScore) {
+              already.fitScore = rescored.score;
+              already.fitReasons = rescored.reasons;
             }
-            newThisPage++;
           }
+          // Re-emitted so the stored seen count matches reality; the writer keeps
+          // first-touch provenance and only ever takes a higher score.
+          if (onLeadFound) await onLeadFound(already);
+          continue;
         }
+
+        stats.scored++;
+        const verdict = evaluateResult(item, nicheSignals, 1);
+
+        if (verdict.reject) {
+          stats.rejected++;
+          stats.rejectsByReason[verdict.reject] = (stats.rejectsByReason[verdict.reject] || 0) + 1;
+          continue;
+        }
+
+        // The write floor is cheap insurance against filling the table with junk,
+        // not the selectivity mechanism — that is the queue ordering, which stays
+        // re-tunable and applies retroactively to everything already scored.
+        if (verdict.score < minFitScore) {
+          stats.belowFloor++;
+          continue;
+        }
+
+        const lead: DiscoveredLead = {
+          url: norm,
+          location: qObj.location,
+          templateId: qObj.templateId,
+          query: qObj.query,
+          niche: qObj.niche,
+          page,
+          rank: rank + 1,
+          title: item.title || '',
+          snippet: item.snippet || '',
+          fitScore: verdict.score,
+          fitReasons: verdict.reasons,
+          confidence: verdict.confidence,
+          seenCount: 1,
+          runId,
+        };
+
+        if (onLeadFound) await onLeadFound(lead);
+        kept.set(norm, lead);
+        stats.kept++;
+        newThisPage++;
       }
 
+      await report(qIdx, qObj);
       if (newThisPage === 0) {
         queryDryPages++;
         if (queryDryPages >= 3) break;
@@ -571,54 +704,16 @@ export async function runDorkEngine(
         queryDryPages = 0;
       }
 
-      if (onProgress) {
-        onProgress(allUrls.size + prequalPending.size, queries.length, qIdx + 1, qObj.query);
-      }
-
-      if (page < maxPages) await new Promise(r => setTimeout(r, 500));
-    }
-
-    // Process prequal batch if large enough
-    if (prequalEnabled && prequalPending.size >= 10) {
-      const batch = Array.from(prequalPending);
-      prequalPending.clear();
-
-      const verifyResults = await Promise.all(
-        batch.map(url => prequalifyViaGoogle(url, apiKeys, nicheSignals))
-      );
-
-      for (const res of verifyResults) {
-        if (res.passed) {
-          const loc = pendingLocations.get(res.url) || 'Unknown';
-          allUrls.set(res.url, loc);
-          if (onLeadFound) onLeadFound(res.url, loc);
-        }
-      }
-
-      console.log(`[DorkEngine] Prequal batch: ${batch.length} checked, ${verifyResults.filter(r => r.passed).length} passed`);
+      if (kept.size < maxTarget && page < maxPages) await new Promise(r => setTimeout(r, 500));
     }
   }
 
-  // Final prequal batch
-  if (prequalPending.size > 0) {
-    const batch = Array.from(prequalPending);
-    prequalPending.clear();
-    const verifyResults = await Promise.all(
-      batch.map(url => prequalifyViaGoogle(url, apiKeys, nicheSignals))
-    );
-    for (const res of verifyResults) {
-      if (res.passed) {
-        const loc = pendingLocations.get(res.url) || 'Unknown';
-        allUrls.set(res.url, loc);
-        if (onLeadFound) onLeadFound(res.url, loc);
-      }
-    }
-    console.log(`[DorkEngine] Final prequal: ${batch.length} checked, ${verifyResults.filter(r => r.passed).length} passed`);
-  }
+  stats.targetReached = kept.size >= maxTarget;
+  stats.stopReason = stats.targetReached ? 'target_reached' : stats.cancelled ? 'cancelled' : 'search_exhausted';
+  console.log(
+    `[DorkEngine] Done. Scored ${stats.scored}, kept ${stats.kept}, ` +
+    `rejected ${stats.rejected} (+${stats.belowFloor} below floor), ${stats.creditsSpent} credits.`,
+  );
 
-  console.log(`[DorkEngine] Complete. Found ${allUrls.size} unique leads.`);
-
-  return Array.from(allUrls.entries())
-    .map(([url, location]) => ({ url, location }))
-    .slice(0, maxTarget);
+  return { leads: [...kept.values()], stats };
 }

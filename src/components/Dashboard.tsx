@@ -1,20 +1,14 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import React, { useState, useEffect, useCallback } from "react";
 import {
-    Activity,
     Upload,
     FileText,
     Search,
-    Mail,
-    CheckCircle,
-    AlertCircle,
     Download,
-    BarChart3,
-    Signal,
     Globe,
     ExternalLink,
-    XCircle,
     Loader2,
     Pause,
     Play,
@@ -28,18 +22,27 @@ import {
     Database,
     StopCircle,
     ShieldCheck,
-    ShieldX,
-    ShieldAlert,
-    ShieldQuestion,
     Zap,
     Server,
-    AtSign,
-    Ban,
-    UserX,
     Radar,
+    CalendarDays,
+    ScanSearch,
+    ClipboardCheck,
+    WandSparkles,
+    PenLine,
+    MessagesSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { failureOf } from "@/lib/worker-failure.cjs";
 import CrmDatabase from "./CrmDatabase";
+import BusinessWorkspace from "./business/BusinessWorkspace";
+import CaseStudyHunter from "./business/CaseStudyHunter";
+import DiscoveryCallsWorkspace from "./business/DiscoveryCallsWorkspace";
+import FunnelAnalyzer from "./FunnelAnalyzer";
+import ContentCreate from "./content-create/ContentCreate";
+const CopyStudio = dynamic(() => import("./copy-studio/App"), { ssr: false, loading: () => <div className="panel panel-body text-dim">Loading Copy Studio…</div> });
+
+import type { BusinessView } from '@/lib/business';
 
 import {
     saveProgress,
@@ -47,12 +50,12 @@ import {
     listSavedRuns,
     loadSavedRun,
     deleteSavedRun,
-    exportResultsCSV,
     type Lead,
     type SavedRun,
 } from "@/app/actions/scraper-actions";
 import { scrapeWebsiteEmails, type WebsiteScrapeResult } from "@/app/actions/scraper-actions";
-import { verifyEmail, verifyEmailBatchFast, type VerificationResult } from "@/app/actions/email-verifier-actions";
+import { getVerificationReadiness, verifyEmailBatchFast, type VerificationResult } from "@/app/actions/email-verifier-actions";
+import VerificationProviderStatus from '@/components/VerificationProviderStatus';
 
 // ── Worker API helper: submit job & poll until done ──
 async function processLeadViaWorker(linkedinUrl: string): Promise<Lead> {
@@ -82,6 +85,7 @@ async function processLeadViaWorker(linkedinUrl: string): Promise<Lead> {
                 websites: r.websites || [],
                 emails: r.emails || [],
                 logs: r.logs || [],
+                prospectQualification: r.prospectQualification,
             };
         }
         if (data.status === 'not_found' || data.status === 'error') {
@@ -93,6 +97,7 @@ async function processLeadViaWorker(linkedinUrl: string): Promise<Lead> {
 import { exportToGoogleSheets, isGoogleSheetsConfigured } from "@/app/actions/google-sheets";
 import UrlCleaner from "./UrlCleaner";
 import FinderEngine from "./FinderEngine";
+import LinkedInAccounts from "./LinkedInAccounts";
 
 import Papa from 'papaparse';
 
@@ -102,22 +107,23 @@ let toastId = 0;
 
 function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: number) => void }) {
     return (
-        <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 max-w-sm">
+        <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 w-[min(24rem,calc(100vw-2.5rem))]">
             {toasts.map(t => (
                 <div
                     key={t.id}
-                    className={cn(
-                        "flex items-center gap-3 px-4 py-3 rounded-xl border shadow-2xl backdrop-blur-sm animate-in slide-in-from-right fade-in duration-300",
-                        t.type === 'success' && "bg-accent/10 border-accent/30 text-accent",
-                        t.type === 'error' && "bg-red-500/10 border-red-500/30 text-red-400",
-                        t.type === 'info' && "bg-blue-500/10 border-blue-500/30 text-blue-400",
-                    )}
+                    className="panel flex items-start gap-2.5 px-3.5 py-2.5 shadow-[0_14px_40px_rgba(0,0,0,0.6)] animate-in slide-in-from-right-2 fade-in duration-200"
                 >
-                    {t.type === 'success' && <CheckCircle className="w-4 h-4 flex-shrink-0" />}
-                    {t.type === 'error' && <XCircle className="w-4 h-4 flex-shrink-0" />}
-                    {t.type === 'info' && <AlertCircle className="w-4 h-4 flex-shrink-0" />}
-                    <span className="text-sm flex-1">{t.message}</span>
-                    <button onClick={() => onDismiss(t.id)} className="text-zinc-500 hover:text-white flex-shrink-0">
+                    <span
+                        className={cn(
+                            "mt-[6px] w-1.5 h-1.5 rounded-[1px] flex-none",
+                            t.type === 'success' && "bg-[var(--signal)]",
+                            t.type === 'error' && "bg-[var(--bad)]",
+                            t.type === 'info' && "bg-[var(--text-faint)]",
+                        )}
+                        aria-hidden
+                    />
+                    <span className="text-[13px] flex-1 leading-snug text-[var(--text)]">{t.message}</span>
+                    <button onClick={() => onDismiss(t.id)} className="btn btn-ghost !p-1 -mr-1 -mt-0.5" aria-label="Dismiss">
                         <X className="w-3 h-3" />
                     </button>
                 </div>
@@ -132,27 +138,162 @@ function ConfirmDialog({ open, message, onConfirm, onCancel }: {
 }) {
     if (!open) return null;
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-[#111] border border-zinc-800 rounded-2xl p-6 max-w-sm mx-4 shadow-2xl animate-in zoom-in-95 duration-200">
-                <p className="text-white mb-6">{message}</p>
-                <div className="flex gap-3 justify-end">
-                    <button onClick={onCancel} className="px-4 py-2 rounded-xl bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-all">
-                        Cancel
-                    </button>
-                    <button onClick={onConfirm} className="px-4 py-2 rounded-xl bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-all">
-                        Delete
-                    </button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 animate-in fade-in duration-150">
+            <div className="panel p-5 max-w-sm w-full shadow-[0_24px_60px_rgba(0,0,0,0.7)]">
+                <p className="text-[var(--text)] text-sm leading-relaxed mb-5">{message}</p>
+                <div className="flex gap-2 justify-end">
+                    <button onClick={onCancel} className="btn btn-outline">Cancel</button>
+                    <button onClick={onConfirm} className="btn btn-danger">Delete</button>
                 </div>
             </div>
         </div>
     );
 }
 
+/**
+ * A scrape outcome, said in words rather than in the enum the worker stores.
+ * ACTIVITY_FAILED in particular does not mean anything went wrong — the person
+ * simply hasn't posted recently — and reading it as a failure is what made the
+ * old orange "Activity Failed" tile look like something to go and fix.
+ */
+const LEAD_STATUS: Record<string, { label: string; mark: string }> = {
+    QUALIFIED: { label: 'Qualified', mark: 'mark-ok' },
+    INVESTIGATE: { label: 'Not qualified', mark: 'mark-idle' },
+    NURTURE: { label: 'Not qualified', mark: 'mark-idle' },
+    REJECTED: { label: 'Not qualified', mark: 'mark-idle' },
+    ACTIVITY_FAILED: { label: 'Activity unknown', mark: 'mark-warn' },
+    ACTIVE_NO_CONTACT: { label: 'Contact needs review', mark: 'mark-warn' },
+    SCANNING: { label: 'Scanning', mark: 'mark-info' },
+    PENDING: { label: 'Waiting', mark: 'mark-idle' },
+    ERROR: { label: 'Failed', mark: 'mark-bad' },
+};
+
+function LeadStatusMark({ status, researched }: { status: string; researched: boolean }) {
+    const s = LEAD_STATUS[status] ?? { label: status, mark: 'mark-idle' };
+    return <span className={cn("mark", s.mark)}>{s.label}</span>;
+}
+
+/**
+ * A verification verdict, named for what it tells you about sending.
+ *
+ * The distinction that has to survive the rename: an UNKNOWN caused by the
+ * recipient's server refusing *this machine* is not a fact about the lead. The
+ * probe never reached the point of asking about the mailbox. Styling that like
+ * a dead address is how a few hundred live addresses came to look spent, so it
+ * says so plainly and never takes the failure colour.
+ */
+function VerifyMark({ result }: { result: VerificationResult }) {
+    if (result.error) return <span className="mark mark-warn">Check failed</span>;
+    if (result.status === 'VALID') return <span className="mark mark-ok">Safe to send</span>;
+    if (result.status === 'INVALID') return <span className="mark mark-bad">No mailbox</span>;
+    if (result.status === 'RISKY') {
+        return (
+            <span
+                className="mark mark-warn"
+                title={result.checks.catchAll
+                    ? 'This domain accepts mail to any address, so being accepted proves nothing about this one'
+                    : 'Accepted, but the address could not be shown to be real'}
+            >
+                {result.checks.catchAll ? 'Catch-all' : 'Unproven'}
+            </span>
+        );
+    }
+    if (/refused our probe/i.test(result.reason || '')) {
+        return (
+            <span
+                className="mark mark-idle"
+                title="The recipient's server refused this computer before it would answer. That is a verdict about us, not about whether the mailbox exists."
+            >
+                Host refused us
+            </span>
+        );
+    }
+    return <span className="mark mark-idle">No answer</span>;
+}
+
+/** The profile slug, which is the only part of a LinkedIn URL worth reading. */
+function slugOf(url: string): string {
+    return url?.match(/linkedin\.com\/in\/([^\/?#]+)/)?.[1] || url || 'unknown profile';
+}
+
+/** One line describing what happened to a profile, for the activity feed. */
+function describeLead(l: any): string {
+    const who = l.firstName || slugOf(l.url);
+    const emails: string[] = l.emails || [];
+    const status = LEAD_STATUS[l.status]?.label ?? l.status;
+
+    if (l.status === 'QUALIFIED') {
+        return emails.length > 0
+            ? `${who} — qualified, ${emails[0]}${emails.length > 1 ? ` and ${emails.length - 1} more` : ''}`
+            : `${who} — qualified, no address found`;
+    }
+    if (l.status === 'ACTIVITY_FAILED') return `${who} — activity unknown; business research needed`;
+    if (l.status === 'ERROR') return `${who} — ${failureOf(l).reason}`;
+    if (l.status === 'REJECTED' && l.prospectQualification?.nextAction) return `${who} — ${l.prospectQualification.nextAction}`;
+    return `${who} — ${String(status).toLowerCase()}`;
+}
+
+type TabId = 'engine' | 'cleaner' | 'hunter' | 'unbouncer' | 'finder' | 'crm' | 'case-study' | 'discovery' | 'funnel' | 'content-create' | 'copy-studio' | BusinessView;
+
+type NavItem = { id: TabId; label: string; icon: typeof Radar; signal?: boolean };
+
+/**
+ * The rail, split by what the section is for. Pipeline is the daily path a lead
+ * travels — find it, scrape it, work it. Tools are the one-off utilities that
+ * happen to live in the same app and were previously indistinguishable from it.
+ */
+const NAV_SECTIONS: { workspace: NavItem[]; pipeline: NavItem[]; tools: NavItem[] } = {
+    workspace: [
+        { id: 'today', label: 'Overview', icon: CalendarDays },
+        { id: 'case-study', label: 'Case Study Hunter', icon: ScanSearch, signal: true },
+        { id: 'discovery', label: 'Discovery Calls', icon: MessagesSquare },
+        { id: 'onboarding', label: 'Onboarding', icon: ClipboardCheck },
+        { id: 'content-create', label: 'Create', icon: WandSparkles },
+        { id: 'copy-studio', label: 'Copy Studio', icon: PenLine },
+    ],
+    pipeline: [
+        { id: 'finder', label: 'Finder', icon: Radar },
+        { id: 'engine', label: 'Engine', icon: Zap },
+        { id: 'crm', label: 'Leads', icon: Database, signal: true },
+    ],
+    tools: [
+        { id: 'funnel', label: 'Funnel Analyzer', icon: ScanSearch },
+        { id: 'unbouncer', label: 'Verify email', icon: ShieldCheck },
+        { id: 'hunter', label: 'Find email', icon: Globe },
+        { id: 'cleaner', label: 'Clean URLs', icon: FileText },
+    ],
+};
+
+/** What each screen is called, and one line on what it does. */
+const SCREENS: Record<TabId, { title: string; sub: string }> = {
+    today: { title: 'Overview', sub: 'Your pipeline and onboarding, at a glance' },
+    onboarding: { title: 'Onboarding', sub: 'Move accepted clients from agreement to ready-to-build' },
+    discovery: { title: 'Discovery Calls', sub: 'Prepare the conversation, capture answers, and agree on the next step' },
+    'case-study': { title: 'Case Study Hunter', sub: 'Find warm coaches, collect their websites, and manage LinkedIn outreach' },
+    'content-create': { title: 'Create', sub: 'AI ideas and posts shaped by your voice' },
+    'copy-studio': { title: 'Copy Studio', sub: 'Turn your offer into a landing page that gives people a reason to act' },
+    funnel: { title: 'Funnel Analyzer', sub: 'Find landing-page conversion killers and plan the rebuild' },
+    engine: { title: 'Engine', sub: 'Scrapes LinkedIn profiles and finds their contact details' },
+    finder: { title: 'Finder', sub: 'Searches Google for profiles matching a niche and location' },
+    crm: { title: 'Leads', sub: 'Everything found so far, and who is ready to email' },
+    unbouncer: { title: 'Verify email', sub: 'Checks whether an address accepts mail before you send to it' },
+    hunter: { title: 'Find email', sub: 'Pulls addresses off a list of websites — no LinkedIn needed' },
+    cleaner: { title: 'Clean URLs', sub: 'Normalises a messy list of LinkedIn links' },
+};
+
 export default function Dashboard() {
-    const [activeTab, setActiveTab] = useState<'engine' | 'cleaner' | 'hunter' | 'unbouncer' | 'finder' | 'crm'>('engine');
+    const [activeTab, setActiveTab] = useState<TabId>('today');
+    const [onboardingProjectId, setOnboardingProjectId] = useState<string | undefined>();
+    const [copyStudioOpened, setCopyStudioOpened] = useState(false);
+    useEffect(() => { if (activeTab === 'copy-studio') setCopyStudioOpened(true); }, [activeTab]);
+    const [contentCreateOpened, setContentCreateOpened] = useState(false);
+    useEffect(() => { if (activeTab === 'content-create') setContentCreateOpened(true); }, [activeTab]);
+    const [caseStudyEntryView, setCaseStudyEntryView] = useState<'TODAY' | 'CRM_OUTREACH'>('TODAY');
     const [progress, setProgress] = useState(0);
     const [isProcessing, setIsProcessing] = useState(false);
-    const [rowLimit, setRowLimit] = useState(100);
+    // (A "Row Limit" input used to sit on this screen. It was never read by any
+    // handler — the batch always queued every loaded URL — so it was a control
+    // that promised something the app didn't do. Removed with its state.)
     const [csvUrls, setCsvUrls] = useState<string[]>([]);
     const [leads, setLeads] = useState<Lead[]>([]);
     const [logs, setLogs] = useState<{ msg: string, time: string, type: 'info' | 'success' | 'error', isJson?: boolean }[]>([]);
@@ -190,6 +331,7 @@ export default function Dashboard() {
 
     // ── Live Queue State ──
     const [queueSize, setQueueSize] = useState<number>(0);
+    const [retryingFailed, setRetryingFailed] = useState(false);
     const [workerStatus, setWorkerStatus] = useState<any>(null);
     const [dailyStats, setDailyStats] = useState<{ date: string; count: number; limit: number }>({ date: '', count: 0, limit: 0 });
 
@@ -212,15 +354,19 @@ export default function Dashboard() {
                         // Extract only valid results (sometimes recentResults has status wrappers)
                         const extractedLeads = data.recentResults.map((r: any) => r.result ? r.result : r);
                         setLeads(extractedLeads);
-                        
-                        // Let's also set logs nicely using the JSON strings
-                        const niceLogs = extractedLeads.map((l: any) => ({
-                            msg: JSON.stringify(l, null, 2),
-                            time: new Date().toLocaleTimeString(),
-                            type: l.status === 'QUALIFIED' ? 'success' as const : 'info' as const,
-                            isJson: true
+
+                        // One readable sentence per result. This used to be
+                        // JSON.stringify of the whole lead, which put a 30-line
+                        // pretty-printed blob in the feed for every profile —
+                        // the same data the results table below already shows,
+                        // in the least readable form available.
+                        const niceLogs = extractedLeads.map((l: any, index: number) => ({
+                            msg: describeLead(l),
+                            time: data.recentResults[index].completedAt ? new Date(data.recentResults[index].completedAt).toLocaleTimeString() : 'Time unavailable',
+                            type: l.status === 'QUALIFIED' ? 'success' as const
+                                : l.status === 'ERROR' ? 'error' as const
+                                    : 'info' as const,
                         }));
-                        // Just show the latest 50 logs matching the recent results
                         setLogs(niceLogs.reverse()); // Reverse so newest is at the bottom if we scroll down
                     }
                 }
@@ -247,16 +393,16 @@ export default function Dashboard() {
     // ── Restore state from sessionStorage on mount ──
     useEffect(() => {
         try {
-            const savedLeads = sessionStorage.getItem('revlane_leads');
-            const savedUrls = sessionStorage.getItem('revlane_urls');
-            const savedProgress = sessionStorage.getItem('revlane_progress');
+            const savedLeads = sessionStorage.getItem('compel_leads');
+            const savedUrls = sessionStorage.getItem('compel_urls');
+            const savedProgress = sessionStorage.getItem('compel_progress');
             if (savedLeads) setLeads(JSON.parse(savedLeads));
             if (savedUrls) setCsvUrls(JSON.parse(savedUrls));
             if (savedProgress) setProgress(parseInt(savedProgress));
 
             // Restore unbouncer results
-            const savedUnbouncer = sessionStorage.getItem('revlane_unbouncer_results');
-            const savedUnbouncerInput = sessionStorage.getItem('revlane_unbouncer_input');
+            const savedUnbouncer = sessionStorage.getItem('compel_unbouncer_results');
+            const savedUnbouncerInput = sessionStorage.getItem('compel_unbouncer_input');
             if (savedUnbouncer) {
                 const parsed = JSON.parse(savedUnbouncer);
                 setUnbouncerResults(parsed);
@@ -273,9 +419,9 @@ export default function Dashboard() {
     // ── Persist state to sessionStorage ──
     useEffect(() => {
         try {
-            if (leads.length > 0) sessionStorage.setItem('revlane_leads', JSON.stringify(leads));
-            if (csvUrls.length > 0) sessionStorage.setItem('revlane_urls', JSON.stringify(csvUrls));
-            sessionStorage.setItem('revlane_progress', String(progress));
+            if (leads.length > 0) sessionStorage.setItem('compel_leads', JSON.stringify(leads));
+            if (csvUrls.length > 0) sessionStorage.setItem('compel_urls', JSON.stringify(csvUrls));
+            sessionStorage.setItem('compel_progress', String(progress));
         } catch { /* ignore */ }
     }, [leads, csvUrls, progress]);
 
@@ -283,10 +429,10 @@ export default function Dashboard() {
     useEffect(() => {
         try {
             if (unbouncerResults.length > 0) {
-                sessionStorage.setItem('revlane_unbouncer_results', JSON.stringify(unbouncerResults));
+                sessionStorage.setItem('compel_unbouncer_results', JSON.stringify(unbouncerResults));
             }
             if (unbouncerInput.length > 0) {
-                sessionStorage.setItem('revlane_unbouncer_input', unbouncerInput);
+                sessionStorage.setItem('compel_unbouncer_input', unbouncerInput);
             }
         } catch { /* ignore */ }
     }, [unbouncerResults, unbouncerInput]);
@@ -331,18 +477,34 @@ export default function Dashboard() {
     };
 
     const SAVE_INTERVAL = 10;
+
+    /**
+     * How many ranked leads one "fetch pending" pulls. Matches the worker's
+     * DEFAULT_DAILY_SCRAPE_LIMIT, so a batch is about a day of LinkedIn budget —
+     * queueing more than that just fixes tomorrow's ordering to today's scores.
+     */
+    const QUEUE_BATCH_SIZE = Math.max(400, dailyStats.limit);
     
     const handleFetchPendingLeads = async (location: string, autoStart: boolean = false) => {
         try {
             setLogs(prev => [...prev, { msg: `Fetching pending (${location}) leads from CRM...`, time: new Date().toLocaleTimeString(), type: 'info' }]);
             addToast(`Fetching pending ${location} leads...`, 'info');
-            const res = await fetch(`/api/crm/leads/${location}`);
+            // Ranked by fit score, best first, capped at roughly a day of worker
+            // budget. Pulling the whole inbox only ever queued the same work in a
+            // worse order — see the queue-ordering note in the route.
+            const res = await fetch(`/api/crm/leads/${location}?limit=${QUEUE_BATCH_SIZE}`);
             if (res.ok) {
                 const data = await res.json();
-                if (data && data.length > 0) {
-                    const urls = data.map((lead: any) => lead.linkedin_url).filter(Boolean);
+                const rows = Array.isArray(data) ? data : (data?.leads ?? []);
+                if (rows.length > 0) {
+                    const urls = rows.map((lead: any) => lead.linkedin_url).filter(Boolean);
+                    const total = data?.total ?? urls.length;
+                    const scored = data?.scored ?? 0;
                     setCsvUrls(urls);
-                    setLogs(prev => [...prev, { msg: `Found ${urls.length} pending leads in CRM.`, time: new Date().toLocaleTimeString(), type: 'success' }]);
+                    const detail = total > urls.length
+                        ? `Loaded top ${urls.length} of ${total} pending (${scored} scored), best fit first.`
+                        : `Found ${urls.length} pending leads in CRM (${scored} scored).`;
+                    setLogs(prev => [...prev, { msg: detail, time: new Date().toLocaleTimeString(), type: 'success' }]);
                     addToast(`Loaded ${urls.length} leads`, 'success');
                     if (autoStart) {
                         setTimeout(() => {
@@ -380,7 +542,8 @@ export default function Dashboard() {
             addToast('Could not check worker status — proceeding anyway.', 'info');
         }
 
-        const urlsToProcess = targetUrls;
+        const urlsToProcess = targetUrls.slice(Math.max(0,resumeFrom));
+        if (!urlsToProcess.length) { addToast('This saved list is already complete.', 'info'); return; }
 
         setLogs(prev => [...prev, {
             msg: `Engine Ignition: Sending ${urlsToProcess.length} leads to background queue (Region: ${targetRegion})...`,
@@ -397,9 +560,12 @@ export default function Dashboard() {
             if (!res.ok) throw new Error("Failed to queue batch");
 
             const data = await res.json();
-            addToast(`Successfully queued ${data.queuedCount} jobs`, 'success');
-            setBatchInfo(`Processing ${data.queuedCount} leads via Worker`);
-            setIsProcessing(true);
+            const skipped = data.skipped?.length || 0;
+            const summary = `Queued ${data.queuedCount} profiles${skipped ? `; skipped ${skipped} already queued, completed today, or invalid` : ''}.`;
+            addToast(summary, data.queuedCount ? 'success' : 'info');
+            setLogs(prev => [...prev,{msg:summary,time:new Date().toLocaleTimeString(),type:'info'}]);
+            setBatchInfo(summary);
+            if (data.queuedCount > 0) setIsProcessing(true);
         } catch (error: any) {
             addToast(`Error queueing jobs: ${error.message}`, 'error');
             setLogs(prev => [...prev, { msg: `Error: ${error.message}`, time: new Date().toLocaleTimeString(), type: 'error' }]);
@@ -450,93 +616,15 @@ export default function Dashboard() {
     };
 
     const handleRetryFailed = async () => {
-        let failedLeads = leads.filter(l => l.status === 'ACTIVITY_FAILED');
-
-        // If no failed leads in current session, pull from saved progress
-        if (failedLeads.length === 0) {
-            const saved = await loadProgress();
-            if (saved && saved.leads.length > 0) {
-                const savedFailed = saved.leads.filter(l => l.status === 'ACTIVITY_FAILED');
-                if (savedFailed.length > 0) {
-                    failedLeads = savedFailed;
-                    // Load ALL saved leads into the UI so results table shows them
-                    setLeads(saved.leads);
-                    addToast(`Loaded ${savedFailed.length} failed lead(s) from saved progress`, 'info');
-                    // Give React a tick to render the loaded leads
-                    await new Promise(r => setTimeout(r, 100));
-                }
-            }
-        }
-
-        if (failedLeads.length === 0) {
-            addToast('No failed leads to retry.', 'info');
-            return;
-        }
-
-        setIsProcessing(true);
-        setProgress(0);
-        setLogs(prev => [...prev, {
-            msg: `🔄 Retrying ${failedLeads.length} failed lead(s)...`,
-            time: new Date().toLocaleTimeString(), type: 'info'
-        }]);
-
-        let retried = 0;
-
-        for (const failedLead of failedLeads) {
-            // Check cancel flag
-            if (isCancelledRef.current) {
-                setLogs(prev => [...prev, { msg: `🛑 Retry cancelled at ${retried}/${failedLeads.length}.`, time: new Date().toLocaleTimeString(), type: 'info' }]);
-                addToast(`Retry cancelled. ${retried} lead(s) re-processed.`, 'info');
-                break;
-            }
-
-            retried++;
-            setLogs(prev => [...prev, {
-                msg: `[Retry ${retried}/${failedLeads.length}] Re-processing ${failedLead.url}...`,
-                time: new Date().toLocaleTimeString(), type: 'info'
-            }]);
-
-            try {
-                const result = await processLeadViaWorker(failedLead.url);
-
-                // Use functional update so we always work with latest state
-                setLeads(prev => {
-                    const updated = [...prev];
-                    const idx = updated.findIndex(l => l.url === failedLead.url);
-                    if (idx !== -1) updated[idx] = result;
-                    else updated.push(result);
-                    return updated;
-                });
-
-                const newLogs = result.logs.map(logMsg => ({
-                    msg: logMsg,
-                    time: new Date().toLocaleTimeString(),
-                    type: result.status === 'QUALIFIED' ? 'success' as const : 'info' as const
-                }));
-                setLogs(prev => [...prev, ...newLogs]);
-            } catch (error) {
-                setLogs(prev => [...prev, {
-                    msg: `Retry failed for ${failedLead.url}: ${error}`,
-                    time: new Date().toLocaleTimeString(), type: 'info'
-                }]);
-            }
-
-            setProgress(Math.round((retried / failedLeads.length) * 100));
-
-            // Rate limiting between retries
-            if (retried < failedLeads.length) {
-                await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 2000));
-            }
-        }
-
-        // Get final leads state for saving
-        setLeads(prev => {
-            saveProgress(prev, prev.length, prev.length);
-            return prev;
-        });
-        setIsProcessing(false);
-        setProgress(100);
-        addToast(`Retry complete. ${retried} lead(s) re-processed.`, 'success');
+        setRetryingFailed(true);
+        try {
+            const response = await fetch('/api/queue-batch', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'retry_failed'})});
+            const data = await response.json();
+            if(!response.ok) throw new Error(data.error || 'Could not schedule recovery.');
+            addToast(data.queuedCount ? `Recovery queued for ${data.queuedCount} failed profiles; ${data.researchOnly} use their saved scrape.` : 'No failed profiles available to retry.', data.queuedCount ? 'success' : 'info');
+            if(data.queuedCount) {setQueueSize(n=>n+data.queuedCount);setIsProcessing(true);}
+        } catch(error) {addToast(error instanceof Error ? error.message : 'Could not schedule recovery.', 'error');}
+        finally {setRetryingFailed(false);}
     };
 
     const handleClearQueue = async () => {
@@ -576,7 +664,7 @@ export default function Dashboard() {
         const a = document.createElement('a');
         a.setAttribute('hidden', '');
         a.setAttribute('href', url);
-        a.setAttribute('download', `Revlane_Leads_${new Date().toISOString().slice(0, 10)}.csv`);
+        a.setAttribute('download', `Compel_Leads_${new Date().toISOString().slice(0, 10)}.csv`);
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -650,9 +738,71 @@ export default function Dashboard() {
     // Dynamic Stats Calculations
     const currentLeads = Array.isArray(leads) ? leads : [];
     const qualifiedCount = currentLeads.filter(l => l.status === 'QUALIFIED').length;
-    const activityFailedCount = currentLeads.filter(l => l.status === 'ACTIVITY_FAILED').length;
+    const activityFailedCount = currentLeads.filter(l => l.status === 'ERROR').length;
     const emailsFound = currentLeads.reduce((acc, curr) => acc + (curr.emails?.length || 0), 0);
-    const efficiency = currentLeads.length > 0 ? Math.round((qualifiedCount / currentLeads.length) * 100) : 0;
+    const withEmail = currentLeads.filter(l => (l.emails?.length || 0) > 0).length;
+
+    const screen = SCREENS[activeTab];
+
+    // ── Worker readout ──
+    // The API combines the saved daily budget with persisted CRM decisions.
+    const doneToday = workerStatus?.dailyCount ?? dailyStats.count ?? 0;
+    const dailyLimit = workerStatus?.dailyLimit || dailyStats.limit || 0;
+    const qualifiedToday = workerStatus?.dailyQualified ?? 0;
+    const rejectedToday = workerStatus?.dailyRejected ?? 0;
+    const failedToday = workerStatus?.dailyErrors ?? 0;
+    const reviewedToday = (workerStatus?.dailyReview ?? 0) + (workerStatus?.dailyNurture ?? 0);
+    const judgedToday = workerStatus?.dailyCompleted ?? qualifiedToday + rejectedToday + reviewedToday + failedToday;
+    const passRate = judgedToday > 0 ? Math.round((qualifiedToday / judgedToday) * 100) : null;
+    const budgetPct = dailyLimit > 0 ? Math.min(100, Math.round(((workerStatus?.dailyBudgetCount ?? doneToday) / dailyLimit) * 100)) : 0;
+    const perHour = workerStatus?.ratePerHour ?? (workerStatus?.avgJobDurationMs
+        ? Math.round(3600000 / workerStatus.avgJobDurationMs)
+        : null);
+
+    // "Offline" and "idle" look identical in a status file — the difference is
+    // whether the heartbeat is still being written. Say which one it is.
+    const workerState: 'running' | 'paused' | 'idle' | 'offline' =
+        workerStatus?.stale || !workerStatus ? 'offline'
+            : workerStatus.status === 'processing' ? 'running'
+                : workerStatus.status === 'paused' ? 'paused'
+                    : 'idle';
+    const workerLabel = {
+        running: 'Worker running',
+        paused: 'Worker paused',
+        idle: 'Worker idle',
+        offline: 'Worker offline',
+    }[workerState];
+    const workerDot = {
+        running: '',
+        paused: 'dot-warn',
+        idle: 'dot-idle',
+        offline: 'dot-bad',
+    }[workerState];
+
+    // ── Tool readouts ──
+    const hunterUrlCount = hunterUrls
+        .split('\n')
+        .filter(u => { const t = u.trim(); return t.length > 3 && !t.startsWith('#'); })
+        .length;
+
+    const unbouncerDetected = new Set(
+        unbouncerInput
+            .split('\n')
+            .map(e => e.trim().toLowerCase())
+            .filter(e => e.length > 3 && e.includes('@')),
+    ).size;
+
+    const verifyCounts = {
+        VALID: unbouncerResults.filter(r => r.status === 'VALID').length,
+        RISKY: unbouncerResults.filter(r => r.status === 'RISKY').length,
+        UNKNOWN: unbouncerResults.filter(r => r.status === 'UNKNOWN').length,
+        INVALID: unbouncerResults.filter(r => r.status === 'INVALID').length,
+    };
+    // How much of "no answer" is actually about this machine rather than the
+    // addresses. Without it the unknown pile reads as a pile of dead leads.
+    const hostRefusedCount = unbouncerResults.filter(
+        r => r.status === 'UNKNOWN' && /refused our probe/i.test(r.reason || ''),
+    ).length;
 
     // ── Email Hunter handlers ──
     const handleHunterCancel = () => {
@@ -776,12 +926,23 @@ export default function Dashboard() {
             .map(e => e.trim().toLowerCase())
             .filter(e => e.length > 3 && e.includes('@'));
 
-        // Deduplicate emails to avoid wasting SMTP connections
+        // Deduplicate emails to avoid spending credits on repeated addresses.
         const emails = [...new Set(rawEmails)];
         const dupeCount = rawEmails.length - emails.length;
 
         if (emails.length === 0) {
             addToast('Paste some emails first (one per line) or upload a CSV.', 'error');
+            return;
+        }
+
+        try {
+            const readiness = await getVerificationReadiness();
+            if (!readiness.ready) {
+                addToast(readiness.message, 'error');
+                return;
+            }
+        } catch {
+            addToast('Could not connect to the verifier. Reload and try again.', 'error');
             return;
         }
 
@@ -796,7 +957,8 @@ export default function Dashboard() {
         setUnbouncerTotal(emails.length);
 
         const allResults: VerificationResult[] = [];
-        const BATCH_SIZE = 100; // Process 100 emails per server call
+        const BATCH_SIZE = 5; // Small batches keep progress and credit balances current.
+        let requestFailed = false;
 
         for (let i = 0; i < emails.length; i += BATCH_SIZE) {
             if (unbouncerCancelledRef.current) {
@@ -804,56 +966,40 @@ export default function Dashboard() {
                 break;
             }
 
-            const batch = emails.slice(i, i + BATCH_SIZE);
+                const batch = emails.slice(i, i + BATCH_SIZE);
+                const batchPayload = batch.map(address => ({
+                    address,
+                    source: unbouncerSourceMap[address],
+                }));
             const batchNum = Math.floor(i / BATCH_SIZE) + 1;
             const totalBatches = Math.ceil(emails.length / BATCH_SIZE);
 
             try {
                 addToast(`Processing batch ${batchNum}/${totalBatches} (${batch.length} emails)...`, 'info');
                 
-                const batchPromise = verifyEmailBatchFast(batch);
-                const cancelPromise = new Promise((_, reject) => {
-                    const int = setInterval(() => {
-                        if (unbouncerCancelledRef.current) {
-                            clearInterval(int);
-                            reject(new Error("CANCELLED"));
-                        }
-                    }, 500);
-                });
-                
-                const batchResults = await Promise.race([batchPromise, cancelPromise]) as VerificationResult[];
+                // Server Actions cannot cancel a running provider call. Finish
+                // the current bounded batch, then honour cancellation before the next.
+                const batchResults = await verifyEmailBatchFast(batchPayload);
                 allResults.push(...batchResults);
-            } catch (err: any) {
-                if (err.message === "CANCELLED") {
-                    break;
+                if (batchResults.some(result => result.stopRun)) {
+                    requestFailed = true;
+                    addToast(batchResults.find(result => result.error)?.reason || 'Verification stopped. Retry later.', 'error');
                 }
-                // If the batch call fails, fall back to individual verification
-                console.error(`Batch ${batchNum} failed, falling back to individual:`, err);
-                for (const email of batch) {
-                    if (unbouncerCancelledRef.current) break;
-                    try {
-                        const result = await verifyEmail(email);
-                        allResults.push(result);
-                    } catch {
-                        allResults.push({
-                            email,
-                            status: 'UNKNOWN',
-                            score: 0,
-                            checks: { syntax: false, mxRecord: false, disposable: false, roleAccount: false, freeProvider: false, smtpValid: null, catchAll: null },
-                            reason: 'Verification failed',
-                        });
-                    }
-                }
+            } catch {
+                // An automatic retry could charge twice for a partially completed request.
+                requestFailed = true;
+                addToast('Verification request failed. Completed results are preserved; retry the remaining addresses.', 'error');
             }
 
             // Update UI once per batch (not per email)
             setUnbouncerResults([...allResults]);
             setUnbouncerProgress(Math.min(allResults.length, emails.length));
+            if (requestFailed) break;
         }
 
         setUnbouncerProcessing(false);
         const validCount = allResults.filter(r => r.status === 'VALID').length;
-        addToast(`Done! ${validCount} valid out of ${allResults.length} emails verified.`, 'success');
+        if (!requestFailed && !unbouncerCancelledRef.current) addToast(`Done! ${validCount} safe to send out of ${allResults.length} emails checked.`, 'success');
     };
 
     const handleUnbouncerCancel = () => {
@@ -912,11 +1058,14 @@ export default function Dashboard() {
         if (unbouncerResults.length === 0) return;
         const csvCell = (val: string) => `"${val.replace(/"/g, '""')}"`;
         const rows = [
-            'Email,Status,Score,Syntax,MX Record,Disposable,Role Account,Free Provider,SMTP Valid,Catch-All,Provider,Reason',
+            'Email,Status,Score,Method,Checked At,Expires At,Syntax,MX Record,Disposable,Role Account,Free Provider,SMTP Valid,Catch-All,Provider,Reason',
             ...unbouncerResults.map(r => [
                 csvCell(r.email),
                 csvCell(r.status),
                 r.score,
+                csvCell(r.method || ''),
+                csvCell(r.checkedAt || ''),
+                csvCell(r.expiresAt || ''),
                 r.checks.syntax ? 'Yes' : 'No',
                 r.checks.mxRecord ? 'Yes' : 'No',
                 r.checks.disposable ? 'Yes' : 'No',
@@ -943,8 +1092,8 @@ export default function Dashboard() {
         const valid = unbouncerResults.filter(r => r.status === 'VALID');
         if (valid.length === 0) { addToast('No valid emails to export.', 'error'); return; }
         const csvCell = (val: string) => `"${val.replace(/"/g, '""')}"`;
-        const rows = ['Email,Score,Provider,Reason', ...valid.map(r => [
-            csvCell(r.email), r.score, csvCell(r.provider || ''), csvCell(r.reason),
+        const rows = ['Email,Score,Method,Checked At,Expires At,Provider,Reason', ...valid.map(r => [
+            csvCell(r.email), r.score, csvCell(r.method || ''), csvCell(r.checkedAt || ''), csvCell(r.expiresAt || ''), csvCell(r.provider || ''), csvCell(r.reason),
         ].join(','))].join('\n');
         const blob = new Blob([rows], { type: 'text/csv' });
         const url = window.URL.createObjectURL(blob);
@@ -959,699 +1108,621 @@ export default function Dashboard() {
 
     return (
         <>
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 p-4 max-w-7xl mx-auto">
-                {/* Header Stat Card */}
-                <div className="col-span-1 md:col-span-3 lg:col-span-4 bg-[#111] border border-zinc-800 rounded-2xl p-6 flex flex-col md:flex-row items-center justify-between gap-4">
-                    <div>
-                        <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-zinc-500 bg-clip-text text-transparent">
-                            Revlane Signal Engine
-                        </h1>
-                        <p className="text-zinc-500 mt-1">Real-time Lead Qualification & Signal Discovery</p>
+            <div className="flex min-h-screen">
+                <aside className="sidebar w-[236px] flex-none hidden lg:flex flex-col sticky top-0 h-screen">
+                    <div className="flex items-center gap-3 px-5 h-[76px] border-b border-[#2b3d5b] flex-none">
+                        <span className="w-9 h-9 rounded-xl bg-[#5373e8] text-white flex items-center justify-center text-lg font-bold shadow-[0_5px_12px_rgba(4,12,29,0.28)]" aria-hidden>C</span>
+                        <span className="min-w-0">
+                            <span className="block text-[16px] leading-tight font-semibold tracking-tight text-white">Compel</span>
+                            <span className="block text-[11px] text-[#afbfda] mt-0.5">Workspace</span>
+                        </span>
                     </div>
-                    <div className="flex gap-3 flex-wrap items-center">
-                        <div className="bg-black/50 border border-zinc-800 p-1 rounded-xl flex">
-                            <button
-                                onClick={() => setActiveTab('engine')}
-                                className={cn(
-                                    "px-4 py-1.5 rounded-lg text-sm font-medium transition-all",
-                                    activeTab === 'engine' ? "bg-white text-black shadow-lg" : "text-zinc-500 hover:text-white"
-                                )}
-                            >
-                                Signal Engine
-                            </button>
-                            <button
-                                onClick={() => setActiveTab('hunter')}
-                                className={cn(
-                                    "px-4 py-1.5 rounded-lg text-sm font-medium transition-all",
-                                    activeTab === 'hunter' ? "bg-white text-black shadow-lg" : "text-zinc-500 hover:text-white"
-                                )}
-                            >
-                                Email Hunter
-                            </button>
-                            <button
-                                onClick={() => setActiveTab('finder')}
-                                className={cn(
-                                    "px-4 py-1.5 rounded-lg text-sm font-medium transition-all",
-                                    activeTab === 'finder' ? "bg-blue-500 text-white shadow-lg shadow-blue-500/20" : "text-zinc-500 hover:text-white"
-                                )}
-                            >
-                                <span className="flex items-center gap-1.5"><Radar className="w-3.5 h-3.5" />Finder</span>
-                            </button>
-                            <button
-                                onClick={() => setActiveTab('unbouncer')}
-                                className={cn(
-                                    "px-4 py-1.5 rounded-lg text-sm font-medium transition-all",
-                                    activeTab === 'unbouncer' ? "bg-accent text-black shadow-lg shadow-accent/20" : "text-zinc-500 hover:text-white"
-                                )}
-                            >
-                                <span className="flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5" />Unbouncer</span>
-                            </button>
-                            <button
-                                onClick={() => setActiveTab('cleaner')}
-                                className={cn(
-                                    "px-4 py-1.5 rounded-lg text-sm font-medium transition-all",
-                                    activeTab === 'cleaner' ? "bg-white text-black shadow-lg" : "text-zinc-500 hover:text-white"
-                                )}
-                            >
-                                URL Cleaner
-                            </button>
-                            <button
-                                onClick={() => setActiveTab('crm')}
-                                className={cn(
-                                    "px-4 py-1.5 rounded-lg text-sm font-medium transition-all",
-                                    activeTab === 'crm' ? "bg-accent text-black shadow-lg shadow-accent/20" : "text-zinc-500 hover:text-white"
-                                )}
-                            >
-                                <span className="flex items-center gap-1.5"><Database className="w-3.5 h-3.5" />CRM Sync</span>
-                            </button>
+
+                    <nav className="flex-1 overflow-y-auto p-3.5 space-y-6 pt-6" aria-label="Main navigation">
+                        <div className="space-y-0.5">
+                            <p className="label-micro px-3 pb-2">Workspace</p>
+                            {NAV_SECTIONS.workspace.map(item => <button key={item.id} onClick={() => { if (item.id === 'case-study') setCaseStudyEntryView('TODAY'); setActiveTab(item.id); }} className={cn('nav-item', activeTab === item.id && 'nav-item-active')}><item.icon className="w-4 h-4 flex-none" />{item.label}</button>)}
                         </div>
-                        {activeTab === 'engine' && (
-                            <div className="flex gap-2">
+                        <div className="space-y-0.5">
+                            <p className="label-micro px-3 pb-2">Pipeline</p>
+                            {NAV_SECTIONS.pipeline.map(item => (
                                 <button
-                                    onClick={handleOpenHistory}
-                                    className="bg-white/5 border border-zinc-800 text-zinc-400 px-3 py-2 rounded-xl hover:bg-zinc-800 hover:text-white transition-colors flex items-center gap-1.5"
-                                    title="View saved runs"
+                                    key={item.id}
+                                    onClick={() => setActiveTab(item.id)}
+                                    className={cn("nav-item", item.signal && "nav-item-signal", activeTab === item.id && "nav-item-active")}
                                 >
-                                    <History className="w-4 h-4" />
+                                    <item.icon className="w-4 h-4 flex-none" />
+                                    {item.label}
+                                    {item.id === 'engine' && queueSize > 0 && (
+                                        <span className="nav-count">{queueSize}</span>
+                                    )}
                                 </button>
+                            ))}
+                        </div>
+                        <div className="space-y-0.5">
+                            <p className="label-micro px-3 pb-2">Tools</p>
+                            {NAV_SECTIONS.tools.map(item => (
                                 <button
-                                    onClick={handleExport}
-                                    disabled={leads.length === 0}
-                                    className="bg-white/5 border border-zinc-800 text-white px-4 py-2 rounded-xl font-medium hover:bg-zinc-800 disabled:opacity-50 transition-colors flex items-center gap-2"
+                                    key={item.id}
+                                    onClick={() => setActiveTab(item.id)}
+                                    className={cn("nav-item", activeTab === item.id && "nav-item-active")}
                                 >
-                                    <Download className="w-4 h-4" />
-                                    CSV
+                                    <item.icon className="w-4 h-4 flex-none" />
+                                    {item.label}
                                 </button>
-                                {sheetsConfigured && (
-                                    <button
-                                        onClick={handleSheetsExport}
-                                        disabled={leads.length === 0 || sheetsExporting}
-                                        className="bg-accent/10 border border-accent/30 text-accent px-4 py-2 rounded-xl font-medium hover:bg-accent/20 disabled:opacity-50 transition-colors flex items-center gap-2"
-                                    >
-                                        {sheetsExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sheet className="w-4 h-4" />}
-                                        Sheets
-                                    </button>
-                                )}
-                            </div>
-                        )}
+                            ))}
+                        </div>
+                    </nav>
+
+                    <div className="flex-none border-t border-[#2b3d5b] px-5 py-4 bg-[#1c2c47]">
+                        <div className="flex items-center gap-2">
+                            <span className={cn("dot-live", workerDot)} aria-hidden />
+                            <span className="text-[12px] font-medium text-[#d2dcef]">{workerLabel}</span>
+                        </div>
+                        <p className="text-[11px] text-[#a9b9d2] mt-1.5">
+                            <span className="num">{doneToday.toLocaleString()}</span>
+                            {dailyLimit > 0 && <> of <span className="num">{dailyLimit.toLocaleString()}</span></>} profiles today
+                        </p>
                     </div>
-                </div>
+                </aside>
+
+                <div className="flex-1 min-w-0 flex flex-col">
+                    <div className="lg:hidden topbar px-4 py-3 flex items-center gap-3">
+                        <span className="w-8 h-8 rounded-lg bg-[var(--signal)] text-white flex items-center justify-center font-bold flex-none" aria-label="Compel">C</span>
+                        <div className="tabs">
+                            {[...NAV_SECTIONS.workspace, ...NAV_SECTIONS.pipeline, ...NAV_SECTIONS.tools].map(item => (
+                                <button
+                                    key={item.id}
+                                    onClick={() => setActiveTab(item.id)}
+                                    className={cn("tab", item.signal && "tab-signal", activeTab === item.id && "tab-active")}
+                                >
+                                    {item.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <header className="topbar min-h-[76px] px-4 md:px-6 lg:px-8 py-4 flex items-center gap-4 flex-none sticky top-0 z-20">
+                        <div className="min-w-0">
+                            <h1 className="text-[21px] leading-tight font-semibold tracking-[-0.035em] text-[var(--text)] truncate">{screen.title}</h1>
+                            <p className="text-[12px] text-[var(--text-dim)] truncate mt-0.5 hidden sm:block">{screen.sub}</p>
+                        </div>
+                        <div className="ml-auto flex items-center gap-1.5 flex-none">
+                            {activeTab === 'engine' && (
+                                <>
+                                    <button onClick={handleOpenHistory} className="btn btn-ghost !px-2" title="Saved runs">
+                                        <History className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button onClick={handleExport} disabled={leads.length === 0} className="btn btn-outline">
+                                        <Download className="w-3.5 h-3.5" />
+                                        Export
+                                    </button>
+                                    {sheetsConfigured && (
+                                        <button onClick={handleSheetsExport} disabled={leads.length === 0 || sheetsExporting} className="btn btn-outline">
+                                            {sheetsExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sheet className="w-3.5 h-3.5" />}
+                                            Sheets
+                                        </button>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    </header>
+
+                    <main className="flex-1 min-w-0 p-4 md:p-6 lg:p-8">
 
                 {activeTab === 'engine' ? (
-                    <>
-                        {/* Main Control Bento */}
-                        <div className="col-span-1 md:col-span-2 bg-[#111] border border-zinc-800 rounded-3xl p-8 flex flex-col justify-between min-h-[400px]">
-                            <div className="space-y-6">
-                                <div className="flex items-center gap-3">
-                                    <div className="bg-blue-500/10 p-3 rounded-2xl text-blue-500">
-                                        <Upload className="w-6 h-6" />
-                                    </div>
-                                    <div>
-                                        <h2 className="text-xl font-semibold">Source Acquisition</h2>
-                                        <p className="text-zinc-500 text-sm">Upload LinkedIn URL list to begin batch processing</p>
-                                    </div>
-                                </div>
-
-                                <div
-                                    onDragOver={handleDragOver}
-                                    onDragLeave={handleDragLeave}
-                                    onDrop={handleDrop}
-                                    className={cn(
-                                        "group relative border-2 border-dashed rounded-2xl p-10 flex flex-col items-center justify-center cursor-pointer transition-all duration-300",
-                                        isDragging ? "border-white bg-white/5" : "border-zinc-800 bg-black/30",
-                                        csvUrls.length > 0 && !isDragging ? "border-accent/50" : ""
+                    <div className="space-y-4">
+                        {/*
+                         * Three figures, not eight. The row this replaced showed Total /
+                         * Gate Passed / Emails Found / Efficiency / Activity Failed —
+                         * five tiles of which four described the same handful of leads,
+                         * so none of them was read. These three answer the only
+                         * questions the screen exists for: is there work, is it moving,
+                         * and is any of it any good.
+                         */}
+                        <div className="figures">
+                            <div className="fig">
+                                <div className="fig-value">{queueSize.toLocaleString()}</div>
+                                <p className="label-micro mt-2">In queue</p>
+                                <p className="fig-sub">
+                                    {queueSize === 0
+                                        ? 'Nothing waiting — queue a region below'
+                                        : 'Profiles waiting for the worker'}
+                                </p>
+                            </div>
+                            <div className="fig">
+                                <div className="fig-value">
+                                    {doneToday.toLocaleString()}
+                                    {dailyLimit > 0 && (
+                                        <span className="text-[var(--text-faint)] text-[17px] font-medium"> / {dailyLimit.toLocaleString()}</span>
                                     )}
-                                >
-                                    <input
-                                        type="file"
-                                        accept=".csv"
-                                        onChange={handleFileChange}
-                                        className="absolute inset-0 opacity-0 cursor-pointer z-20"
-                                    />
-                                    <div className={cn(
-                                        "mb-4 p-4 rounded-full transition-transform",
-                                        isDragging ? "bg-white text-black scale-110" : "bg-zinc-800 text-zinc-400 group-hover:scale-110"
-                                    )}>
-                                        <Upload className="w-8 h-8" />
-                                    </div>
-                                    <p className={cn("font-medium", isDragging ? "text-white" : "text-zinc-400")}>
-                                        {csvUrls.length > 0 ? `${csvUrls.length} leads loaded` : "Click to upload or drag and drop"}
-                                    </p>
-                                    <p className="text-zinc-600 text-sm mt-1">CSV files only • Up to 1000 rows</p>
                                 </div>
-                                
-                                <div className="grid grid-cols-2 gap-4 mt-4 mb-4">
-                                    <button 
-                                        onClick={() => handleFetchPendingLeads('NA', true)}
-                                        className="bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:bg-blue-500/20 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2"
-                                    >
-                                        <Database className="w-4 h-4" />
-                                        Process Pending NA
-                                    </button>
-                                    <button 
-                                        onClick={() => handleFetchPendingLeads('UK', true)}
-                                        className="bg-accent/10 border border-accent/30 text-accent hover:bg-accent/20 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2"
-                                    >
-                                        <Database className="w-4 h-4" />
-                                        Process Pending UK
-                                    </button>
-                                </div>
-                                <div className="flex items-center gap-4">
-                                    <div className="flex-1 max-w-[200px]">
-                                        <label className="text-xs text-zinc-500 uppercase tracking-widest block mb-2 font-bold">Row Limit</label>
-                                        <input
-                                            type="number"
-                                            value={rowLimit}
-                                            onChange={(e) => setRowLimit(parseInt(e.target.value))}
-                                            className="w-full bg-black/50 border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-1 focus:ring-white/20"
-                                        />
+                                <p className="label-micro mt-2">Distinct profiles today</p>
+                                {/* The budget bar belongs against the number it qualifies,
+                                    not in a panel two columns away. */}
+                                {dailyLimit > 0 && (
+                                    <div className="bar-track mt-2.5 max-w-[220px]">
+                                        <div className={cn("bar-fill", budgetPct >= 100 && "bar-fill-warn")} style={{ width: `${budgetPct}%` }} />
                                     </div>
-                                    <div className="bg-black/60 border border-zinc-800 rounded-xl p-4 flex-1">
-                                        <div className="flex items-center gap-2 mb-3">
-                                            <Server className="w-4 h-4 text-zinc-400" />
-                                            <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Worker Monitor</span>
-                                            <div className={cn("w-2 h-2 rounded-full ml-auto", 
-                                                workerStatus?.status === 'processing' ? 'bg-emerald-500 animate-pulse' :
-                                                workerStatus?.status === 'paused' ? 'bg-amber-500' :
-                                                workerStatus?.status === 'ready' ? 'bg-blue-500' :
-                                                'bg-red-500'
-                                            )} />
-                                            <span className="text-[10px] text-zinc-500">
-                                                {workerStatus?.status === 'processing' ? 'Active' :
-                                                 workerStatus?.status === 'paused' ? 'Paused' :
-                                                 workerStatus?.status === 'ready' ? 'Idle' :
-                                                 workerStatus?.stale || !workerStatus ? 'Offline' : workerStatus?.status || 'Unknown'}
-                                            </span>
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-                                            <div>
-                                                <span className="text-zinc-500">Queue</span>
-                                                <p className="text-white font-semibold">{queueSize} jobs</p>
-                                            </div>
-                                            <div>
-                                                <span className="text-zinc-500">Today</span>
-                                                <p className="text-white font-semibold">
-                                                    {workerStatus?.dailyCount ?? dailyStats.count}
-                                                    {(workerStatus?.dailyLimit || dailyStats.limit) > 0 && 
-                                                        <span className="text-zinc-500 font-normal"> / {workerStatus?.dailyLimit || dailyStats.limit}</span>
-                                                    }
-                                                </p>
-                                            </div>
-                                            <div>
-                                                <span className="text-zinc-500">Speed</span>
-                                                <p className="text-white font-semibold">
-                                                    {workerStatus?.avgJobDurationMs ? `~${Math.round(3600000 / workerStatus.avgJobDurationMs)}/hr` : '—'}
-                                                </p>
-                                            </div>
-                                            <div>
-                                                <span className="text-zinc-500">Memory</span>
-                                                <p className="text-white font-semibold">{workerStatus?.memoryMB ? `${workerStatus.memoryMB} MB` : '—'}</p>
-                                            </div>
-                                            <div>
-                                                <span className="text-zinc-500">Qualified</span>
-                                                <p className="text-emerald-400 font-semibold">{workerStatus?.dailyQualified ?? 0}</p>
-                                            </div>
-                                            <div>
-                                                <span className="text-zinc-500">Rejected</span>
-                                                <p className="text-red-400 font-semibold">{workerStatus?.dailyRejected ?? 0}</p>
-                                            </div>
-                                        </div>
-                                        {(workerStatus?.dailyLimit || dailyStats.limit) > 0 && (
-                                            <div className="mt-3">
-                                                <div className="w-full bg-zinc-800 rounded-full h-1.5">
-                                                    <div 
-                                                        className="bg-accent h-1.5 rounded-full transition-all duration-500" 
-                                                        style={{ width: `${Math.min(100, ((workerStatus?.dailyCount ?? dailyStats.count) / (workerStatus?.dailyLimit || dailyStats.limit)) * 100)}%` }} 
-                                                    />
-                                                </div>
-                                                <p className="text-[10px] text-zinc-600 mt-1 text-right">
-                                                    {Math.round(((workerStatus?.dailyCount ?? dailyStats.count) / (workerStatus?.dailyLimit || dailyStats.limit)) * 100)}% of daily limit
-                                                </p>
-                                            </div>
-                                        )}
-                                        {workerStatus?.status === 'processing' && workerStatus?.url && (
-                                            <div className="mt-2 pt-2 border-t border-zinc-800">
-                                                <p className="text-[10px] text-zinc-500 truncate">Scraping: {workerStatus.url.split('/in/')[1] || workerStatus.url}</p>
-                                            </div>
-                                        )}
-                                    </div>
-                                    {!isProcessing ? (
-                                        <button
-                                            onClick={() => handleStartEngine()}
-                                            disabled={csvUrls.length === 0}
-                                            className="flex-1 bg-white text-black h-[50px] mt-6 rounded-xl font-bold hover:bg-zinc-200 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
-                                        >
-                                            Start Engine
-                                        </button>
-                                    ) : (
-                                        <>
-                                            <button
-                                                onClick={handlePause}
-                                                className={cn(
-                                                    "flex-1 h-[50px] mt-6 rounded-xl font-bold transition-all flex items-center justify-center gap-2 border",
-                                                    isPaused
-                                                        ? "bg-accent/10 text-accent border-accent/30 hover:bg-accent/20"
-                                                        : "bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20"
-                                                )}
-                                            >
-                                                {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
-                                                {isPaused ? 'Resume' : 'Pause'}
-                                            </button>
-                                            <button
-                                                onClick={handleCancel}
-                                                className="h-[50px] mt-6 px-4 rounded-xl font-bold transition-all flex items-center justify-center gap-2 border bg-red-500/10 text-red-400 border-red-500/30 hover:bg-red-500/20"
-                                                title="Cancel processing"
-                                            >
-                                                <StopCircle className="w-4 h-4" />
-                                                Cancel
-                                            </button>
-                                        </>
-                                    )}
-                                    <button
-                                        onClick={handleResumeFromSave}
-                                        disabled={isProcessing || csvUrls.length === 0}
-                                        className="flex-1 bg-zinc-800 text-white h-[50px] mt-6 rounded-xl font-bold hover:bg-zinc-700 disabled:opacity-50 transition-all flex items-center justify-center gap-2 border border-zinc-700"
-                                    >
-                                        {isProcessing ? "..." : "Resume"}
-                                    </button>
-                                    <button
-                                        onClick={handleRetryFailed}
-                                        disabled={isProcessing}
-                                        className="flex-1 bg-orange-500/10 text-orange-400 h-[50px] mt-6 rounded-xl font-bold hover:bg-orange-500/20 disabled:opacity-50 transition-all flex items-center justify-center gap-2 border border-orange-500/30"
-                                    >
-                                        <RotateCcw className="w-4 h-4" />
-                                        Retry Failed ({activityFailedCount})
-                                    </button>
-                                    <button
-                                        onClick={handleClearQueue}
-                                        className="flex-1 bg-red-500/10 text-red-400 h-[50px] mt-6 rounded-xl font-bold hover:bg-red-500/20 transition-all flex items-center justify-center gap-2 border border-red-500/30"
-                                        title="Empty the processing queue"
-                                    >
-                                        <Trash2 className="w-4 h-4" />
-                                        Clear Queue
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Progress Bento */}
-                        <div className="col-span-1 bg-[#111] border border-zinc-800 rounded-3xl p-8 flex flex-col justify-between overflow-hidden relative">
-                            <div className="relative z-10">
-                                <h3 className="text-zinc-500 text-xs uppercase tracking-[0.2em] font-bold mb-6">Processing Signal</h3>
-                                <div className="space-y-8">
-                                    <div className="flex items-center justify-between">
-                                        <span className={cn("flex items-center gap-2", isProcessing && progress < 50 ? "text-accent" : "text-zinc-600")}>
-                                            <div className={cn("w-2 h-2 rounded-full", isProcessing && progress < 50 ? "bg-accent animate-pulse" : "bg-zinc-800")}></div>
-                                            Phase 1: Activity Gate
-                                        </span>
-                                        <span className={cn("font-mono transition-colors", isProcessing && progress < 50 ? "text-accent" : "text-zinc-600")}>
-                                            {isProcessing && progress < 50 ? "Running" : "Idle"}
-                                        </span>
-                                    </div>
-                                    <div className="flex items-center justify-between">
-                                        <span className={cn("flex items-center gap-2", isProcessing && progress >= 50 ? "text-blue-500" : "text-zinc-600")}>
-                                            <div className={cn("w-2 h-2 rounded-full", isProcessing && progress >= 50 ? "bg-blue-500 animate-pulse" : "bg-zinc-800")}></div>
-                                            Phase 2: Smart Discovery
-                                        </span>
-                                        <span className={cn("font-mono transition-colors", isProcessing && progress >= 50 ? "text-blue-500" : "text-zinc-600")}>
-                                            {isProcessing && progress >= 50 ? "Running" : "Idle"}
-                                        </span>
-                                    </div>
-
-                                    <div className="pt-10">
-                                        <div className="flex justify-between text-sm mb-3">
-                                            <span className="text-zinc-400">Completion</span>
-                                            <span className="text-white font-mono">{progress}%</span>
-                                        </div>
-                                        <div className="h-2 w-full bg-black/50 rounded-full overflow-hidden">
-                                            <div
-                                                className="h-full bg-white transition-all duration-500"
-                                                style={{ width: `${progress}%` }}
-                                            ></div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <BarChart3 className="absolute -bottom-10 -right-10 w-48 h-48 text-white/[0.02] -rotate-12" />
-                        </div>
-
-                        {/* Live Feed Bento */}
-                        <div className="col-span-1 bg-[#111] border border-zinc-800 rounded-3xl p-6 flex flex-col max-h-[400px]">
-                            <div className="flex items-center justify-between mb-4">
-                                <div className="flex items-center gap-2">
-                                    <Signal className={cn("w-4 h-4", isProcessing ? "text-accent animate-pulse" : "text-zinc-500")} />
-                                    <h3 className="text-sm font-semibold uppercase tracking-wider">Live Signal Feed</h3>
-                                </div>
-                                {isProcessing && <span className="text-[10px] bg-accent/10 text-accent px-2 py-0.5 rounded-full border border-accent/20 animate-pulse">LIVE</span>}
-                            </div>
-
-                            <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
-                                {logs.map((log, i) => (
-                                    <div key={i} className="bg-black/50 border border-zinc-800/50 p-3 rounded-xl flex items-start gap-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
-                                        <div className="mt-1">
-                                            {log.type === 'success' ? <CheckCircle className="w-4 h-4 text-accent" /> : <Search className="w-4 h-4 text-blue-500" />}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            {log.isJson ? (
-                                                <pre className="text-[10px] text-zinc-300 leading-tight bg-black p-2 rounded border border-zinc-800 overflow-x-auto">
-                                                    {log.msg}
-                                                </pre>
-                                            ) : (
-                                                <p className="text-[11px] text-zinc-400 leading-tight">{log.msg}</p>
-                                            )}
-                                            <p className="text-[9px] text-zinc-600 mt-1 font-mono uppercase">{log.time}</p>
-                                        </div>
-                                    </div>
-                                ))}
-                                {logs.length === 0 && <p className="text-zinc-600 text-[11px] text-center mt-10 italic">Awaiting signal transmission...</p>}
-                            </div>
-                        </div>
-
-                        {/* Statistics Row */}
-                        <div className="col-span-1 bg-[#111] border border-zinc-800 rounded-2xl p-6">
-                            <p className="text-zinc-500 text-xs uppercase font-bold tracking-widest mb-1">Total Leads</p>
-                            <p className="text-2xl font-bold">{csvUrls.length || 0}</p>
-                            <div className="mt-4 flex items-center gap-2 text-[10px] text-zinc-600">
-                                <FileText className="w-3 h-3" />
-                                <span>Active Dataset</span>
-                            </div>
-                        </div>
-                        <div className="col-span-1 bg-[#111] border border-zinc-800 rounded-2xl p-6">
-                            <p className="text-zinc-500 text-xs uppercase font-bold tracking-widest mb-1">Gate Passed</p>
-                            <p className="text-2xl font-bold text-accent">{leads.filter(l => l.status !== 'REJECTED').length || 0}</p>
-                            <div className="mt-4 flex items-center gap-2 text-[10px] text-zinc-600">
-                                <CheckCircle className="w-3 h-3" />
-                                <span>Post Filtered (60d)</span>
-                            </div>
-                        </div>
-                        <div className="col-span-1 bg-[#111] border border-zinc-800 rounded-2xl p-6">
-                            <p className="text-zinc-500 text-xs uppercase font-bold tracking-widest mb-1">Emails Found</p>
-                            <p className="text-2xl font-bold text-blue-500">{emailsFound || 0}</p>
-                            <div className="mt-4 flex items-center gap-2 text-[10px] text-zinc-600">
-                                <Mail className="w-3 h-3" />
-                                <span>Deep Discovery Active</span>
-                            </div>
-                        </div>
-                        <div className="col-span-1 bg-[#111] border border-zinc-800 rounded-2xl p-6">
-                            <p className="text-zinc-500 text-xs uppercase font-bold tracking-widest mb-1">Efficiency</p>
-                            <p className="text-2xl font-bold">{efficiency}%</p>
-                            <div className="mt-4 flex items-center gap-2 text-[10px] text-zinc-600">
-                                <BarChart3 className="w-3 h-3" />
-                                <span>Real-time Validation</span>
-                            </div>
-                        </div>
-                        <div className="col-span-1 bg-[#111] border border-orange-500/20 rounded-2xl p-6">
-                            <p className="text-zinc-500 text-xs uppercase font-bold tracking-widest mb-1">Activity Failed</p>
-                            <p className="text-2xl font-bold text-orange-400">{activityFailedCount || 0}</p>
-                            <div className="mt-4 flex items-center gap-2 text-[10px] text-zinc-600">
-                                <AlertCircle className="w-3 h-3" />
-                                <span>Phase 1 Failures</span>
-                            </div>
-                        </div>
-
-                        {/* Real-Time Results Table */}
-                        <div className="col-span-1 md:col-span-3 lg:col-span-4 bg-[#111] border border-zinc-800 rounded-3xl p-6 mt-2">
-                            <div className="flex items-center justify-between mb-5">
-                                <div className="flex items-center gap-3">
-                                    <div className="bg-purple-500/10 p-2 rounded-xl text-purple-500">
-                                        <BarChart3 className="w-5 h-5" />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-sm font-semibold uppercase tracking-wider">Live Results</h3>
-                                        <p className="text-zinc-600 text-[10px]">Updates in real-time as leads are processed</p>
-                                    </div>
-                                </div>
-                                {isProcessing && (
-                                    <span className="text-[10px] bg-purple-500/10 text-purple-400 px-3 py-1 rounded-full border border-purple-500/20 flex items-center gap-1.5">
-                                        <Loader2 className="w-3 h-3 animate-spin" />
-                                        PROCESSING
-                                    </span>
                                 )}
+                                <p className="fig-sub">
+                                    {dailyLimit > 0
+                                        ? `${(workerStatus?.dailyRemaining ?? Math.max(0, dailyLimit - doneToday)).toLocaleString()} left in today's budget`
+                                        : 'No daily cap configured'}
+                                </p>
+                                <p className="fig-sub">Retries use no extra slots</p>
+                            </div>
+                            <div className="fig">
+                                <div className="fig-value fig-value-signal">{qualifiedToday.toLocaleString()}</div>
+                                <p className="label-micro mt-2">Qualified today</p>
+                                <p className="fig-sub">
+                                    {passRate === null
+                                        ? 'No completed profiles yet today'
+                                        : `${passRate}% of ${judgedToday.toLocaleString()} distinct profiles completed`}
+                                </p>
+                                {failedToday > 0 && <p className="fig-sub">{failedToday.toLocaleString()} need attention</p>}
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)] gap-4 items-start">
+                            {/* ── Start a run ────────────────────────────────────── */}
+                            <section className="panel">
+                                <div className="panel-head">
+                                    Start a run
+                                    {csvUrls.length > 0 && (
+                                        <span className="hint">
+                                            <span className="num">{csvUrls.length.toLocaleString()}</span> profiles loaded
+                                        </span>
+                                    )}
+                                </div>
+
+                                <div className="panel-body space-y-5">
+                                    {/*
+                                     * Three regions, not two. For an unscraped lead the
+                                     * location field holds the search location, not the
+                                     * person's, and a large legacy cohort reads literally
+                                     * 'Unknown' — all of which buckets to OTHER. With only
+                                     * NA and UK buttons the overwhelming majority of the
+                                     * inbox was unreachable from this screen entirely.
+                                     */}
+                                    <div>
+                                        <p className="field-label">Pull from the leads you already have</p>
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                            <button onClick={() => handleFetchPendingLeads('NA', true)} className="btn btn-outline justify-start">
+                                                <Database className="w-3.5 h-3.5" />
+                                                North America
+                                            </button>
+                                            <button onClick={() => handleFetchPendingLeads('UK', true)} className="btn btn-outline justify-start">
+                                                <Database className="w-3.5 h-3.5" />
+                                                United Kingdom
+                                            </button>
+                                            <button onClick={() => handleFetchPendingLeads('OTHER', true)} className="btn btn-outline justify-start">
+                                                <Database className="w-3.5 h-3.5" />
+                                                Everywhere else
+                                            </button>
+                                        </div>
+                                        <p className="field-hint">
+                                            Takes the best-scoring <span className="num">{QUEUE_BATCH_SIZE}</span> profiles
+                                            waiting in that region and starts straight away. Most of your list is in
+                                            &ldquo;everywhere else&rdquo;.
+                                        </p>
+                                    </div>
+
+                                    <div className="flex items-center gap-3" aria-hidden>
+                                        <span className="h-px flex-1 bg-[var(--line)]" />
+                                        <span className="label-micro">or upload a list</span>
+                                        <span className="h-px flex-1 bg-[var(--line)]" />
+                                    </div>
+
+                                    <div
+                                        onDragOver={handleDragOver}
+                                        onDragLeave={handleDragLeave}
+                                        onDrop={handleDrop}
+                                        className={cn(
+                                            "drop px-5 py-6 flex items-center gap-4 cursor-pointer",
+                                            isDragging && "drop-active",
+                                            csvUrls.length > 0 && !isDragging && "drop-loaded",
+                                        )}
+                                    >
+                                        <input
+                                            type="file"
+                                            accept=".csv"
+                                            onChange={handleFileChange}
+                                            className="absolute inset-0 opacity-0 cursor-pointer z-20"
+                                            aria-label="Upload a CSV of LinkedIn URLs"
+                                        />
+                                        <Upload className={cn("w-5 h-5 flex-none", csvUrls.length > 0 ? "text-[var(--signal)]" : "text-[var(--text-faint)]")} />
+                                        <div className="min-w-0">
+                                            <p className="text-[13px] font-medium text-[var(--text)]">
+                                                {csvUrls.length > 0
+                                                    ? <><span className="num">{csvUrls.length.toLocaleString()}</span> profiles ready</>
+                                                    : "Drop a CSV here, or click to choose one"}
+                                            </p>
+                                            <p className="text-[11.5px] text-[var(--text-faint)] mt-0.5">
+                                                One LinkedIn URL per row, first column
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                                        {!isProcessing ? (
+                                            <button
+                                                onClick={() => handleStartEngine()}
+                                                disabled={csvUrls.length === 0}
+                                                className="btn btn-primary btn-lg"
+                                            >
+                                                <Play className="w-3.5 h-3.5" />
+                                                {csvUrls.length > 0
+                                                    ? `Queue ${csvUrls.length.toLocaleString()} profiles`
+                                                    : 'Queue profiles'}
+                                            </button>
+                                        ) : (
+                                            <>
+                                                <button onClick={handlePause} className="btn btn-outline btn-lg">
+                                                    {isPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                                                    {isPaused ? 'Resume' : 'Pause'}
+                                                </button>
+                                                <button onClick={handleCancel} className="btn btn-danger btn-lg" title="Stop after the profile in flight">
+                                                    <StopCircle className="w-3.5 h-3.5" />
+                                                    Stop
+                                                </button>
+                                            </>
+                                        )}
+
+                                        <span className="flex-1" />
+
+                                        <button
+                                            onClick={handleResumeFromSave}
+                                            disabled={isProcessing || csvUrls.length === 0}
+                                            className="btn btn-ghost"
+                                            title="Pick up the last saved run where it stopped"
+                                        >
+                                            <RotateCcw className="w-3.5 h-3.5" />
+                                            Resume last
+                                        </button>
+                                        <button
+                                            onClick={handleRetryFailed}
+                                            disabled={retryingFailed}
+                                            className="btn btn-ghost"
+                                            title="Recover failed profiles, using saved scrapes when available"
+                                        >
+                                            <RotateCcw className="w-3.5 h-3.5" />
+                                            Retry failed
+                                            {activityFailedCount > 0 && <span className="num text-[var(--warn)]">{activityFailedCount}</span>}
+                                        </button>
+                                        <button onClick={handleClearQueue} className="btn btn-ghost !text-[var(--bad)]" title="Delete every pending job">
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                            Empty queue
+                                        </button>
+                                    </div>
+                                </div>
+                            </section>
+
+                            {/* ── Worker, and what it is doing ───────────────────── */}
+                            <div className="space-y-4">
+                                <LinkedInAccounts />
+                                <section className={cn("panel", workerState === 'running' && "rail-live")}>
+                                <div className="panel-head">
+                                    <Server className="w-3.5 h-3.5 text-[var(--text-faint)]" />
+                                    Worker
+                                    <span className="hint flex items-center gap-1.5">
+                                        <span className={cn("dot-live", workerDot)} aria-hidden />
+                                        {workerLabel.replace('Worker ', '')}
+                                    </span>
+                                </div>
+
+                                <div className="panel-body space-y-4">
+                                    <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                                        <div>
+                                            <p className="label-micro">Rate</p>
+                                            <p className="num text-[15px] text-[var(--text)] mt-0.5">
+                                                {perHour !== null ? `${perHour}/hr` : '—'}
+                                            </p>
+                                        </div>
+                                        <div>
+                                            <p className="label-micro">Memory</p>
+                                            <p className="num text-[15px] text-[var(--text)] mt-0.5">
+                                                {workerStatus?.memoryMB ? `${workerStatus.memoryMB} MB` : '—'}
+                                            </p>
+                                        </div>
+                                        <div>
+                                            <p className="label-micro">Qualified</p>
+                                            <p className="num text-[15px] text-[var(--signal)] mt-0.5">{qualifiedToday.toLocaleString()}</p>
+                                        </div>
+                                        <div>
+                                            <p className="label-micro">Rejected</p>
+                                            <p className="num text-[15px] text-[var(--text-dim)] mt-0.5">{rejectedToday.toLocaleString()}</p>
+                                        </div>
+                                    </div>
+
+                                    {workerState === 'running' && workerStatus?.url && (
+                                        <div className="pt-3 border-t border-[var(--line)]">
+                                            <p className="label-micro">Now scraping</p>
+                                            <p className="text-[12px] text-[var(--text-dim)] truncate mt-1 font-[family-name:var(--font-mono)]">
+                                                {workerStatus.url.split('/in/')[1] || workerStatus.url}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {workerState === 'paused' && workerStatus?.pauseReason === 'DAILY_LIMIT' && <p role="status" className="panel-note">
+                                    Daily profile limit reached. {queueSize.toLocaleString()} queued profiles are saved. New profiles resume {workerStatus.nextDailyResetAt ? `after ${new Date(workerStatus.nextDailyResetAt).toLocaleString()}` : 'when the daily allowance resets'} while the worker is running. Retries and saved website research can continue without another daily slot.
+                                </p>}
+                                {workerStatus?.waitingCount > 0 && <p role="status" className="panel-note">
+                                    {workerStatus.waitingCount} profiles retained for automatic retry. {workerStatus.nextRetryAt ? `Next retry after ${new Date(workerStatus.nextRetryAt).toLocaleTimeString()}.` : ''} Saved scrapes do not use another LinkedIn daily slot.
+                                </p>}
+                                {workerState === 'offline' && (
+                                    <div className="panel-note">
+                                        The worker isn&rsquo;t reporting in. Anything you queue is kept and
+                                        processed as soon as it starts again.
+                                    </div>
+                                )}
+                                </section>
+
+                                {/* ── Activity ───────────────────────────────── */}
+                                {/* Sits under the worker rather than at the foot of
+                                    the page: it is the worker talking, and down there
+                                    it was below the fold whenever results existed. */}
+                                <section className="panel">
+                                    <div className="panel-head">
+                                        Activity
+                                        <span className="hint">{logs.length > 0 ? 'Newest last' : 'Quiet'}</span>
+                                    </div>
+                                    <div className="panel-body max-h-[260px] overflow-y-auto">
+                                        {logs.length > 0 ? (
+                                            <div className="space-y-1">
+                                                {logs.map((log, i) => (
+                                                    <div
+                                                        key={i}
+                                                        className={cn(
+                                                            "feed-row",
+                                                            log.type === 'success' && "feed-row-ok",
+                                                            log.type === 'error' && "feed-row-bad",
+                                                        )}
+                                                    >
+                                                        <p className="text-[12.5px] text-[var(--text-dim)] leading-snug break-words">{log.msg}</p>
+                                                        <p className="feed-time mt-0.5">{log.time}</p>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <p className="text-[12.5px] text-[var(--text-faint)]">
+                                                Nothing has run yet. What the worker does shows up here.
+                                            </p>
+                                        )}
+                                    </div>
+                                </section>
+                            </div>
+                        </div>
+
+                        {/* ── Results ────────────────────────────────────────────── */}
+                        <section className="panel">
+                            <div className="panel-head">
+                                Results
+                                <span className="hint">
+                                    {currentLeads.length > 0
+                                        ? <>
+                                            <span className="num">{currentLeads.length.toLocaleString()}</span> profiles ·{' '}
+                                            <span className="num">{qualifiedCount.toLocaleString()}</span> qualified ·{' '}
+                                            <span className="num">{withEmail.toLocaleString()}</span> with an address
+                                        </>
+                                        : 'Nothing yet'}
+                                </span>
                             </div>
 
-                            <div className="overflow-x-auto rounded-xl border border-zinc-800">
-                                <table className="w-full text-sm">
+                            <div className="tbl-wrap !border-0 !rounded-none">
+                                <table className="w-full text-[13px]">
                                     <thead>
-                                        <tr className="bg-black/80 border-b border-zinc-800">
-                                            <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">#</th>
-                                            <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">LinkedIn Profile</th>
-                                            <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">First Name</th>
-                                            <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">Status</th>
-                                            <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">Websites</th>
-                                            <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">Emails</th>
+                                        <tr className="tbl-head">
+                                            <th className="text-right px-4 py-2.5 w-12">#</th>
+                                            <th className="text-left px-4 py-2.5">Profile</th>
+                                            <th className="text-left px-4 py-2.5">Name</th>
+                                            <th className="text-left px-4 py-2.5">Status</th>
+                                            <th className="text-left px-4 py-2.5">Website</th>
+                                            <th className="text-left px-4 py-2.5">Email</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {currentLeads.length > 0 ? currentLeads.map((lead, i) => {
                                             const slug = lead.url.match(/linkedin\.com\/in\/([^\/]+)/)?.[1] || lead.url;
+                                            const sites = (lead.websites && lead.websites.length > 0)
+                                                ? lead.websites
+                                                : lead.website ? [lead.website] : [];
                                             return (
-                                                <tr key={i} className={cn(
-                                                    "border-b border-zinc-800/50 transition-all duration-300 animate-in fade-in slide-in-from-bottom-1",
-                                                    i % 2 === 0 ? "bg-black/20" : "bg-transparent",
-                                                    "hover:bg-zinc-800/30"
-                                                )}>
-                                                    <td className="px-4 py-3 text-zinc-600 font-mono text-xs">{i + 1}</td>
-                                                    <td className="px-4 py-3">
+                                                <tr key={i} className="tbl-row">
+                                                    <td className="px-4 py-2.5 num text-[11px] text-[var(--text-faint)] text-right align-top">{i + 1}</td>
+                                                    <td className="px-4 py-2.5 align-top">
                                                         <a
                                                             href={lead.url}
                                                             target="_blank"
                                                             rel="noopener noreferrer"
-                                                            className="text-zinc-300 hover:text-white flex items-center gap-1.5 group transition-colors"
+                                                            className="inline-flex items-center gap-1.5 text-[var(--text-dim)] hover:text-[var(--text)] transition-colors group"
                                                         >
-                                                            <span className="truncate max-w-[180px]">{slug}</span>
-                                                            <ExternalLink className="w-3 h-3 text-zinc-600 group-hover:text-white flex-shrink-0" />
+                                                            <span className="truncate max-w-[190px]">{slug}</span>
+                                                            <ExternalLink className="w-3 h-3 flex-none opacity-0 group-hover:opacity-100 transition-opacity" />
                                                         </a>
                                                     </td>
-                                                    <td className="px-4 py-3">
-                                                        <span className="text-zinc-300 text-xs">{lead.firstName || <span className="text-zinc-600 italic">—</span>}</span>
+                                                    <td className="px-4 py-2.5 align-top text-[var(--text)]">
+                                                        {lead.firstName || <span className="text-[var(--text-faint)]">—</span>}
                                                     </td>
-                                                    <td className="px-4 py-3">
-                                                        <div className="flex items-center gap-1.5">
-                                                            <span className={cn(
-                                                                "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
-                                                                lead.status === 'QUALIFIED' && "bg-accent/10 text-accent border border-accent/20",
-                                                                lead.status === 'REJECTED' && "bg-red-500/10 text-red-400 border border-red-500/20",
-                                                                lead.status === 'SCANNING' && "bg-blue-500/10 text-blue-400 border border-blue-500/20",
-                                                                lead.status === 'PENDING' && "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20",
-                                                                lead.status === 'ACTIVITY_FAILED' && "bg-orange-500/10 text-orange-400 border border-orange-500/20"
-                                                            )}>
-                                                                {lead.status === 'QUALIFIED' && <CheckCircle className="w-3 h-3" />}
-                                                                {lead.status === 'REJECTED' && <XCircle className="w-3 h-3" />}
-                                                                {lead.status === 'SCANNING' && <Loader2 className="w-3 h-3 animate-spin" />}
-                                                                {lead.status === 'ACTIVITY_FAILED' && <AlertCircle className="w-3 h-3" />}
-                                                                {lead.status}
-                                                            </span>
-                                                            {lead.timedOut && (
-                                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                                                                    TIMEOUT
-                                                                </span>
-                                                            )}
+                                                    <td className="px-4 py-2.5 align-top">
+                                                        <div className="flex items-center gap-2">
+                                                            <LeadStatusMark status={lead.status} researched={!!lead.prospectQualification} />
+                                                            {lead.timedOut && <span className="badge badge-warn">TIMED OUT</span>}
                                                         </div>
+                                                        {lead.status === 'ERROR' && <p className="mt-1 text-xs text-[var(--text-dim)] max-w-64">{failureOf(lead).reason}</p>}
+                                                        {lead.status === 'REJECTED' && lead.prospectQualification?.nextAction && <p className="mt-1 text-xs text-[var(--text-dim)] max-w-64">{lead.prospectQualification.nextAction}</p>}
+                                                        {lead.prospectQualification?.research?.crawl && <p className="mt-1 text-xs text-[var(--text-faint)] max-w-64">{lead.prospectQualification.research.crawl.inspected} pages read · {lead.prospectQualification.research.crawl.complete ? 'Crawl complete' : lead.prospectQualification.research.crawl.retryable === false ? 'Website needs attention' : 'Crawl saved for retry'}</p>}
                                                     </td>
-                                                    <td className="px-4 py-3">
-                                                        <div className="flex flex-col gap-1">
-                                                            {(lead.websites && lead.websites.length > 0) ? lead.websites.map((w, wi) => (
-                                                                <a
-                                                                    key={wi}
-                                                                    href={w}
-                                                                    target="_blank"
-                                                                    rel="noopener noreferrer"
-                                                                    className="text-blue-400 hover:text-blue-300 flex items-center gap-1 text-xs transition-colors truncate max-w-[200px]"
-                                                                >
-                                                                    <Globe className="w-3 h-3 flex-shrink-0" />
-                                                                    {w.replace(/^https?:\/\/(www\.)?/, '')}
-                                                                </a>
-                                                            )) : lead.website ? (
-                                                                <a
-                                                                    href={lead.website}
-                                                                    target="_blank"
-                                                                    rel="noopener noreferrer"
-                                                                    className="text-blue-400 hover:text-blue-300 flex items-center gap-1 text-xs transition-colors truncate max-w-[200px]"
-                                                                >
-                                                                    <Globe className="w-3 h-3 flex-shrink-0" />
-                                                                    {lead.website.replace(/^https?:\/\/(www\.)?/, '')}
-                                                                </a>
-                                                            ) : (
-                                                                <span className="text-zinc-600 text-xs italic">—</span>
-                                                            )}
-                                                        </div>
+                                                    <td className="px-4 py-2.5 align-top">
+                                                        {sites.length > 0 ? (
+                                                            <div className="flex flex-col gap-1">
+                                                                {sites.map((w, wi) => (
+                                                                    <a
+                                                                        key={wi}
+                                                                        href={w}
+                                                                        target="_blank"
+                                                                        rel="noopener noreferrer"
+                                                                        className="text-[12px] text-[var(--text-dim)] hover:text-[var(--text)] transition-colors truncate max-w-[210px]"
+                                                                    >
+                                                                        {w.replace(/^https?:\/\/(www\.)?/, '')}
+                                                                    </a>
+                                                                ))}
+                                                            </div>
+                                                        ) : <span className="text-[var(--text-faint)]">—</span>}
                                                     </td>
-                                                    <td className="px-4 py-3">
-                                                        <div className="flex flex-col gap-1">
-                                                            {lead.emails.length > 0 ? lead.emails.map((email, ei) => (
-                                                                <span key={ei} className="text-accent text-xs flex items-center gap-1">
-                                                                    <Mail className="w-3 h-3 flex-shrink-0" />
-                                                                    {email}
-                                                                </span>
-                                                            )) : (
-                                                                <span className="text-zinc-600 text-xs italic">—</span>
-                                                            )}
-                                                        </div>
+                                                    <td className="px-4 py-2.5 align-top">
+                                                        {lead.emails.length > 0 ? (
+                                                            <div className="flex flex-col gap-1">
+                                                                {lead.emails.map((email, ei) => (
+                                                                    <span key={ei} className={cn("text-[12px] font-[family-name:var(--font-mono)]", ei === 0 ? "text-[var(--signal)]" : "text-[var(--text-faint)]")}>
+                                                                        {email}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        ) : <span className="text-[var(--text-faint)]">—</span>}
                                                     </td>
                                                 </tr>
                                             );
                                         }) : (
                                             <tr>
-                                                <td colSpan={6} className="px-4 py-12 text-center">
-                                                    <div className="flex flex-col items-center gap-2">
-                                                        <Search className="w-8 h-8 text-zinc-700" />
-                                                        <p className="text-zinc-600 text-xs">No results yet. Start the engine to begin processing.</p>
-                                                    </div>
+                                                <td colSpan={6} className="px-4 py-16 text-center">
+                                                    <p className="text-[13px] text-[var(--text-dim)]">No runs yet today.</p>
+                                                    <p className="text-[12px] text-[var(--text-faint)] mt-1">
+                                                        Pick a region above to start one.
+                                                    </p>
                                                 </td>
                                             </tr>
                                         )}
                                     </tbody>
                                 </table>
                             </div>
+                        </section>
 
-                            {currentLeads.length > 0 && (
-                                <div className="flex items-center justify-between mt-4 px-1">
-                                    <p className="text-[10px] text-zinc-600">
-                                        Showing {currentLeads.length} result{currentLeads.length !== 1 ? 's' : ''}
-                                    </p>
-                                    <p className="text-[10px] text-zinc-600">
-                                        {qualifiedCount} qualified • {emailsFound} emails found
-                                    </p>
-                                </div>
-                            )}
-                        </div>
-                    </>
+                    </div>
                 ) : activeTab === 'hunter' ? (
-                    /* ── Email Hunter Tab ── */
-                    <div className="col-span-1 md:col-span-3 lg:col-span-4 space-y-4">
-                        <div className="bg-[#111] border border-zinc-800 rounded-3xl p-8">
-                            <div className="flex items-center gap-3 mb-6">
-                                <div className="bg-accent/10 p-3 rounded-2xl text-accent">
-                                    <Globe className="w-6 h-6" />
-                                </div>
-                                <div>
-                                    <h2 className="text-xl font-semibold">Email Hunter</h2>
-                                    <p className="text-zinc-500 text-sm">Paste website URLs to extract emails — no LinkedIn needed</p>
-                                </div>
+                    /* ── Find email: websites in, addresses out ── */
+                    <div className="space-y-4 max-w-[1100px]">
+                        <section className="panel">
+                            <div className="panel-head">
+                                Websites
+                                <span className="hint">
+                                    {hunterUrlCount > 0
+                                        ? <><span className="num">{hunterUrlCount.toLocaleString()}</span> ready</>
+                                        : 'One per line'}
+                                </span>
                             </div>
+                            <div className="panel-body space-y-3">
+                                <textarea
+                                    value={hunterUrls}
+                                    onChange={e => setHunterUrls(e.target.value)}
+                                    placeholder={"https://www.example.com\nhttps://coaching-site.com\nwww.another-site.io"}
+                                    className="field w-full h-40 resize-y font-[family-name:var(--font-mono)] text-[12.5px] leading-relaxed"
+                                    disabled={hunterProcessing}
+                                />
 
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="text-xs text-zinc-500 uppercase tracking-widest block mb-2 font-bold">Website URLs (one per line)</label>
-                                    <textarea
-                                        value={hunterUrls}
-                                        onChange={e => setHunterUrls(e.target.value)}
-                                        placeholder={"https://www.example.com\nhttps://coaching-site.com\nwww.another-site.io"}
-                                        className="w-full h-40 bg-black/50 border border-zinc-800 rounded-xl px-4 py-3 text-white text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent/30 resize-none placeholder:text-zinc-700"
-                                        disabled={hunterProcessing}
-                                    />
-                                </div>
-
-                                <div className="flex items-center gap-3">
+                                <div className="flex items-center gap-2 flex-wrap">
                                     {!hunterProcessing ? (
                                         <button
                                             onClick={handleHunterStart}
-                                            disabled={hunterProcessing || hunterUrls.trim().length === 0}
-                                            className="bg-accent text-black px-6 py-3 rounded-xl font-bold hover:bg-accent disabled:opacity-50 transition-all flex items-center gap-2"
+                                            disabled={hunterUrls.trim().length === 0}
+                                            className="btn btn-primary btn-lg"
                                         >
-                                            <Search className="w-4 h-4" />
-                                            Hunt Emails
+                                            <Search className="w-3.5 h-3.5" />
+                                            Find addresses
                                         </button>
                                     ) : (
-                                        <button
-                                            onClick={handleHunterCancel}
-                                            className="bg-red-500/10 text-red-400 border border-red-500/30 px-6 py-3 rounded-xl font-bold hover:bg-red-500/20 transition-all flex items-center gap-2"
-                                        >
-                                            <StopCircle className="w-4 h-4" />
-                                            Cancel
+                                        <button onClick={handleHunterCancel} className="btn btn-danger btn-lg">
+                                            <StopCircle className="w-3.5 h-3.5" />
+                                            Stop
                                         </button>
                                     )}
 
-                                    <label className="bg-zinc-800 text-zinc-300 px-4 py-3 rounded-xl font-medium hover:bg-zinc-700 transition-colors flex items-center gap-2 cursor-pointer border border-zinc-700">
-                                        <Upload className="w-4 h-4" />
-                                        Upload CSV
+                                    <label className="btn btn-outline cursor-pointer">
+                                        <Upload className="w-3.5 h-3.5" />
+                                        Load CSV
                                         <input type="file" accept=".csv" onChange={handleHunterCSV} className="hidden" />
                                     </label>
 
+                                    <span className="flex-1" />
+
                                     {hunterResults.length > 0 && (
-                                        <button
-                                            onClick={handleHunterExport}
-                                            className="bg-white/5 border border-zinc-800 text-white px-4 py-3 rounded-xl font-medium hover:bg-zinc-800 transition-colors flex items-center gap-2"
-                                        >
-                                            <Download className="w-4 h-4" />
-                                            Export CSV
+                                        <button onClick={handleHunterExport} className="btn btn-ghost">
+                                            <Download className="w-3.5 h-3.5" />
+                                            Export
                                         </button>
                                     )}
                                 </div>
 
                                 {hunterProcessing && (
-                                    <div className="mt-2">
-                                        <div className="h-2 w-full bg-black/50 rounded-full overflow-hidden">
+                                    <div>
+                                        <div className="bar-track">
                                             <div
-                                                className="h-full bg-accent transition-all duration-500"
+                                                className="bar-fill"
                                                 style={{ width: `${hunterTotal > 0 ? (hunterProgress / hunterTotal) * 100 : 0}%` }}
                                             />
                                         </div>
-                                        <p className="text-xs text-zinc-500 mt-1">{hunterProgress} of {hunterTotal} websites scanned</p>
+                                        <p className="text-[11.5px] text-[var(--text-faint)] mt-2">
+                                            <span className="num">{hunterProgress}</span> of <span className="num">{hunterTotal}</span> websites checked
+                                        </p>
                                     </div>
                                 )}
                             </div>
-                        </div>
+                        </section>
 
-                        {/* Results Table */}
                         {hunterResults.length > 0 && (
-                            <div className="bg-[#111] border border-zinc-800 rounded-3xl p-6">
-                                <div className="flex items-center justify-between mb-4">
-                                    <div className="flex items-center gap-2">
-                                        <Mail className="w-4 h-4 text-accent" />
-                                        <h3 className="text-sm font-semibold uppercase tracking-wider">Results</h3>
-                                        <span className="text-xs text-zinc-500">
-                                            {hunterResults.filter(r => r.emails.length > 0).length}/{hunterResults.length} with emails •{" "}
-                                            {hunterResults.reduce((a, r) => a + r.emails.length, 0)} total emails
-                                        </span>
-                                    </div>
+                            <section className="panel">
+                                <div className="panel-head">
+                                    Results
+                                    <span className="hint">
+                                        <span className="num">{hunterResults.filter(r => r.emails.length > 0).length}</span> of{' '}
+                                        <span className="num">{hunterResults.length}</span> sites gave an address ·{' '}
+                                        <span className="num">{hunterResults.reduce((a, r) => a + r.emails.length, 0)}</span> found
+                                    </span>
                                 </div>
-                                <div className="overflow-x-auto rounded-xl border border-zinc-800">
-                                    <table className="w-full text-sm">
+                                <div className="tbl-wrap !border-0 !rounded-none">
+                                    <table className="w-full text-[13px]">
                                         <thead>
-                                            <tr className="bg-black/80 border-b border-zinc-800">
-                                                <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">#</th>
-                                                <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">Website</th>
-                                                <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">Emails</th>
-                                                <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">Status</th>
+                                            <tr className="tbl-head">
+                                                <th className="text-right px-4 py-2.5 w-12">#</th>
+                                                <th className="text-left px-4 py-2.5">Website</th>
+                                                <th className="text-left px-4 py-2.5">Addresses</th>
+                                                <th className="text-left px-4 py-2.5">Result</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             {hunterResults.map((r, i) => (
-                                                <tr key={i} className={cn(
-                                                    "border-b border-zinc-800/50 transition-all hover:bg-zinc-800/30",
-                                                    i % 2 === 0 ? "bg-black/20" : "bg-transparent"
-                                                )}>
-                                                    <td className="px-4 py-3 text-zinc-600 font-mono text-xs">{i + 1}</td>
-                                                    <td className="px-4 py-3">
-                                                        <a href={r.website.startsWith('http') ? r.website : 'https://' + r.website} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 flex items-center gap-1.5 text-xs truncate max-w-[300px]">
-                                                            <Globe className="w-3 h-3 flex-shrink-0" />
+                                                <tr key={i} className="tbl-row">
+                                                    <td className="px-4 py-2.5 num text-[11px] text-[var(--text-faint)] text-right align-top">{i + 1}</td>
+                                                    <td className="px-4 py-2.5 align-top">
+                                                        <a
+                                                            href={r.website.startsWith('http') ? r.website : 'https://' + r.website}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="text-[var(--text-dim)] hover:text-[var(--text)] transition-colors truncate block max-w-[320px]"
+                                                        >
                                                             {r.website.replace(/^https?:\/\/(www\.)?/, '')}
                                                         </a>
                                                     </td>
-                                                    <td className="px-4 py-3">
-                                                        <div className="flex flex-col gap-1">
-                                                            {r.emails.length > 0 ? r.emails.map((email, ei) => (
-                                                                <span key={ei} className="text-accent text-xs flex items-center gap-1">
-                                                                    <Mail className="w-3 h-3 flex-shrink-0" />
-                                                                    {email}
-                                                                </span>
-                                                            )) : (
-                                                                <span className="text-zinc-600 text-xs italic">—</span>
-                                                            )}
-                                                        </div>
+                                                    <td className="px-4 py-2.5 align-top">
+                                                        {r.emails.length > 0 ? (
+                                                            <div className="flex flex-col gap-1">
+                                                                {r.emails.map((email, ei) => (
+                                                                    <span key={ei} className={cn("text-[12px] font-[family-name:var(--font-mono)]", ei === 0 ? "text-[var(--signal)]" : "text-[var(--text-faint)]")}>
+                                                                        {email}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        ) : <span className="text-[var(--text-faint)]">—</span>}
                                                     </td>
-                                                    <td className="px-4 py-3">
+                                                    <td className="px-4 py-2.5 align-top">
                                                         <span className={cn(
-                                                            "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
-                                                            r.status === 'SUCCESS' && "bg-accent/10 text-accent border border-accent/20",
-                                                            r.status === 'NO_EMAILS' && "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20",
-                                                            r.status === 'ERROR' && "bg-red-500/10 text-red-400 border border-red-500/20",
+                                                            "mark",
+                                                            r.status === 'SUCCESS' && "mark-ok",
+                                                            r.status === 'NO_EMAILS' && "mark-idle",
+                                                            r.status === 'ERROR' && "mark-bad",
                                                         )}>
-                                                            {r.status === 'SUCCESS' && <CheckCircle className="w-3 h-3" />}
-                                                            {r.status === 'NO_EMAILS' && <XCircle className="w-3 h-3" />}
-                                                            {r.status === 'ERROR' && <AlertCircle className="w-3 h-3" />}
-                                                            {r.status}
+                                                            {r.status === 'SUCCESS' ? 'Found' : r.status === 'NO_EMAILS' ? 'None on site' : 'Unreachable'}
                                                         </span>
                                                     </td>
                                                 </tr>
@@ -1659,366 +1730,284 @@ export default function Dashboard() {
                                         </tbody>
                                     </table>
                                 </div>
-                            </div>
+                            </section>
                         )}
                     </div>
                 ) : activeTab === 'unbouncer' ? (
-                    /* ── Email Unbouncer Tab ── */
-                    <div className="col-span-1 md:col-span-3 lg:col-span-4 space-y-4">
-                        {/* Input Card */}
-                        <div className="bg-[#111] border border-zinc-800 rounded-3xl p-8">
-                            <div className="flex items-center gap-3 mb-6">
-                                <div className="bg-accent/10 p-3 rounded-2xl text-accent">
-                                    <ShieldCheck className="w-6 h-6" />
-                                </div>
-                                <div>
-                                    <h2 className="text-xl font-semibold">Email Unbouncer</h2>
-                                    <p className="text-zinc-500 text-sm">Deep 7-layer verification — MX, SMTP handshake, disposable detection, catch-all & more</p>
-                                </div>
+                    /* ── Verify email ── */
+                    <div className="space-y-4 max-w-[1200px]">
+                        <section className="panel">
+                            <div className="panel-head">
+                                Addresses
+                                <span className="hint">
+                                    {unbouncerDetected > 0
+                                        ? <><span className="num">{unbouncerDetected.toLocaleString()}</span> ready</>
+                                        : 'One per line'}
+                                </span>
                             </div>
+                            <div className="panel-body space-y-3">
+                                <textarea
+                                    value={unbouncerInput}
+                                    onChange={e => setUnbouncerInput(e.target.value)}
+                                    placeholder={"john@example.com\njane.doe@company.io\nhello@startup.com"}
+                                    className="field w-full h-40 resize-y font-[family-name:var(--font-mono)] text-[12.5px] leading-relaxed"
+                                    disabled={unbouncerProcessing}
+                                />
 
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="text-xs text-zinc-500 uppercase tracking-widest block mb-2 font-bold">Email Addresses (one per line)</label>
-                                    <textarea
-                                        value={unbouncerInput}
-                                        onChange={e => setUnbouncerInput(e.target.value)}
-                                        placeholder={"john@example.com\njane.doe@company.io\nhello@startup.com"}
-                                        className="w-full h-40 bg-black/50 border border-zinc-800 rounded-xl px-4 py-3 text-white text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent/30 resize-none placeholder:text-zinc-700"
-                                        disabled={unbouncerProcessing}
-                                    />
-                                    {unbouncerInput.trim().length > 0 && (
-                                        <p className="text-[10px] text-zinc-600 mt-1 font-mono">
-                                            {unbouncerInput.split('\n').filter(e => e.trim().length > 3 && e.includes('@')).length} email(s) detected
-                                        </p>
-                                    )}
-                                </div>
-
-                                <div className="flex items-center gap-3 flex-wrap">
+                                <div className="flex items-center gap-2 flex-wrap">
                                     {!unbouncerProcessing ? (
                                         <button
                                             onClick={handleUnbouncerStart}
                                             disabled={unbouncerInput.trim().length === 0}
-                                            className="bg-accent text-black px-6 py-3 rounded-xl font-bold hover:bg-accent disabled:opacity-50 transition-all flex items-center gap-2 shadow-lg shadow-accent/10"
+                                            className="btn btn-primary btn-lg"
                                         >
-                                            <Zap className="w-4 h-4" />
-                                            Verify Emails
+                                            <Zap className="w-3.5 h-3.5" />
+                                            Check addresses
                                         </button>
                                     ) : (
-                                        <button
-                                            onClick={handleUnbouncerCancel}
-                                            className="bg-red-500/10 text-red-400 border border-red-500/30 px-6 py-3 rounded-xl font-bold hover:bg-red-500/20 transition-all flex items-center gap-2"
-                                        >
-                                            <StopCircle className="w-4 h-4" />
-                                            Cancel
+                                        <button onClick={handleUnbouncerCancel} className="btn btn-danger btn-lg">
+                                            <StopCircle className="w-3.5 h-3.5" />
+                                            Stop
                                         </button>
                                     )}
 
-                                    <label className="bg-zinc-800 text-zinc-300 px-4 py-3 rounded-xl font-medium hover:bg-zinc-700 transition-colors flex items-center gap-2 cursor-pointer border border-zinc-700">
-                                        <Upload className="w-4 h-4" />
-                                        Upload CSV
+                                    <label className="btn btn-outline cursor-pointer">
+                                        <Upload className="w-3.5 h-3.5" />
+                                        Load CSV
                                         <input type="file" accept=".csv" onChange={handleUnbouncerCSV} className="hidden" />
                                     </label>
 
+                                    <span className="flex-1" />
+
                                     {unbouncerResults.length > 0 && (
                                         <>
-                                            <button
-                                                onClick={handleUnbouncerExport}
-                                                className="bg-white/5 border border-zinc-800 text-white px-4 py-3 rounded-xl font-medium hover:bg-zinc-800 transition-colors flex items-center gap-2"
-                                            >
-                                                <Download className="w-4 h-4" />
-                                                Export All{unbouncerProcessing ? ` (${unbouncerResults.length})` : ''}
+                                            <button onClick={handleUnbouncerExport} className="btn btn-ghost">
+                                                <Download className="w-3.5 h-3.5" />
+                                                Export all
                                             </button>
-                                            <button
-                                                onClick={handleUnbouncerExportValid}
-                                                className="bg-accent/10 border border-accent/30 text-accent px-4 py-3 rounded-xl font-medium hover:bg-accent/20 transition-colors flex items-center gap-2"
-                                            >
-                                                <ShieldCheck className="w-4 h-4" />
-                                                Export Valid Only
+                                            <button onClick={handleUnbouncerExportValid} className="btn btn-outline">
+                                                <ShieldCheck className="w-3.5 h-3.5" />
+                                                Export safe to send
                                             </button>
                                         </>
                                     )}
                                 </div>
 
-                                {/* Progress Bar */}
+                                <VerificationProviderStatus
+                                    provider={unbouncerResults.find(result => result.verificationProvider)?.verificationProvider}
+                                    remainingCredits={unbouncerResults.length ? unbouncerResults[unbouncerResults.length - 1].remainingCredits : undefined}
+                                />
                                 {unbouncerProcessing && (
-                                    <div className="mt-2">
-                                        <div className="h-2 w-full bg-black/50 rounded-full overflow-hidden">
+                                    <div>
+                                        <div className="bar-track">
                                             <div
-                                                className="h-full bg-gradient-to-r from-accent to-teal-400 transition-all duration-500"
+                                                className="bar-fill"
                                                 style={{ width: `${unbouncerTotal > 0 ? (unbouncerProgress / unbouncerTotal) * 100 : 0}%` }}
                                             />
                                         </div>
-                                        <div className="flex justify-between mt-1">
-                                            <p className="text-xs text-zinc-500">{unbouncerProgress} of {unbouncerTotal} emails verified</p>
-                                            <p className="text-xs text-accent font-mono">{unbouncerTotal > 0 ? Math.round((unbouncerProgress / unbouncerTotal) * 100) : 0}%</p>
-                                        </div>
+                                        <p className="text-[11.5px] text-[var(--text-faint)] mt-2">
+                                            <span className="num">{unbouncerProgress}</span> of <span className="num">{unbouncerTotal}</span> checked
+                                        </p>
                                     </div>
                                 )}
                             </div>
-                        </div>
+                        </section>
 
-                        {/* Stats Cards */}
                         {unbouncerResults.length > 0 && (
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                <div className="bg-[#111] border border-accent/20 rounded-2xl p-5">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <ShieldCheck className="w-4 h-4 text-accent" />
-                                        <p className="text-zinc-500 text-xs uppercase font-bold tracking-widest">Valid</p>
+                            <>
+                                {/*
+                                 * Four outcomes named for what they mean rather than for
+                                 * the label the verifier stores. "Unknown" reads as a
+                                 * problem with the lead; overwhelmingly it is a verdict
+                                 * about the machine doing the asking, and the count of
+                                 * host refusals is printed underneath for exactly that
+                                 * reason.
+                                 */}
+                                <div className="figures">
+                                    <div className="fig">
+                                        <div className="fig-value fig-value-signal">{verifyCounts.VALID.toLocaleString()}</div>
+                                        <p className="label-micro mt-2">Safe to send</p>
+                                        <p className="fig-sub">Verified mailbox, with safety checks passed</p>
                                     </div>
-                                    <p className="text-3xl font-bold text-accent">{unbouncerResults.filter(r => r.status === 'VALID').length}</p>
-                                    <p className="text-[10px] text-zinc-600 mt-1">Ready to send</p>
-                                </div>
-                                <div className="bg-[#111] border border-red-500/20 rounded-2xl p-5">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <ShieldX className="w-4 h-4 text-red-500" />
-                                        <p className="text-zinc-500 text-xs uppercase font-bold tracking-widest">Invalid</p>
+                                    <div className="fig">
+                                        <div className="fig-value fig-value-warn">{verifyCounts.RISKY.toLocaleString()}</div>
+                                        <p className="label-micro mt-2">Risky</p>
+                                        <p className="fig-sub">Catch-all, disposable, role or other unsafe address</p>
                                     </div>
-                                    <p className="text-3xl font-bold text-red-500">{unbouncerResults.filter(r => r.status === 'INVALID').length}</p>
-                                    <p className="text-[10px] text-zinc-600 mt-1">Will bounce</p>
-                                </div>
-                                <div className="bg-[#111] border border-amber-500/20 rounded-2xl p-5">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <ShieldAlert className="w-4 h-4 text-amber-500" />
-                                        <p className="text-zinc-500 text-xs uppercase font-bold tracking-widest">Risky</p>
+                                    <div className="fig">
+                                        <div className="fig-value">{verifyCounts.UNKNOWN.toLocaleString()}</div>
+                                        <p className="label-micro mt-2">No answer</p>
+                                        <p className="fig-sub">
+                                            {hostRefusedCount > 0
+                                                ? <><span className="num">{hostRefusedCount}</span> refused us, not the address</>
+                                                : 'The server never gave a verdict'}
+                                        </p>
                                     </div>
-                                    <p className="text-3xl font-bold text-amber-500">{unbouncerResults.filter(r => r.status === 'RISKY').length}</p>
-                                    <p className="text-[10px] text-zinc-600 mt-1">Catch-all / disposable</p>
-                                </div>
-                                <div className="bg-[#111] border border-zinc-700 rounded-2xl p-5">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <ShieldQuestion className="w-4 h-4 text-zinc-400" />
-                                        <p className="text-zinc-500 text-xs uppercase font-bold tracking-widest">Unknown</p>
+                                    <div className="fig">
+                                        <div className="fig-value" style={{ color: 'var(--bad)' }}>{verifyCounts.INVALID.toLocaleString()}</div>
+                                        <p className="label-micro mt-2">Invalid</p>
+                                        <p className="fig-sub">Invalid address, domain or rejected mailbox</p>
                                     </div>
-                                    <p className="text-3xl font-bold text-zinc-400">{unbouncerResults.filter(r => r.status === 'UNKNOWN').length}</p>
-                                    <p className="text-[10px] text-zinc-600 mt-1">Could not verify</p>
                                 </div>
-                            </div>
-                        )}
 
-                        {/* Results Table */}
-                        {unbouncerResults.length > 0 && (
-                            <div className="bg-[#111] border border-zinc-800 rounded-3xl p-6">
-                                <div className="flex items-center justify-between mb-4">
-                                    <div className="flex items-center gap-2">
-                                        <ShieldCheck className="w-4 h-4 text-accent" />
-                                        <h3 className="text-sm font-semibold uppercase tracking-wider">Verification Results</h3>
-                                        <span className="text-xs text-zinc-500">
-                                            {unbouncerResults.filter(r => r.status === 'VALID').length}/{unbouncerResults.length} valid •{" "}
-                                            Avg score: {Math.round(unbouncerResults.reduce((a, r) => a + r.score, 0) / unbouncerResults.length)}
-                                        </span>
+                                <section className="panel">
+                                    <div className="panel-head">
+                                        Detail
+                                        {unbouncerProcessing && (
+                                            <span className="hint flex items-center gap-1.5">
+                                                <span className="dot-live" aria-hidden />
+                                                Checking
+                                            </span>
+                                        )}
                                     </div>
-                                    {unbouncerProcessing && (
-                                        <span className="text-[10px] bg-accent/10 text-accent px-3 py-1 rounded-full border border-accent/20 flex items-center gap-1.5">
-                                            <Loader2 className="w-3 h-3 animate-spin" />
-                                            VERIFYING
-                                        </span>
-                                    )}
-                                </div>
-                                <div className="overflow-x-auto rounded-xl border border-zinc-800">
-                                    <table className="w-full text-sm">
-                                        <thead>
-                                            <tr className="bg-black/80 border-b border-zinc-800">
-                                                <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">#</th>
-                                                <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">Email</th>
-                                                <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">Status</th>
-                                                <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">Score</th>
-                                                <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">Checks</th>
-                                                <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider font-bold px-4 py-3">Reason</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {unbouncerResults.map((r, i) => (
-                                                <tr key={i} className={cn(
-                                                    "border-b border-zinc-800/50 transition-all hover:bg-zinc-800/30 animate-in fade-in slide-in-from-bottom-1 duration-300",
-                                                    i % 2 === 0 ? "bg-black/20" : "bg-transparent"
-                                                )}>
-                                                    <td className="px-4 py-3 text-zinc-600 font-mono text-xs">{i + 1}</td>
-                                                    <td className="px-4 py-3">
-                                                        <div className="flex items-center gap-1.5">
-                                                            <AtSign className="w-3 h-3 text-zinc-600 flex-shrink-0" />
-                                                            <span className="text-zinc-200 text-xs font-mono">{r.email}</span>
-                                                            {r.provider && (
-                                                                <span className="text-[9px] bg-zinc-800 text-zinc-500 px-1.5 py-0.5 rounded-md">{r.provider}</span>
-                                                            )}
-                                                        </div>
-                                                    </td>
-                                                    <td className="px-4 py-3">
-                                                        <span className={cn(
-                                                            "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
-                                                            r.status === 'VALID' && "bg-accent/10 text-accent border border-accent/20",
-                                                            r.status === 'INVALID' && "bg-red-500/10 text-red-400 border border-red-500/20",
-                                                            r.status === 'RISKY' && "bg-amber-500/10 text-amber-400 border border-amber-500/20",
-                                                            r.status === 'UNKNOWN' && "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20",
-                                                        )}>
-                                                            {r.status === 'VALID' && <ShieldCheck className="w-3 h-3" />}
-                                                            {r.status === 'INVALID' && <ShieldX className="w-3 h-3" />}
-                                                            {r.status === 'RISKY' && <ShieldAlert className="w-3 h-3" />}
-                                                            {r.status === 'UNKNOWN' && <ShieldQuestion className="w-3 h-3" />}
-                                                            {r.status}
-                                                        </span>
-                                                    </td>
-                                                    <td className="px-4 py-3">
-                                                        <div className="flex items-center gap-2">
-                                                            <div className="w-16 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                                                                <div
-                                                                    className={cn(
-                                                                        "h-full rounded-full transition-all",
-                                                                        r.score >= 75 ? "bg-accent" :
-                                                                        r.score >= 45 ? "bg-amber-500" :
-                                                                        r.score >= 25 ? "bg-orange-500" : "bg-red-500"
-                                                                    )}
-                                                                    style={{ width: `${r.score}%` }}
-                                                                />
-                                                            </div>
-                                                            <span className={cn(
-                                                                "text-xs font-mono font-bold",
-                                                                r.score >= 75 ? "text-accent" :
-                                                                r.score >= 45 ? "text-amber-400" :
-                                                                r.score >= 25 ? "text-orange-400" : "text-red-400"
-                                                            )}>{r.score}</span>
-                                                        </div>
-                                                    </td>
-                                                    <td className="px-4 py-3">
-                                                        <div className="flex flex-wrap gap-1">
-                                                            {r.checks.syntax && (
-                                                                <span className="text-[9px] bg-accent/10 text-accent border border-accent/20 px-1.5 py-0.5 rounded-md">Syntax ✓</span>
-                                                            )}
-                                                            {r.checks.mxRecord && (
-                                                                <span className="text-[9px] bg-accent/10 text-accent border border-accent/20 px-1.5 py-0.5 rounded-md">MX ✓</span>
-                                                            )}
-                                                            {!r.checks.mxRecord && r.checks.syntax && (
-                                                                <span className="text-[9px] bg-red-500/10 text-red-400 border border-red-500/20 px-1.5 py-0.5 rounded-md">No MX ✗</span>
-                                                            )}
-                                                            {r.checks.smtpValid === true && (
-                                                                <span className="text-[9px] bg-accent/10 text-accent border border-accent/20 px-1.5 py-0.5 rounded-md">SMTP ✓</span>
-                                                            )}
-                                                            {r.checks.smtpValid === false && (
-                                                                <span className="text-[9px] bg-red-500/10 text-red-400 border border-red-500/20 px-1.5 py-0.5 rounded-md">SMTP ✗</span>
-                                                            )}
-                                                            {r.checks.disposable && (
-                                                                <span className="text-[9px] bg-amber-500/10 text-amber-400 border border-amber-500/20 px-1.5 py-0.5 rounded-md flex items-center gap-0.5"><Ban className="w-2.5 h-2.5" />Disposable</span>
-                                                            )}
-                                                            {r.checks.catchAll === true && (
-                                                                <span className="text-[9px] bg-amber-500/10 text-amber-400 border border-amber-500/20 px-1.5 py-0.5 rounded-md">Catch-All</span>
-                                                            )}
-                                                            {r.checks.roleAccount && (
-                                                                <span className="text-[9px] bg-zinc-500/10 text-zinc-400 border border-zinc-500/20 px-1.5 py-0.5 rounded-md flex items-center gap-0.5"><UserX className="w-2.5 h-2.5" />Role</span>
-                                                            )}
-                                                            {r.checks.freeProvider && (
-                                                                <span className="text-[9px] bg-blue-500/10 text-blue-400 border border-blue-500/20 px-1.5 py-0.5 rounded-md">Free</span>
-                                                            )}
-                                                        </div>
-                                                    </td>
-                                                    <td className="px-4 py-3">
-                                                        <span className="text-[11px] text-zinc-400 max-w-[250px] truncate block">{r.reason}</span>
-                                                    </td>
+                                    <div className="tbl-wrap !border-0 !rounded-none">
+                                        <table className="w-full text-[13px]">
+                                            <thead>
+                                                <tr className="tbl-head">
+                                                    <th className="text-right px-4 py-2.5 w-12">#</th>
+                                                    <th className="text-left px-4 py-2.5">Address</th>
+                                                    <th className="text-left px-4 py-2.5">Result</th>
+                                                    <th className="text-left px-4 py-2.5 w-[120px]">Score</th>
+                                                    <th className="text-left px-4 py-2.5">Why</th>
                                                 </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-
-                                {/* Summary Footer */}
-                                <div className="flex items-center justify-between mt-4 px-1">
-                                    <p className="text-[10px] text-zinc-600">
-                                        Showing {unbouncerResults.length} result{unbouncerResults.length !== 1 ? 's' : ''}
-                                    </p>
-                                    <div className="flex items-center gap-3">
-                                        <span className="text-[10px] text-accent">{unbouncerResults.filter(r => r.status === 'VALID').length} valid</span>
-                                        <span className="text-[10px] text-red-500">{unbouncerResults.filter(r => r.status === 'INVALID').length} invalid</span>
-                                        <span className="text-[10px] text-amber-500">{unbouncerResults.filter(r => r.status === 'RISKY').length} risky</span>
-                                        <span className="text-[10px] text-zinc-500">{unbouncerResults.filter(r => r.status === 'UNKNOWN').length} unknown</span>
+                                            </thead>
+                                            <tbody>
+                                                {unbouncerResults.map((r, i) => (
+                                                    <tr key={i} className="tbl-row">
+                                                        <td className="px-4 py-2.5 num text-[11px] text-[var(--text-faint)] text-right align-top">{i + 1}</td>
+                                                        <td className="px-4 py-2.5 align-top">
+                                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                                                <span className="text-[12.5px] font-[family-name:var(--font-mono)] text-[var(--text)]">{r.email}</span>
+                                                                {r.provider && <span className="chip">{r.provider}</span>}
+                                                                {r.method && <span className="chip">{r.method.replace(/_/g, ' ').toLowerCase()}</span>}
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-4 py-2.5 align-top">
+                                                            <VerifyMark result={r} />
+                                                        </td>
+                                                        <td className="px-4 py-2.5 align-top">
+                                                            <div className="flex items-center gap-2">
+                                                                <div className="bar-track w-14 !h-1.5">
+                                                                    <div
+                                                                        className={cn(
+                                                                            "bar-fill",
+                                                                            r.score >= 75 ? "" : r.score >= 45 ? "bar-fill-warn" : r.score >= 25 ? "bar-fill-dim" : "bar-fill-bad",
+                                                                        )}
+                                                                        style={{ width: `${r.score}%` }}
+                                                                    />
+                                                                </div>
+                                                                <span className="num text-[12px] text-[var(--text-dim)]">{r.score}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-4 py-2.5 align-top">
+                                                            <span className="text-[12px] text-[var(--text-dim)] line-clamp-2 max-w-[380px]" title={r.reason}>
+                                                                {r.reason}
+                                                            </span>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
                                     </div>
-                                </div>
-                            </div>
+                                    <div className="panel-note">
+                                        <span>Only <strong className="text-[var(--signal)]">Safe to send</strong> results are included in the safe export.</span>
+                                        <span>&ldquo;No answer&rdquo; means verification was inconclusive. Check failed results can be retried.</span>
+                                    </div>
+                                </section>
+                            </>
                         )}
                     </div>
                 ) : activeTab === 'cleaner' ? (
-                    <div className="col-span-1 md:col-span-3 lg:col-span-4">
-                        <UrlCleaner />
-                    </div>
+                    <UrlCleaner />
                 ) : activeTab === 'finder' ? (
-                    <div className="col-span-1 md:col-span-3 lg:col-span-4">
-                        <FinderEngine onPushToEngine={(urls) => {
-                            setCsvUrls(urls);
-                            setActiveTab('engine');
-                            setTimeout(() => {
-                                handleStartEngine(0, [], urls);
-                            }, 500);
-                        }} />
-                    </div>
+                    <FinderEngine onPushToEngine={(urls) => {
+                        setCsvUrls(urls);
+                        setActiveTab('engine');
+                        setTimeout(() => {
+                            handleStartEngine(0, [], urls);
+                        }, 500);
+                    }} />
                 ) : activeTab === 'crm' ? (
-                    <div className="col-span-1 md:col-span-3 lg:col-span-4">
-                        <CrmDatabase onPushToEngine={(urls) => {
-                            setCsvUrls(urls);
-                            setActiveTab('engine');
-                            // Start processing automatically with the new urls
-                            setTimeout(() => {
-                                handleStartEngine(0, [], urls);
-                            }, 500);
-                        }} />
+                    <CrmDatabase onOpenCaseStudy={() => { setCaseStudyEntryView('CRM_OUTREACH'); setActiveTab('case-study'); }} onPushToEngine={(urls) => {
+                        setCsvUrls(urls);
+                        setActiveTab('engine');
+                        // Start processing automatically with the new urls
+                        setTimeout(() => {
+                            handleStartEngine(0, [], urls);
+                        }, 500);
+                    }} />
+                ) : activeTab === 'case-study' ? (
+                    <CaseStudyHunter initialView={caseStudyEntryView} />
+                ) : activeTab === 'discovery' ? (
+                    <DiscoveryCallsWorkspace onOnboarding={(id) => { setOnboardingProjectId(id); setActiveTab('onboarding'); }} />
+                ) : activeTab === 'funnel' ? (
+                    null
+                ) : activeTab === 'copy-studio' ? (
+                    null
+                ) : activeTab === 'content-create' ? (
+                    null
+                ) : <BusinessWorkspace view={activeTab as BusinessView} onNavigate={setActiveTab} initialProjectId={onboardingProjectId} />}
+                    {(copyStudioOpened || activeTab === 'copy-studio') && <div hidden={activeTab !== 'copy-studio'}><CopyStudio /></div>}
+                    {(contentCreateOpened || activeTab === 'content-create') && <div hidden={activeTab !== 'content-create'}><ContentCreate /></div>}
+                    <div hidden={activeTab !== 'funnel'}>
+                        <FunnelAnalyzer />
                     </div>
-                ) : null}
+
+                    </main>
+                </div>
             </div>
 
             {/* Saved Runs History Modal */}
             {showHistory && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                    <div className="bg-[#111] border border-zinc-800 rounded-2xl p-6 w-full max-w-xl mx-4 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[80vh] overflow-hidden flex flex-col">
-                        <div className="flex items-center justify-between mb-4">
-                            <div className="flex items-center gap-2">
-                                <Database className="w-5 h-5 text-purple-400" />
-                                <h3 className="text-lg font-semibold">Saved Runs</h3>
-                            </div>
-                            <button onClick={() => setShowHistory(false)} className="text-zinc-500 hover:text-white p-1 rounded-lg hover:bg-zinc-800 transition-colors">
-                                <X className="w-5 h-5" />
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 animate-in fade-in duration-150">
+                    <div className="panel w-full max-w-xl max-h-[80vh] overflow-hidden flex flex-col shadow-[0_24px_60px_rgba(0,0,0,0.7)]">
+                        <div className="panel-head flex-none">
+                            Saved runs
+                            <button onClick={() => setShowHistory(false)} className="btn btn-ghost !p-1 ml-auto" aria-label="Close">
+                                <X className="w-4 h-4" />
                             </button>
                         </div>
 
-                        <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+                        <div className="flex-1 overflow-y-auto">
                             {historyLoading ? (
-                                <div className="flex items-center justify-center py-12">
-                                    <Loader2 className="w-6 h-6 text-zinc-500 animate-spin" />
+                                <div className="flex items-center justify-center py-16">
+                                    <Loader2 className="w-5 h-5 text-[var(--text-faint)] animate-spin" />
                                 </div>
                             ) : savedRuns.length > 0 ? (
                                 savedRuns.map((run) => (
-                                    <div key={run.filename} className="bg-black/50 border border-zinc-800/50 p-4 rounded-xl flex items-center justify-between gap-3 hover:bg-zinc-800/30 transition-colors">
+                                    <div key={run.filename} className="tbl-row px-4 py-3 flex items-center justify-between gap-3">
                                         <div className="flex-1 min-w-0">
-                                            <p className="text-sm text-white font-medium truncate">{run.filename}</p>
-                                            <div className="flex items-center gap-3 mt-1">
-                                                <span className="text-[10px] text-zinc-500 flex items-center gap-1">
+                                            <p className="text-[13px] text-[var(--text)] truncate">{run.filename}</p>
+                                            <div className="flex items-center gap-3 mt-1 flex-wrap">
+                                                <span className="text-[11px] text-[var(--text-faint)] flex items-center gap-1">
                                                     <Clock className="w-3 h-3" />
                                                     {new Date(run.savedAt).toLocaleString()}
                                                 </span>
-                                                <span className="text-[10px] text-accent">{run.qualifiedCount} qualified</span>
-                                                <span className="text-[10px] text-blue-500">{run.emailsFound} emails</span>
-                                                <span className="text-[10px] text-zinc-500">{run.processedCount}/{run.totalCount} processed</span>
+                                                <span className="text-[11px] text-[var(--signal)]">
+                                                    <span className="num">{run.qualifiedCount}</span> qualified
+                                                </span>
+                                                <span className="text-[11px] text-[var(--text-faint)]">
+                                                    <span className="num">{run.emailsFound}</span> addresses
+                                                </span>
+                                                <span className="text-[11px] text-[var(--text-faint)]">
+                                                    <span className="num">{run.processedCount}</span>/<span className="num">{run.totalCount}</span> done
+                                                </span>
                                             </div>
                                         </div>
-                                        <div className="flex gap-1.5">
-                                            <button
-                                                onClick={() => handleLoadRun(run.filename)}
-                                                className="p-2 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors"
-                                                title="Load this run"
-                                            >
-                                                <FolderOpen className="w-4 h-4" />
+                                        <div className="flex gap-1 flex-none">
+                                            <button onClick={() => handleLoadRun(run.filename)} className="btn btn-outline !px-2" title="Load this run">
+                                                <FolderOpen className="w-3.5 h-3.5" />
                                             </button>
-                                            <button
-                                                onClick={() => handleDeleteRun(run.filename)}
-                                                className="p-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors"
-                                                title="Delete this run"
-                                            >
-                                                <Trash2 className="w-4 h-4" />
+                                            <button onClick={() => handleDeleteRun(run.filename)} className="btn btn-ghost !px-2 !text-[var(--bad)]" title="Delete this run">
+                                                <Trash2 className="w-3.5 h-3.5" />
                                             </button>
                                         </div>
                                     </div>
                                 ))
                             ) : (
-                                <div className="flex flex-col items-center gap-2 py-12">
-                                    <History className="w-8 h-8 text-zinc-700" />
-                                    <p className="text-zinc-600 text-sm">No saved runs found</p>
-                                    <p className="text-zinc-700 text-xs">Results will appear here after processing</p>
+                                <div className="py-16 text-center">
+                                    <p className="text-[13px] text-[var(--text-dim)]">No saved runs yet</p>
+                                    <p className="text-[12px] text-[var(--text-faint)] mt-1">Finished runs are saved here automatically</p>
                                 </div>
                             )}
                         </div>

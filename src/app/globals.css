@@ -1,40 +1,724 @@
 @import "tailwindcss";
 
+/* Balanced dashboard system: a deep navigation rail, readable ink, and a calm
+   light working surface shared by the internal app and client portal. */
+
 @theme {
-  --color-background: #0B0B0B;
-  --color-text: #F0EFE9;
-  --color-accent: #C8F135;
-  --color-danger: #E56B6B;
-  --font-sans: var(--font-outfit), 'Outfit', sans-serif;
-  --font-mono: var(--font-fira-code), 'Fira Code', monospace;
+  --color-background: #edf2f8;
+  --color-text: #142139;
+  --color-accent: #294cc7;
+  --color-danger: #c43f48;
+  --font-sans: var(--font-inter), 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-fira-code), 'Fira Code', ui-monospace, SFMono-Regular, monospace;
 }
 
 :root {
-  --background: #0B0B0B;
-  --foreground: #F0EFE9;
-  --accent: #C8F135;
+  --surface-0: #edf2f8;
+  --surface-1: #ffffff;
+  --surface-2: #f3f6fa;
+  --surface-3: #e4ebf4;
+
+  --line: #d8e1ed;
+  --line-strong: #bdcada;
+
+  --text: #142139;
+  --text-dim: #40516b;
+  --text-faint: #586b84;
+
+  --signal: #294cc7;
+  --signal-dim: #e2eaff;
+  --signal-line: #aabcf0;
+  --success: #0e7453;
+  --success-dim: #e8f7f0;
+  --warn: #9b620c;
+  --warn-dim: #fff4e3;
+  --bad: #c43f48;
+  --bad-dim: #fff0f1;
+  --info: #12668c;
+  --info-dim: #e7f5fc;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+
+  --background: var(--surface-0);
+  --foreground: var(--text);
+  --accent: var(--signal);
+
+  color-scheme: light;
 }
 
 body {
-  background-color: var(--color-background);
-  color: var(--color-text);
+  background-color: var(--surface-0);
+  color: var(--text);
   font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
   overflow-x: hidden;
 }
 
-/* Custom scrollbar to match sleek theme */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+::selection { background: var(--signal-dim); color: var(--text); }
+
+/* One focus treatment for the whole app. Keyboard users get a visible ring on
+   every control without each component remembering to add one. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
 }
-::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.2);
+
+/* ---- type -------------------------------------------------------------- */
+
+/* Tabular figures align without the slashed zero used by code fonts. */
+.num {
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+
+/* Small uppercase caption for column heads and meta rows. */
+.label-micro {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* Screen title. One per view, above the content, never inside a panel. */
+.screen-title {
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  line-height: 1.2;
+}
+.screen-sub {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-top: 3px;
+  max-width: 62ch;
+  text-wrap: pretty;
+}
+
+.text-dim { color: var(--text-dim); }
+.text-faint { color: var(--text-faint); }
+
+/* ---- surfaces ---------------------------------------------------------- */
+
+.panel {
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 5px 20px rgba(25, 42, 72, 0.065);
+}
+
+/* Header strip inside a panel. Sits slightly above its body. */
+.rail {
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+}
+
+/*
+ * A hairline of signal colour along the top edge, for the panel that is
+ * currently doing something. Cheaper than a glow and reads at a glance.
+ */
+.rail-live {
+  position: relative;
+}
+.rail-live::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--signal), transparent);
+  opacity: 0.7;
+}
+
+/* Title row of a panel: a name on the left, a quiet hint on the right. */
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text);
+}
+.panel-head .hint {
+  margin-left: auto;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.panel-body { padding: 18px; }
+
+/* Footnote strip under a panel: legends, caveats, the count that qualifies the
+   numbers above it. The honest number lives here. */
+.panel-note {
+  border-top: 1px solid var(--line);
+  padding: 10px 16px;
+  font-size: 12px;
+  color: var(--text-faint);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+
+/* ---- app shell --------------------------------------------------------- */
+
+.sidebar {
+  background: #17243b;
+  border-right: 1px solid #293a56;
+  box-shadow: 5px 0 24px rgba(17, 31, 54, 0.12);
+}
+.sidebar .label-micro { color: #9dadc8; }
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 10px 11px;
+  border-radius: var(--radius-sm);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: #c3cfe2;
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+.nav-item:hover { background: #243653; color: #ffffff; transform: translateX(2px); }
+.nav-item-active {
+  background: #314b79;
+  border-color: #5473a9;
+  color: #ffffff;
+  font-weight: 600;
+}
+.nav-item-signal.nav-item-active {
+  background: #314b79;
+  border-color: #5473a9;
+  color: #ffffff;
+}
+.nav-item-signal:not(.nav-item-active) { color: #c3cfe2; opacity: 1; }
+
+/* Count sitting at the right edge of a nav row. */
+.nav-count {
+  margin-left: auto;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: #aebed7;
+}
+
+.topbar {
+  background: rgba(255, 255, 255, 0.97);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(14px);
+}
+
+/* ---- buttons ----------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.56rem 0.85rem;
+  border-radius: var(--radius-sm);
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+}
+.btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+/* The one action a screen is for. There should be at most one visible. */
+.btn-primary {
+  background: var(--signal);
+  color: #ffffff;
+  font-weight: 600;
+  border-color: var(--signal);
+  box-shadow: 0 4px 12px rgba(41, 76, 199, 0.18);
+}
+.btn-primary:hover:not(:disabled) {
+  background: #213eaa;
+  border-color: #213eaa;
+  color: #ffffff;
+  box-shadow: 0 6px 15px rgba(41, 76, 199, 0.24);
+}
+
+/* Secondary actions: hairline outline, no fill until hover. */
+.btn-outline {
+  border-color: var(--line-strong);
+  color: var(--text-dim);
+}
+.btn-outline:hover:not(:disabled) {
+  border-color: var(--signal-line);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.btn-danger {
+  color: var(--bad);
+  border-color: rgba(229, 107, 107, 0.3);
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--bad-dim);
+  color: var(--bad);
+}
+
+/* Toolbar of many equals: no border until hover. */
+.btn-ghost { border-color: transparent; }
+.btn-ghost:hover:not(:disabled) { background: var(--surface-3); }
+
+.btn-lg { padding: 0.6rem 1.1rem; font-size: 13.5px; }
+
+/* ---- segmented control ------------------------------------------------- */
+
+/* Two to four mutually exclusive choices sharing one job — the region picker,
+   single vs bulk. Reads as one control, not as loose buttons. */
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.seg-item {
+  padding: 0.35rem 0.75rem;
   border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-faint);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.14s ease, color 0.14s ease;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+.seg-item:hover { color: var(--text-dim); }
+.seg-item-active { background: var(--surface-1); color: var(--signal); box-shadow: 0 1px 4px rgba(28, 45, 78, 0.10); }
+
+/* ---- tabs -------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: var(--radius-sm);
+  font-size: 13.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--text-faint);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: color 0.14s ease, background-color 0.14s ease;
+}
+.tab:hover { color: var(--text-dim); }
+.tab-active {
+  color: var(--signal);
+  background: var(--signal-dim);
+  border-color: var(--signal-line);
+}
+/* The send list. Always reads as the live one. */
+.tab-signal {
+  color: var(--signal);
+}
+.tab-signal.tab-active {
+  background: var(--signal-dim);
+  border-color: var(--signal-line);
+  color: var(--signal);
+}
+
+.tab-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--line-strong);
+  margin: 0 6px;
+  flex: none;
+}
+
+/* ---- status marks ------------------------------------------------------ */
+
+/*
+ * Status is a small square plus a word, not a filled lozenge. Filled pills on
+ * every row turn a table into confetti; a mark you can scan down a column does
+ * the same job with none of the noise.
+ */
+.mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.mark::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: currentColor;
+  flex: none;
+}
+.mark-ok { color: var(--success); }
+.mark-warn { color: var(--warn); }
+.mark-bad { color: var(--bad); }
+.mark-info { color: var(--info); }
+.mark-idle { color: var(--text-faint); }
+
+/* Compact inline badge, for the few places a word alone isn't enough. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.12rem 0.4rem;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  border: 1px solid transparent;
+}
+.badge-ok { color: var(--success); background: var(--success-dim); border-color: #bce7d1; }
+.badge-warn { color: var(--warn); background: var(--warn-dim); border-color: #f3d9ad; }
+.badge-bad { color: var(--bad); background: var(--bad-dim); border-color: #f1c8cc; }
+.badge-info { color: var(--info); background: var(--info-dim); border-color: #c6e7f5; }
+.badge-idle { color: var(--text-faint); background: var(--surface-3); border-color: var(--line); }
+
+/* Quiet mono chip for provenance: a method name, a provider, a source. Never
+   coloured — these qualify a value, they don't rank it. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  padding: 0.1rem 0.32rem;
+  border-radius: 3px;
+  background: var(--surface-3);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+/* Live indicator: a breathing dot, not a chip that shouts LIVE. */
+.dot-live {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--success); position: relative; flex: none;
+  display: inline-block;
+}
+.dot-live::after {
+  content: "";
+  position: absolute; inset: -4px;
+  border-radius: 50%;
+  border: 1px solid #bce7d1;
+  animation: compel-breathe 2.6s ease-in-out infinite;
+}
+@keyframes compel-breathe {
+  0%, 100% { opacity: 0.9; transform: scale(1); }
+  50%      { opacity: 0.2; transform: scale(1.3); }
+}
+@media (prefers-reduced-motion: reduce) { .dot-live::after { animation: none; } }
+.dot-idle { background: var(--text-faint); }
+.dot-idle::after { display: none; }
+.dot-warn { background: var(--warn); }
+.dot-warn::after { border-color: var(--warn); }
+.dot-bad { background: var(--bad); }
+.dot-bad::after { display: none; }
+
+/* ---- metrics ----------------------------------------------------------- */
+
+/* A figure with its caption underneath, for the header readout. */
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 0.9rem;
+  border-left: 1px solid var(--line);
+}
+.stat:first-child { border-left: 0; padding-left: 0; }
+.stat-value {
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.stat-value-signal { color: var(--signal); }
+
+/*
+ * The headline readout. Three at most — a row of eight tiles is read as none,
+ * which is what the old Total / Gate Passed / Emails / Efficiency strip did.
+ * Each figure carries a line saying what it actually counts.
+ */
+.figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+}
+.fig {
+  padding: 20px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 5px 20px rgba(25, 42, 72, 0.065);
+  min-width: 0;
+}
+.fig-value {
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  color: var(--text);
+}
+.fig-value-signal { color: var(--signal); }
+.fig-value-warn { color: var(--warn); }
+.fig-sub {
+  font-size: 12.5px;
+  color: var(--text-faint);
+  margin-top: 4px;
+  text-wrap: pretty;
+}
+
+/* Horizontal magnitude bar. One hue, depth of fill carries the stage — a
+   different colour per stage would imply the stages rank against each other. */
+.bar-track {
+  height: 6px;
+  background: var(--surface-3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  background: var(--signal);
+  border-radius: 3px;
+  transition: width 0.45s ease;
+}
+.bar-fill-dim { background: var(--text-faint); }
+.bar-fill-warn { background: var(--warn); }
+.bar-fill-bad { background: var(--bad); }
+
+/* ---- table ------------------------------------------------------------- */
+
+.tbl-head {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.tbl-row {
+  border-bottom: 1px solid var(--line);
+  transition: background-color 0.12s ease;
+}
+.tbl-row:hover { background: var(--surface-2); }
+.tbl-row-selected { background: var(--signal-dim); }
+
+/* Any table wider than its column: scrolls inside itself so the page body
+   never scrolls sideways. */
+.tbl-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+/* ---- menu -------------------------------------------------------------- */
+
+.menu {
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 18px 44px rgba(29, 47, 82, 0.14);
+  padding: 4px;
+  min-width: 232px;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.menu-item:hover { background: var(--surface-3); color: var(--text); }
+.menu-sep { height: 1px; background: var(--line); margin: 4px 2px; }
+
+/* ---- inputs ------------------------------------------------------------ */
+
+.field {
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  padding: 0.62rem 0.75rem;
+  outline: none;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.field:focus {
+  border-color: var(--signal-line);
+  box-shadow: 0 0 0 3px var(--signal-dim);
+  outline: none;
+}
+.field::placeholder { color: var(--text-faint); }
+
+/* Label above a field. Paired with .field-hint underneath for the ones whose
+   correct value isn't obvious. */
+.field-label {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
+.field-hint {
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-top: 6px;
+  text-wrap: pretty;
+}
+
+/* Drop target for a CSV. Dashed while empty, signal hairline once loaded. */
+.drop {
+  position: relative;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  transition: border-color 0.16s ease, background-color 0.16s ease;
+}
+.drop:hover { border-color: var(--signal-line); }
+.drop-active { border-color: var(--signal); background: var(--signal-dim); }
+.drop-loaded { border-style: solid; border-color: var(--signal-line); }
+
+/* ---- feed -------------------------------------------------------------- */
+
+/* Activity rows. A left hairline in the row's own colour carries the outcome,
+   so the eye can run down the edge without reading every line. */
+.feed-row {
+  border-left: 2px solid var(--line-strong);
+  padding: 7px 0 7px 11px;
+  transition: border-color 0.14s ease;
+}
+.feed-row-ok { border-left-color: var(--signal); }
+.feed-row-bad { border-left-color: var(--bad); }
+.feed-time {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+
+/* ---- scrollbar --------------------------------------------------------- */
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #ccd5e2;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: #aab8ca; background-clip: content-box; }
+
+/* The overview has a little more breathing room than the operational tools. */
+.overview { max-width: 1320px; margin: 0 auto; }
+.metric-card {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  box-shadow: 0 5px 20px rgba(25, 42, 72, 0.065);
+}
+.metric-card-highlight { border-color: #aad4c1; background: linear-gradient(145deg, #ffffff, #f0faf5); }
+.metric-icon, .quick-link-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--signal-dim);
+  color: var(--signal);
+}
+.metric-card-highlight .metric-icon { background: var(--success-dim); color: var(--success); }
+.work-row, .quick-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+}
+.work-row:hover, .quick-link:hover { background: var(--surface-2); border-color: var(--line); transform: translateY(-1px); }
+.work-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #e8edf8;
+  color: #34529c;
+  font-size: 14px;
+  font-weight: 700;
+  flex: none;
+}
+.quick-link-icon { flex: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn, .nav-item, .work-row, .quick-link, .bar-fill { transition: none; }
+  .nav-item:hover, .work-row:hover, .quick-link:hover { transform: none; }
 }

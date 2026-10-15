@@ -1,15 +1,18 @@
 "use server";
 
-import { cleanUrl, extractEmails, validateEmail, verifyEmailDomain, guessEmails, CONTACT_PAGE_PATHS, LINK_PRIORITY_KEYWORDS } from "@/lib/utils";
+import { cleanUrl, extractEmails, validateEmail, guessEmails, CONTACT_PAGE_PATHS, LINK_PRIORITY_KEYWORDS } from "@/lib/utils";
+import { verifyEmailDomain } from "@/lib/email-domain-server";
 import https from 'https';
 import fs from 'fs';
 import path from 'path';
+import type { ProspectAssessment } from '@/lib/prospect-qualification.cjs';
 
 // ── Types ──
 
 export type Lead = {
     url: string;
-    status: 'PENDING' | 'SCANNING' | 'QUALIFIED' | 'REJECTED' | 'ACTIVITY_FAILED' | 'ACTIVE_NO_CONTACT' | 'ERROR';
+    status: 'PENDING' | 'SCANNING' | 'QUALIFIED' | 'INVESTIGATE' | 'NURTURE' | 'REJECTED' | 'ACTIVITY_FAILED' | 'ACTIVE_NO_CONTACT' | 'ERROR';
+    prospectQualification?: ProspectAssessment;
     firstName?: string;
     headline?: string;
     activityStatus?: string;
