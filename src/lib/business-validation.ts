@@ -1,3 +1,7 @@
+import { ESSENTIAL_MAX_LENGTH, ONBOARDING_ESSENTIAL_FIELDS } from './offer-essentials';
+import { validateJourney } from './onboarding-journey';
+import { importResultSchema } from './copy-studio/shared/contracts';
+import { validateDeliveryData } from './project-workspace';
 import {
     AGREEMENT_STATUSES,
     FUNNEL_TYPES,
@@ -110,6 +114,7 @@ export function validateOpportunity(d: OpportunityData) {
     if (d.stage === 'LOST' && !d.lostReason.trim()) throw new Error('Add a lost reason.');
 }
 export function validateProject(d: ProjectData) {
+    validateDeliveryData(d);
     required(d.name, 'Client name');
     choice(d.funnel, FUNNEL_TYPES, 'funnel');
     choice(d.mode, ['PERFORMANCE', 'CASE_STUDY'], 'engagement type');
@@ -155,6 +160,13 @@ export function validateProject(d: ProjectData) {
     if (m.minimumIncrease === 0) throw new Error('The target must be an increase of at least one booking.');
     if (d.onboarding) {
         const o = d.onboarding;
+        if (o.journey) {
+            validateJourney(o.journey);
+            if (o.journey.reference) importResultSchema.parse(o.journey.reference);
+        }
+        text(o.form.coachBio ?? '', 'Coach background', 20000);
+        text(o.form.proof ?? '', 'Client proof', 480000);
+        text(o.form.preferences ?? '', 'Client preferences', 20000);
         required(o.clientName, 'Onboarding client name');
         required(o.projectName, 'Onboarding project name');
         choice(o.projectType, ['PAID', 'CASE_STUDY'], 'project type');
@@ -183,6 +195,7 @@ export function validateProject(d: ProjectData) {
         date(o.scope?.targetLaunchDate, 'Target launch date');
         date(o.scope?.confirmedAt, 'Scope confirmation date');
         if (!Array.isArray(o.access) || o.access.length > 100) throw new Error('Use up to 100 access items.');
+        for (const [key] of ONBOARDING_ESSENTIAL_FIELDS) text(o.form[key] ?? '', key, ESSENTIAL_MAX_LENGTH);
         if (!Array.isArray(o.documents) || o.documents.length > 100)
             throw new Error('Use up to 100 onboarding documents.');
         if (!Array.isArray(o.overrides)) throw new Error('Onboarding overrides must be a list.');

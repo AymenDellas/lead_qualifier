@@ -5,6 +5,7 @@ import React, { useState, useRef } from "react";
 import { Radar, Search, MessageCircle, Play, Loader2, Copy, AlertCircle, Upload, StopCircle, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Papa from "papaparse";
+import './acquisition-workspace.css';
 
 export default function FinderEngine({ onPushToEngine }: { onPushToEngine?: (urls: string[]) => void }) {
     // Discovery State
@@ -345,16 +346,17 @@ export default function FinderEngine({ onPushToEngine }: { onPushToEngine?: (url
     const weakNiches = niches.filter(n => n.trim().split(/\s+/).length === 1);
 
     return (
-        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-4 items-start">
+        <div className="acquisition-workspace finder-workspace">
             {/* ── Search ─────────────────────────────────────────────────── */}
-            <section className="panel">
+            <section className="panel finder-criteria">
                 <div className="panel-head">
                     <Radar className="w-3.5 h-3.5 text-[var(--text-faint)]" />
-                    Search
-                    <span className="hint">Google, not LinkedIn</span>
+                    <h2>Search criteria</h2>
+                    <span className="hint">Public search</span>
                 </div>
 
-                <div className="panel-body space-y-4">
+                <div className="panel-body space-y-5">
+                    <p className="acquisition-intro">Choose the coaches and markets to discover. Kept profiles are saved to Leads as the search runs.</p>
                     <div>
                         <label className="field-label" htmlFor="finder-niche">Niche</label>
                         <div className="flex flex-wrap gap-1.5 mb-3" aria-label="Coaching search presets">
@@ -491,7 +493,7 @@ export default function FinderEngine({ onPushToEngine }: { onPushToEngine?: (url
 
             {/* ── Progress ───────────────────────────────────────────────── */}
             {discoveryProgress && (
-                <section className={cn("panel", discovering && "rail-live")}>
+                <section className={cn("panel finder-results", discovering && "rail-live")}>
                     <div className="panel-head">
                         Found so far
                         {discovering && (
@@ -552,7 +554,7 @@ export default function FinderEngine({ onPushToEngine }: { onPushToEngine?: (url
                         {discoveryProgress.results && discoveryProgress.results.length > 0 && (
                             <div className="max-h-56 overflow-y-auto -mx-1 px-1">
                                 {discoveryProgress.results.slice(0, 50).map((r: any, idx: number) => (
-                                    <div key={idx} className="flex gap-2.5 items-center py-1 text-[12px]">
+                                    <div key={idx} className="finder-result-row flex gap-2.5 items-center py-1 text-[13px]">
                                         <span
                                             className={cn(
                                                 "num w-6 text-right font-semibold flex-none",
@@ -603,12 +605,31 @@ export default function FinderEngine({ onPushToEngine }: { onPushToEngine?: (url
                 </section>
             )}
 
-            {/* ── Opening lines ──────────────────────────────────────────── */}
-            <section className={cn("panel", discoveryProgress && "xl:col-start-2")}>
-                <div className="panel-head">
+            {!discoveryProgress && <section className="panel finder-results finder-results-empty" aria-label="Search results">
+                <div className="panel-head"><h2>Search results</h2><span className="hint">No search running</span></div>
+                <div className="finder-empty-content">
+                    <Search className="w-5 h-5 text-[var(--text-faint)]" aria-hidden />
+                    <h3>Your results will appear here</h3>
+                    <p>Set your criteria and start a search to review matching profiles, progress and search coverage.</p>
+                    <div className="finder-empty-details">
+                        <span>Saved automatically to Leads</span>
+                        <span>Duplicates excluded from kept results</span>
+                        <span>Qualification happens in Engine</span>
+                    </div>
+                </div>
+            </section>}
+
+            {/* ── Optional opening-line utility ───────────────────────────── */}
+            <details className="panel finder-opening-lines">
+                <summary className="finder-optional-summary">
                     <MessageCircle className="w-3.5 h-3.5 text-[var(--text-faint)]" />
-                    Opening lines
-                    <div className="seg ml-auto">
+                    <span>Opening lines</span>
+                    <span className="finder-optional-note">{AI_HOOK_GENERATION_ENABLED ? 'Optional writing tool' : 'AI generation disabled'}</span>
+                    <span className="finder-disclosure-indicator" aria-hidden>+</span>
+                </summary>
+                <div className="finder-optional-toolbar">
+                    <p>Use a website to prepare a personal opening line.</p>
+                    <div className="seg">
                         <button onClick={() => setBulkMode(false)} className={cn("seg-item", !bulkMode && "seg-item-active")}>One</button>
                         <button onClick={() => setBulkMode(true)} className={cn("seg-item", bulkMode && "seg-item-active")}>Many</button>
                     </div>
@@ -731,7 +752,7 @@ export default function FinderEngine({ onPushToEngine }: { onPushToEngine?: (url
                         )}
                     </div>
                 )}
-            </section>
+            </details>
         </div>
     );
 }

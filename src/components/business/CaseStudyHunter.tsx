@@ -31,6 +31,7 @@ import {
 import { dateTime, Empty, Field, isoInput, LinkOut, localInput, Panel } from './BusinessUi';
 import { markHunterProspectLinkedinDmSentAction, setCrmOutreachStatusesAction, undoHunterProspectLinkedinDmAction } from '@/app/actions/linkedin-outreach-actions';
 import { DEFAULT_TARGET_TITLES, isMissedCoachCandidate } from '@/lib/case-study-qualification.cjs';
+import CoachProspectingWorkspace from './CoachProspectingWorkspace';
 
 type WorkerLog = { at?: string; phase?: string; message?: string };
 type WorkerState = {
@@ -55,7 +56,7 @@ type WorkerStatus = {
     dailyStats: { count: number; limit: number };
     recentLogs?: WorkerLog[];
 };
-type View = 'TODAY' | 'PIPELINE' | 'CRM_OUTREACH' | 'SCANNER';
+type View = 'PROSPECTING' | 'TODAY' | 'PIPELINE' | 'CRM_OUTREACH' | 'SCANNER';
 type Run = <T>(work: () => Promise<T>, success: string | ((result: T) => string)) => Promise<T | null>;
 type CrmStatusResult = Awaited<ReturnType<typeof setCrmOutreachStatusesAction>>;
 type ChangeCrmStatuses = (ids: string[], status: CrmOutreachStatus) => Promise<CrmStatusResult | null>;
@@ -66,7 +67,7 @@ type CrmContactFilter = 'ALL' | CrmOutreachStatus;
 const contactedBeforeExclusion = (data: CaseStudyProspectData) => Boolean(data.lastContactedAt) ||
     Boolean(data.doNotContactPreviousStage && CASE_STUDY_STAGES.indexOf(data.doNotContactPreviousStage) >= CASE_STUDY_STAGES.indexOf('MESSAGED'));
 
-export default function CaseStudyHunter({ initialView = 'TODAY' }: { initialView?: View }) {
+export default function CaseStudyHunter({ initialView = 'PROSPECTING' }: { initialView?: View }) {
     const [snapshot, setSnapshot] = useState<CaseStudySnapshot | null>(null);
     const [worker, setWorker] = useState<WorkerStatus | null>(null);
     const [view, setView] = useState<View>(initialView);
@@ -77,6 +78,7 @@ export default function CaseStudyHunter({ initialView = 'TODAY' }: { initialView
     const [busy, setBusy] = useState(false);
     const workerCompletionRef = useRef('');
     const workerStatusInitializedRef = useRef(false);
+    useEffect(()=>{setView(initialView);setSelectedId(null);},[initialView]);
 
     const refresh = useCallback(async (quiet = false) => {
         try {
@@ -94,11 +96,11 @@ export default function CaseStudyHunter({ initialView = 'TODAY' }: { initialView
     }, []);
 
     useEffect(() => {
-        void refresh();
-    }, [refresh]);
+        if(view!=='PROSPECTING')void refresh();
+    }, [refresh,view]);
 
     useEffect(() => {
-        if (view === 'CRM_OUTREACH') return;
+        if (view === 'CRM_OUTREACH' || view === 'PROSPECTING') return;
         void refreshWorker();
         const workerTimer = window.setInterval(() => void refreshWorker(), 3000);
         return () => window.clearInterval(workerTimer);
@@ -204,18 +206,18 @@ export default function CaseStudyHunter({ initialView = 'TODAY' }: { initialView
     const hunterProspects = prospects.filter((prospect) => !prospect.data.crmLeadId && prospect.data.mode === mode);
     const plan = buildHunterDailyPlan(hunterProspects);
     return (
-        <div className="space-y-5 max-w-7xl" data-testid="case-study-hunter">
-            {view !== 'CRM_OUTREACH' && <WorkerStrip worker={worker} refresh={refreshWorker} />}
+        <div className="hunter-workspace space-y-5" data-testid="case-study-hunter">
+            {view !== 'CRM_OUTREACH' && view !== 'PROSPECTING' && <WorkerStrip worker={worker} refresh={refreshWorker} />}
             {error && <p role="alert" className="panel-note text-[var(--bad)]">{error}</p>}
             {message && <p role="status" className="panel-note text-[var(--signal)]">{message}</p>}
 
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="hunter-workspace-tabs flex flex-wrap items-center justify-between gap-3">
                 <div className="seg" aria-label="Case Study Hunter view">
-                    {([['TODAY', 'Today'], ['PIPELINE', 'Pipeline'], ['CRM_OUTREACH', `CRM outreach (${crmProspects.length})`], ['SCANNER', 'Scanner']] as const).map(([value, label]) => (
+                    {([['PROSPECTING','Prospecting'], ['TODAY', 'Today'], ['PIPELINE', 'Pipeline'], ['CRM_OUTREACH', `CRM outreach (${crmProspects.length})`]] as const).map(([value, label]) => (
                         <button key={value} className={`seg-item ${view === value ? 'seg-active' : ''}`} onClick={() => setView(value)}>{label}</button>
                     ))}
                 </div>
-                {view === 'CRM_OUTREACH' ? (
+                {view === 'PROSPECTING' ? null : view === 'CRM_OUTREACH' ? (
                     <p className="text-xs text-[var(--text-dim)]">Qualified CRM imports and manual LinkedIn follow-ups live here.</p>
                 ) : (
                     <div className="flex items-center gap-3">
@@ -229,10 +231,11 @@ export default function CaseStudyHunter({ initialView = 'TODAY' }: { initialView
             </div>
 
             {view === 'TODAY' && <TodayView plan={plan} open={setSelectedId} />}
+            <div hidden={view !== 'PROSPECTING'}><CoachProspectingWorkspace active={view === 'PROSPECTING'} /></div>
             {view === 'PIPELINE' && <PipelineView key={mode} prospects={hunterProspects} mode={mode} open={setSelectedId} busy={busy} changeStage={changeStage} />}
             {view === 'CRM_OUTREACH' && <CrmOutreachView prospects={crmProspects} open={setSelectedId} busy={busy} changeStatuses={changeCrmStatuses} />}
             {view === 'SCANNER' && <ScannerView busy={busy} run={run} worker={worker} mode={mode} prospects={snapshot?.prospects || []} />}
-            {view !== 'CRM_OUTREACH' && <WorkerActivity worker={worker} />}
+            {view !== 'CRM_OUTREACH' && view !== 'PROSPECTING' && <WorkerActivity worker={worker} />}
         </div>
     );
 }
@@ -494,6 +497,7 @@ function CrmOutreachView({ prospects, open, busy, changeStatuses }: { prospects:
 }
 
 function ScanBadge({ prospect }: { prospect: CaseStudyProspect }) {
+    if(prospect.data.prospecting?.assessment)return <span className={`badge ${prospect.data.prospecting.assessment.status==='MATCH'?'badge-ok':prospect.data.prospecting.assessment.status==='OUTSIDE'?'badge-bad':'badge-idle'}`}>{prospect.data.prospecting.assessment.status==='MATCH'?'Evidence matches':prospect.data.prospecting.assessment.status==='OUTSIDE'?'Outside criteria':'Needs fit review'}</span>;
     if (prospect.data.scanStatus === 'NOT_RUN') return <span className="badge badge-idle">Not scanned</span>;
     if (prospect.data.scanStatus === 'QUEUED') return <span className="badge badge-idle">Queued</span>;
     if (prospect.data.scanStatus === 'ERROR') return <span className="badge badge-bad">Error</span>;

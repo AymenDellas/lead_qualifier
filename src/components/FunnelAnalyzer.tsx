@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AlertCircle, Check, ChevronDown, Clipboard, Loader2, ScanSearch } from "lucide-react";
+import './acquisition-workspace.css';
 import type {
   LandingDimensionDiagnosis,
   LandingPageAnalysis,
@@ -204,13 +205,13 @@ export default function FunnelAnalyzer() {
   }
 
   return (
-    <div className="mx-auto max-w-[1250px] space-y-5">
-      <section className="panel overflow-hidden">
-        <div className="panel-head"><ScanSearch className="h-4 w-4 text-[var(--signal)]" /> Landing-page scan</div>
+    <div className="acquisition-workspace funnel-workspace">
+      <section className="panel funnel-scan-input">
+        <div className="panel-head"><h2>Landing-page scan</h2><span className="hint">Public page research</span></div>
         <div className="panel-body">
-          <p className="mb-4 max-w-3xl text-[13px] text-[var(--text-dim)]">Find conversion killers in the hero, copy, offer, page flow, calls to action and proof. Get specific changes for the rebuild.</p>
-          <form onSubmit={scan} className="flex flex-col gap-2 sm:flex-row">
-            <label className="sr-only" htmlFor="funnel-scan-url">Landing-page URL</label>
+          <p className="acquisition-intro mb-5">Review the hero, offer, messaging and conversion path. Get an evidence-backed plan for the rebuild.</p>
+          <label className="field-label" htmlFor="funnel-scan-url">Landing-page URL</label>
+          <form onSubmit={scan} className="funnel-scan-form">
             <input id="funnel-scan-url" className="field min-w-0 flex-1" type="text" inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="https://example.com/landing-page" value={url} onChange={event => setUrl(event.target.value)} disabled={state === "scanning"} />
             <button type="submit" className="btn btn-primary justify-center" disabled={state === "scanning"}>
               {state === "scanning" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanSearch className="h-4 w-4" />}
@@ -224,11 +225,11 @@ export default function FunnelAnalyzer() {
       </section>
 
       {result && state === "complete" && <>
-        <section className="panel overflow-hidden">
+        <section className="panel funnel-result-overview">
           <div className="panel-body grid gap-5 lg:grid-cols-[1fr_1fr_1.25fr]">
             <div><p className="label-micro">Audience</p><p className="mt-2 text-sm font-medium">{result.audience}</p></div>
             <div><p className="label-micro">Offer & goal</p><p className="mt-2 text-sm font-medium">{result.offer}</p><p className="mt-2 text-[13px] text-[var(--text-dim)]">{result.conversionGoal}</p></div>
-            <div className="rounded-lg bg-[var(--surface-2)] p-4"><p className="label-micro">Main diagnosis</p><p className="mt-2 text-sm font-medium">{result.strongestDiagnosis}</p></div>
+            <div className="funnel-main-diagnosis"><p className="label-micro">Main diagnosis</p><p className="mt-2 text-sm font-medium">{result.strongestDiagnosis}</p></div>
           </div>
         </section>
 

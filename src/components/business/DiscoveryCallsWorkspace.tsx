@@ -68,8 +68,13 @@ export default function DiscoveryCallsWorkspace({ onOnboarding }: { onOnboarding
                 const unprepared = snapshot.sources.filter(source => source.stage === 'CALL_BOOKED' && !snapshot.calls.some(item => item.sourceProspectId === source.id));
                 return <>
                     <div className="call-list-intro">
-                        <div><p className="call-eyebrow">Before the conversation</p><h2>Know the person. Have the right questions ready.</h2><p>Keep your prep, pitch, and answers together, then carry the brief into onboarding.</p></div>
+                        <div><p className="call-eyebrow">Call preparation</p><h2>Your next conversation, prepared.</h2><p>Keep prospect context, questions, and outcomes together.</p></div>
                         <div className="flex gap-2 flex-wrap"><button className="btn btn-outline" onClick={() => { setQuestionsOnly(true); setTemplates(true); }}><Settings2 className="w-4 h-4" /> Edit questions</button><button className="btn btn-outline" onClick={() => { setQuestionsOnly(false); setTemplates(true); }}><Settings2 className="w-4 h-4" /> Templates</button><button className="btn btn-primary" onClick={() => setCreating(true)}><Plus className="w-4 h-4" /> Prepare a call</button></div>
+                    </div>
+                    <div className="call-summary" aria-label="Discovery call summary">
+                        <div><span>Upcoming</span><strong>{snapshot.calls.filter(item => item.data.outcome === 'PENDING').length}</strong></div>
+                        <div><span>Follow-ups</span><strong>{snapshot.calls.filter(item => item.data.outcome === 'FOLLOW_UP').length}</strong></div>
+                        <div><span>Completed</span><strong>{snapshot.calls.filter(item => !['PENDING', 'FOLLOW_UP'].includes(item.data.outcome)).length}</strong></div>
                     </div>
                     {unprepared.length > 0 && <Panel title="Booked prospects to prepare">
                         <div className="divide-y divide-[var(--line)]">{unprepared.map(source => <div key={source.id} className="call-list-row"><div><strong>{source.name || source.headline}</strong><p>{dateTime(source.scheduledAt)}</p></div><button disabled={busy} className="btn btn-outline" onClick={() => void create(blankDiscoveryCall(snapshot.template.data), source.id)}>Prepare call <ArrowRight className="w-4 h-4" /></button></div>)}</div>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
     Check,
     ChevronRight,
@@ -17,7 +17,6 @@ import {
     Settings2,
     Upload,
     UserRound,
-    X,
 } from 'lucide-react';
 import {
     createOnboardingAction,
@@ -28,9 +27,6 @@ import {
 import {
     AGREEMENT_STATUSES,
     CASE_STUDY_CONSENT_TEXT,
-    CLIENT_AGREEMENT_LABELS,
-    CLIENT_PAYMENT_LABELS,
-    clientFormStatus,
     DEPLOYMENT_TOOL_FIELDS,
     DEPLOYMENT_TOOL_HINT,
     currentFreeAgreementIntro,
@@ -61,8 +57,10 @@ import {
 import { agreementPdf } from '@/lib/agreement-pdf';
 import { ClientScopeSummary } from './ClientScopeSummary';
 import { Empty, Field, LinkOut, Panel, type RunAction } from './BusinessUi';
-import { CompelLogo } from './CompelLogo';
 import './compel-onboarding.css';
+import { OnboardingBriefPrep } from './OnboardingBriefPrep';
+import { PublishingSetup } from './PublishingSetup';
+import { clientBriefReady, journeyFor } from '@/lib/onboarding-journey';
 
 const STEPS = [
     ['agreement', 'Agreement'],
@@ -184,7 +182,7 @@ export default function OnboardingWorkspace({
 }
 
 function OnboardingSurface({ children }: { children: React.ReactNode }) {
-    return <div className="compel-onboarding compel-onboarding-workspace"><div className="compel-onboarding-heading"><CompelLogo /><span className="label-micro">Client onboarding</span></div>{children}</div>;
+    return <div className="onboarding-workspace">{children}</div>;
 }
 
 function OnboardingDashboard({
@@ -212,7 +210,7 @@ function OnboardingDashboard({
     const completed = rows.filter((row) => row.state === 'COMPLETED').length;
     return (
         <div className="space-y-5">
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="onboarding-toolbar flex flex-wrap items-center gap-3">
                 <div className="seg" aria-label="Onboarding status">
                     <button className={`seg-item ${view === 'ACTIVE' ? 'seg-item-active' : ''}`} onClick={() => setView('ACTIVE')}>
                         Active · {active}
@@ -233,7 +231,7 @@ function OnboardingDashboard({
                     </button>
                 </div>
             </div>
-            <div className="figures">
+            <div className="onboarding-summary figures" aria-label="Onboarding totals">
                 <div className="fig">
                     <p className="fig-value">{active}</p>
                     <p className="fig-label">Active onboardings</p>
@@ -254,11 +252,12 @@ function OnboardingDashboard({
                 {!visible.length ? (
                     <Empty>{view === 'ACTIVE' ? 'No clients are currently blocked in onboarding.' : `No ${view.toLowerCase()} onboardings yet.`}</Empty>
                 ) : (
-                    <div className="divide-y divide-[var(--line)]">
+                    <div className="onboarding-client-list divide-y divide-[var(--line)]">
+                        <div className="onboarding-list-heading" aria-hidden><span>Client & project</span><span>Engagement</span><span>Readiness</span><span /></div>
                         {visible.map(({ project, onboarding, blockers, progress }) => (
                             <button
                                 key={project.id}
-                                className="w-full text-left grid md:grid-cols-[1.25fr_0.8fr_1.4fr_auto] gap-4 py-4 px-2 rounded hover:bg-[var(--surface-2)] items-center"
+                                className="onboarding-client-row w-full text-left grid md:grid-cols-[1.25fr_0.8fr_1.4fr_auto] gap-4 py-4 px-2 rounded hover:bg-[var(--surface-2)] items-center"
                                 onClick={() => onOpen(project.id)}
                             >
                                 <span>
@@ -413,14 +412,16 @@ function OnboardingEditor({
 }) {
     const onboarding = normalizeOnboarding(project.data, opportunity, profile);
     const [draft, setDraft] = useState<ProjectData>({ ...project.data, onboarding });
-    const [step, setStep] = useState<Step>('agreement');
-    const [portal, setPortal] = useState(false);
+    const [step, setStep] = useState<Step>(clientBriefReady(onboarding) ? 'agreement' : 'form');
     const [copied, setCopied] = useState(false);
     const [portalCopied, setPortalCopied] = useState(false);
     const data = draft.onboarding!;
     const portalOrigin = (process.env.NEXT_PUBLIC_CLIENT_PORTAL_URL || '').trim().replace(/\/$/, '');
+    const [localPortal, setLocalPortal] = useState(false);
+    useEffect(() => { setLocalPortal(['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)); }, []);
     const savedPortalToken = data.portalToken && project.data.onboarding?.portalToken === data.portalToken;
-    const portalHref = data.portalToken ? `${portalOrigin}/portal/${data.portalToken}` : '';
+    const portalHref = data.portalToken ? `${localPortal ? '' : portalOrigin}/portal/${data.portalToken}` : '';
+    const shareHref = data.portalToken ? `${portalOrigin}/portal/${data.portalToken}` : '';
     const blockers = onboardingBlockers(data);
     const progress = onboardingProgress(data);
     const ready = blockers.length === 0;
@@ -438,9 +439,6 @@ function OnboardingEditor({
         .replace('{{project_name}}', data.projectName)
         .replace('{{outstanding_items}}', blockers.map((item) => item.label.toLowerCase()).join(', '));
 
-    if (portal)
-        return <PortalPreview data={data} blockers={blockers} onClose={() => setPortal(false)} />;
-
     return (
         <div className="space-y-5 max-w-[1400px]">
             <div className="flex flex-wrap items-center gap-3">
@@ -450,11 +448,19 @@ function OnboardingEditor({
                     <p className="text-xs text-[var(--text-faint)]">{data.projectType === 'CASE_STUDY' ? 'Free case study' : 'Paid client'} · {progress}% complete</p>
                 </div>
                 <div className="ml-auto flex flex-wrap gap-2">
-                    <button className="btn btn-outline" onClick={() => setPortal(true)}><UserRound className="w-3.5 h-3.5" /> Client view</button>
                     {data.portalToken ? (
                         savedPortalToken ? <>
-                            <a className="btn btn-outline" href={portalHref} target="_blank" rel="noreferrer"><ExternalLink className="w-3.5 h-3.5" /> Open portal</a>
-                            {portalOrigin && <button className="btn btn-outline" onClick={async () => { await navigator.clipboard.writeText(portalHref); setPortalCopied(true); }}><Copy className="w-3.5 h-3.5" /> {portalCopied ? 'Link copied' : 'Copy client link'}</button>}
+                            <a className="btn btn-outline" href={portalHref} aria-disabled={busy} onClick={async event => {
+                                if (busy) { event.preventDefault(); return; }
+                                const next = data.form.offerName.trim().length >= 3 ? { ...data, journey: { ...journeyFor(data), briefPrepared: true, preparedAt: journeyFor(data).preparedAt || new Date().toISOString() } } : data;
+                                const unsaved = JSON.stringify(next) !== JSON.stringify(onboarding);
+                                if (!unsaved) return;
+                                event.preventDefault();
+                                if (!await run(() => saveClientProjectAction(project.id, { ...draft, onboarding: next }, project.revision), 'Latest brief saved. Opening the client portal.')) return;
+                                setDraft(current => ({ ...current, onboarding: next }));
+                                window.location.assign(portalHref);
+                            }}><ExternalLink className="w-3.5 h-3.5" /> {localPortal ? 'Open local portal' : 'Open portal'}</a>
+                            {portalOrigin && <button className="btn btn-outline" disabled={!clientBriefReady(onboarding)} onClick={async () => { await navigator.clipboard.writeText(shareHref); setPortalCopied(true); }}><Copy className="w-3.5 h-3.5" /> {portalCopied ? 'Link copied' : 'Copy client link'}</button>}
                         </> : <span className="text-xs text-[var(--text-faint)]">Save onboarding to activate the portal link.</span>
                     ) : (
                         <button className="btn btn-outline" onClick={() => update((current) => ({ ...current, portalToken: crypto.randomUUID() }))}><ExternalLink className="w-3.5 h-3.5" /> Create portal link</button>
@@ -463,6 +469,7 @@ function OnboardingEditor({
                 </div>
             </div>
             {savedPortalToken && !portalOrigin && <p className="text-xs text-[var(--text-faint)]">The client portal domain is not configured yet. Open portal works locally; client links will be available once hosting is connected.</p>}
+            {!clientBriefReady(onboarding) && <p className="text-sm text-[var(--warn)]">Prefill the brief in Form, then open the portal to save and review it. The client will confirm the known facts and add anything missing.</p>}
 
             <div className="panel overflow-x-auto">
                 <div className="min-w-[760px] grid grid-cols-7">
@@ -654,7 +661,7 @@ function PaymentStep({ data, update }: StepProps) {
 
 function FormStep({ data, update }: StepProps) {
     const set = (key: keyof OnboardingData['form'], value: string | boolean) =>
-        update((current) => ({ ...current, form: { ...current.form, [key]: value } }));
+        update((current) => ({ ...current, form: { ...current.form, [key]: value, ...(['offerName', 'offer', 'audience', 'customerProblem', 'desiredOutcome'].includes(key) && current.form.status === 'COMPLETE' ? { status: 'IN_PROGRESS' as const } : {}) }, ...(['offerName', 'offer', 'audience', 'customerProblem', 'desiredOutcome'].includes(key) ? { journey: { ...journeyFor(current), briefPrepared: false, offerConfirmed: false, offerConfirmedAt: '', step: 0 } } : {}) }));
     type FormTextKey = Exclude<keyof OnboardingData['form'], 'status' | 'caseStudyConsent' | 'testimonialCommitment' | 'deploymentAccessConsent'>;
     const requiredKeys: readonly string[] = REQUIRED_ONBOARDING_FORM_FIELDS.map(([key]) => key);
     const missing = missingOnboardingFormFields(data);
@@ -670,12 +677,16 @@ function FormStep({ data, update }: StepProps) {
     );
     return (
         <Panel title="Client onboarding form" action={<select className="field" aria-label="Form status" value={data.form.status} onChange={(e) => set('status', e.target.value)}><option value="NOT_SENT">Not sent</option><option value="SENT">Sent</option><option value="IN_PROGRESS">In progress</option><option value="COMPLETE">Complete</option></select>}>
-            <p className="text-sm text-[var(--text-dim)]">Collect structured information here. Keep strategy and context for the short discovery call.</p>
-            {group('Offer and business', [['offer', FUNNEL_OFFER_QUESTION], ['audience', 'Target audience'], ['customerProblem', 'Main customer problem', true], ['desiredOutcome', 'Desired outcome', true], ['differentiation', DIFFERENTIATION_QUESTION, true], ['unsuitableClients', UNSUITABLE_CLIENTS_QUESTION, true], ['trafficSources', 'Current traffic sources']])}
+            <OnboardingBriefPrep data={data} update={update} />
+            {group('Offer and business', [
+                ...REQUIRED_ONBOARDING_FORM_FIELDS.map(([key, label]): [FormTextKey, string, boolean] => [key, label, key !== 'offerName']),
+                ['differentiation', DIFFERENTIATION_QUESTION, true], ['unsuitableClients', UNSUITABLE_CLIENTS_QUESTION, true], ['trafficSources', 'Current traffic sources'],
+            ], `${FUNNEL_OFFER_QUESTION} ${FUNNEL_OFFER_HINT}`)}
             {group('Funnel information', [['landingPageUrl', 'Current landing page URL'], ['bookingUrl', 'Booking URL'], ['qualification', 'Current qualification'], ['nurture', 'Current nurture / follow-up'], ['traffic', 'Approximate traffic'], ['bookings', 'Approximate bookings'], ['showRate', 'Approximate show rate'], ['closeRate', 'Approximate clients / close rate']])}
             {group('Existing tools', [['bookingPlatform', 'Booking platform'], ['crm', 'CRM'], ['emailPlatform', 'Email platform'], ['analyticsPlatform', 'Analytics platform']])}
             {group('Deployment tools and access · Optional', DEPLOYMENT_TOOL_FIELDS.map(([key, label]) => [key, label]), DEPLOYMENT_TOOL_HINT)}
             {group('Brand, assets, and preferences', [['assets', 'Logo, colors, fonts, photos, testimonials, case studies, certifications, and copy links', true], ['mustStay', 'Anything that must stay', true], ['avoid', 'Anything the client does not want changed', true], ['importantContext', 'Anything important that is not obvious', true]])}
+            {group('Story and proof', [['coachBio', 'Coach background and credentials', true], ['proof', 'Full testimonials and client results', true], ['preferences', 'What to keep, change or avoid', true]])}
             {data.projectType === 'CASE_STUDY' && <div className="rounded-md border border-[var(--line-strong)] p-4 space-y-3">
                 <p className="text-sm font-medium">Case-study permission <span className="text-[var(--bad)]">*</span></p>
                 <label className="flex items-start gap-3 text-sm text-[var(--text-dim)]">
@@ -697,6 +708,7 @@ function AccessStep({ data, update }: StepProps) {
     const add = () => update((current) => ({ ...current, access: [...current.access, { id: `access-${Date.now()}`, platform: 'New access item', reason: '', permission: '', instructions: '', status: 'NOT_REQUESTED', required: true, nonBlocking: false }] }));
     return (
         <Panel title="Access center" action={<button className="btn btn-outline" onClick={add}><Plus className="w-3.5 h-3.5" /> Add item</button>}>
+            <PublishingSetup data={data} update={update} />
             <div className="flex gap-3 p-3 bg-[var(--surface-2)] border border-[var(--line)] rounded-md text-sm text-[var(--text-dim)]"><LockKeyhole className="w-4 h-4 flex-none mt-0.5 text-[var(--signal)]" /><p>Request the minimum collaborator or team access. Never ask the client to share a password when safer delegated access exists.</p></div>
             {!data.access.length ? <Empty>Complete the onboarding form to generate only the access this project needs.</Empty> : (
                 <div className="space-y-3">{data.access.map((item) => (
@@ -812,32 +824,6 @@ function Documents({ data }: { data: OnboardingData }) {
     return <Panel title="Documents"><div className="divide-y divide-[var(--line)]">{docs.map((doc, index) => <div key={`${doc.name}-${index}`} className="flex items-center gap-3 py-3"><FileText className="w-4 h-4 text-[var(--text-faint)]" /><span className="flex-1 text-sm">{doc.name}</span><span className="text-xs text-[var(--text-faint)]">{doc.kind}</span>{doc.action && <button className="btn btn-ghost !p-1" title="Download" onClick={doc.action}><Download className="w-3.5 h-3.5" /></button>}</div>)}</div></Panel>;
 }
 
-function PortalPreview({ data, blockers, onClose }: { data: OnboardingData; blockers: ReturnType<typeof onboardingBlockers>; onClose: () => void }) {
-    const outstanding = onboardingBlockers(data, 'client').map((item) => item.label);
-    return (
-        <div className="compel-portal fixed inset-0 z-50 overflow-y-auto">
-            <header className="compel-portal-header"><CompelLogo /><span className="compel-portal-header-label">Client portal preview</span><button className="btn btn-outline ml-auto" onClick={onClose}><X className="w-3.5 h-3.5" /> Close preview</button></header>
-            <main className="max-w-3xl mx-auto p-5 md:p-10 space-y-6">
-                <div><p className="label-micro">{data.businessName || data.clientName}</p><h1 className="text-2xl font-semibold mt-2">Welcome, {data.clientName.split(' ')[0]}</h1><p className="text-[var(--text-dim)] mt-2">Everything needed to prepare {data.projectName}, in one place.</p></div>
-                <section className="panel p-5 space-y-4"><h2 className="font-medium">Review your scope before signing</h2><ClientScopeSummary data={data} /></section>
-                <div className={`panel p-5 ${outstanding.length ? 'border-[rgba(232,177,76,.25)]' : 'border-[var(--signal-line)]'}`}>
-                    <h2 className="font-medium">{outstanding.length ? "Here's what we still need from you before the project can start." : 'You are all set. This project is ready to start.'}</h2>
-                    {outstanding.length > 0 && <ul className="mt-4 space-y-2">{outstanding.map((item) => <li key={item} className="flex items-center gap-2 text-sm text-[var(--text-dim)]"><CircleAlert className="w-4 h-4 text-[var(--warn)]" />{item}</li>)}</ul>}
-                </div>
-                <div className="space-y-2">{[
-                    ['Agreement', CLIENT_AGREEMENT_LABELS[data.agreement.status], data.agreement.status === 'FULLY_SIGNED'],
-                    ...(data.projectType === 'PAID' ? [['Payment', CLIENT_PAYMENT_LABELS[data.payment.status], ['FULLY_PAID', 'DEPOSIT_PAID'].includes(data.payment.status)]] : []),
-                    ['Onboarding form', clientFormStatus(data), onboardingFormComplete(data)],
-                    ['Access requests', data.access.length ? `${data.access.filter((item) => item.status === 'VERIFIED').length} of ${data.access.filter((item) => item.required && !item.nonBlocking).length} verified` : onboardingFormComplete(data) ? 'Not needed' : 'Optional · share if applicable', onboardingAccessComplete(data)],
-                    ['Assets', data.form.assets ? 'Received' : 'Waiting', Boolean(data.form.assets)],
-                    ['Scope confirmation', data.scope.confirmed ? 'Confirmed' : 'Waiting', data.scope.confirmed],
-                ].map(([label, status, done]) => <div key={String(label)} className="panel px-4 py-4 flex items-center gap-3"><span className={`w-6 h-6 rounded-full flex items-center justify-center border ${done ? 'text-[var(--signal)] border-[var(--signal-line)] bg-[var(--signal-dim)]' : 'text-[var(--text-faint)] border-[var(--line-strong)]'}`}>{done ? <Check className="w-3.5 h-3.5" /> : <span className="w-1.5 h-1.5 bg-current rounded-full" />}</span><span className="font-medium flex-1">{label}</span><span className="text-sm text-[var(--text-dim)] capitalize">{status}</span></div>)}</div>
-                <p className="text-xs text-center text-[var(--text-faint)]">This preview intentionally excludes the full Compel workspace.</p>
-            </main>
-        </div>
-    );
-}
-
 function Summary({ label, value }: { label: string; value: string }) {
     return <div className="border border-[var(--line)] rounded-md p-3"><p className="label-micro">{label}</p><p className="mt-1.5 text-[var(--text-dim)] whitespace-pre-wrap">{value}</p></div>;
 }
@@ -846,7 +832,7 @@ function stepComplete(step: Step, data: OnboardingData, ready: boolean) {
     if (step === 'agreement') return data.agreement.status === 'FULLY_SIGNED' || data.overrides.includes('agreement');
     if (step === 'payment') return data.projectType === 'CASE_STUDY' || data.payment.status === 'FULLY_PAID' || (data.payment.structure !== 'FULL' && data.payment.status === 'DEPOSIT_PAID') || data.overrides.includes('payment');
     if (step === 'form') return onboardingFormComplete(data) || data.overrides.includes('form');
-    if (step === 'access') return !onboardingBlockers(data).some((item) => item.key === 'access');
+    if (step === 'access') return onboardingAccessComplete(data);
     if (step === 'baseline') return data.baseline.captured || data.overrides.includes('baseline');
     if (step === 'scope') return data.scope.confirmed || data.overrides.includes('scope');
     return ready;

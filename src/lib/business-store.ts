@@ -31,6 +31,14 @@ CREATE TABLE IF NOT EXISTS business_activities (
 );
 CREATE INDEX IF NOT EXISTS business_activity_opportunity ON business_activities(opportunity_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS business_opportunity_stage ON business_opportunities((data->>'stage'));
+CREATE TABLE IF NOT EXISTS business_project_files (
+    id UUID PRIMARY KEY, project_id UUID NOT NULL REFERENCES business_projects(id),
+    item_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('deliverable','request')),
+    file_name TEXT NOT NULL, bytes BYTEA NOT NULL, size INTEGER NOT NULL CHECK(size BETWEEN 1 AND 3145728),
+    uploaded_by TEXT NOT NULL CHECK(uploaded_by IN ('COMPEL','CLIENT')), archived BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS business_project_file_item ON business_project_files(project_id,item_id) WHERE NOT archived;
 `;
 
 let schemaReady: Promise<void> | undefined;

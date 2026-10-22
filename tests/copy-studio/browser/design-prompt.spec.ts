@@ -23,7 +23,13 @@ test('a design prompt is ready with the copy, follows edits and undo, downloads,
   const original = await field.inputValue();
   expect(original).toContain(draft.sections[0].headline);
   expect(original).toContain('No navbar');
-  expect(original).toContain('No mesh gradients');
+  expect(original).toContain('Custom grain-treated mesh gradients are allowed');
+  expect(original).toContain('no reference page or screenshot is required');
+  expect(original).toContain('WHEN THE USER REQUESTS A NEW DESIGN DIRECTION');
+  expect(original).toContain('Reading width and composition width are different decisions');
+  expect(original).toContain('one shared grid with content-specific compositions');
+  expect(original).not.toContain('established content spine');
+  expect(original).not.toContain('No mesh gradients');
   expect(original).toContain('No repeated cards');
   await page.getByRole('button', { name: 'Copy design prompt', exact: true }).click();
   await expect.poll(async () => (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n')).toBe(original);

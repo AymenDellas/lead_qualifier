@@ -14,6 +14,7 @@ function statusRoute(heartbeat,failDatabase=false,routeName='process-lead',cache
   if(sql.startsWith('\nCREATE TABLE'))return{rows:[]};
   if(sql.includes('SELECT * FROM compel_worker_config'))return{rows:[{active_count:1,revision:0}]};
   if(sql.includes('FROM compel_linkedin_accounts a'))return{rows:[{id:'legacy-0',label:'First',email:'fixture@example.test',enabled:true,daily_limit:400,has_password:true,daily_count:276,status:heartbeat,lease_until:heartbeat?.status==='offline'?'2024-01-01':new Date(Date.now()+120000).toISOString()}]};
+  if(sql.includes('FROM compel_worker_events'))return {rows:[]};
   if(sql.includes('AS pending'))return{rows:[{pending:1}]};
   if(sql.includes('AS total'))return{rows:[{total:276}]};
   if(sql.includes('SELECT id,result'))return{rows:cachedLead?[{id:'job_saved',result:cachedLead,completed_at:new Date()}]:[]};

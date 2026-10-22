@@ -1,14 +1,20 @@
-.discovery-workspace { max-width: 1280px; margin-inline: auto; }
-.call-eyebrow { color: var(--text-faint); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.discovery-workspace { width: 100%; min-width: 0; }
+.call-eyebrow { color: var(--text-dim); font-size: 12px; font-weight: 500; letter-spacing: 0; }
 .call-list-intro { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding: 8px 0 16px; }
-.call-list-intro h2 { font-size: clamp(22px, 2.2vw, 29px); line-height: 1.2; font-weight: 600; letter-spacing: -.035em; max-width: 540px; margin-top: 10px; }
+.call-list-intro h2 { font-size: clamp(24px, 2.2vw, 30px); line-height: 1.2; font-weight: 550; letter-spacing: -.035em; max-width: 540px; margin-top: 10px; }
 .call-list-intro p:not(.call-eyebrow) { font-size: 13px; color: var(--text-dim); margin-top: 12px; max-width: 550px; line-height: 1.7; }
 .call-list-controls, .call-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .call-list-controls input { width: 245px; }
+.call-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); background: var(--surface-1); border-radius: var(--radius); }
+.call-summary > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; border-left: 1px solid var(--line); }
+.call-summary > div:first-child { border-left: 0; }
+.call-summary span { color: var(--text-dim); font-size: 12px; }
+.call-summary strong { color: var(--text); font-size: 28px; font-weight: 550; font-variant-numeric: tabular-nums; letter-spacing: -.04em; }
 .call-list-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; width: 100%; padding: 18px 8px; text-align: left; }
-.call-list-row strong { font-size: 14px; font-weight: 600; }
+.call-list-row strong { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
 .call-list-row p, .call-row-detail { display: block; margin-top: 5px; color: var(--text-dim); font-size: 12px; line-height: 1.6; }
 .call-list-button:hover { background: var(--surface-2); }
+.call-list-button { padding: 19px 12px; border-radius: 7px; transition: background-color .15s ease; }
 .call-row-status { margin-left: auto; display: flex; flex-direction: column; align-items: end; gap: 7px; flex-shrink: 0; }
 .call-row-status > span:last-child { color: var(--text-faint); font-size: 11px; }
 .call-empty { padding: 44px 20px; display: flex; align-items: center; flex-direction: column; text-align: center; gap: 14px; color: var(--text-faint); }
@@ -61,6 +67,11 @@
     .call-question-main { padding: 22px; }
 }
 @media (max-width: 700px) {
+    .call-summary > div { flex-direction: column; align-items: flex-start; padding: 16px; gap: 10px; }
+    .call-list-controls { align-items: stretch; }
+    .call-list-controls input { width: 100%; }
+    .call-list-controls .seg { max-width: 100%; overflow-x: auto; }
+    .call-list-controls .seg > button { white-space: nowrap; }
     .call-question-layout, .call-wrap-layout { grid-template-columns: minmax(0, 1fr); }
     .call-question-index { max-height: 200px; overflow-y: auto; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
     .call-question-index button { padding: 9px 12px; }

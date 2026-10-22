@@ -1,5 +1,8 @@
+import { ESSENTIAL_MIN_LENGTH, OFFER_ESSENTIAL_LABELS, ONBOARDING_ESSENTIAL_FIELDS, legacyOfferName } from './offer-essentials';
+import { clientBriefReady, journeyFor, publishingReady, type OnboardingJourney } from './onboarding-journey';
+
 /** Shared, serializable business records. Kept independent of the lead send gate. */
-export type BusinessView = 'today' | 'onboarding';
+export type BusinessView = 'today' | 'onboarding' | 'projects';
 export const FUNNEL_TYPES = ['DIRECT_TO_CALL', 'VSL', 'LEAD_MAGNET'] as const;
 export type FunnelType = (typeof FUNNEL_TYPES)[number];
 export const FUNNEL_LABELS: Record<FunnelType, string> = {
@@ -163,6 +166,9 @@ export type Deliverable = {
     dueAt: string;
     content: string;
     url: string;
+    visibleToClient?: boolean;
+    version?: number;
+    reviews?: import('./project-workspace').DeliverableReview[];
 };
 export type Measurement = {
     baselineStart: string;
@@ -216,6 +222,7 @@ export type OnboardingDocument = {
     createdAt: string;
 };
 export type AccessItem = {
+    generated?: boolean;
     id: string;
     platform: string;
     reason: string;
@@ -226,6 +233,7 @@ export type AccessItem = {
     nonBlocking: boolean;
 };
 export type OnboardingData = {
+    journey?: OnboardingJourney;
     clientName: string;
     businessName: string;
     email: string;
@@ -270,6 +278,7 @@ export type OnboardingData = {
     };
     form: {
         status: 'NOT_SENT' | 'SENT' | 'IN_PROGRESS' | 'COMPLETE';
+        offerName: string;
         offer: string;
         audience: string;
         customerProblem: string;
@@ -297,6 +306,9 @@ export type OnboardingData = {
         mustStay: string;
         avoid: string;
         importantContext: string;
+        coachBio?: string;
+        proof?: string;
+        preferences?: string;
         caseStudyConsent: boolean;
         testimonialCommitment: boolean;
         deploymentAccessConsent: boolean;
@@ -364,19 +376,17 @@ const LEGACY_SCOPE_DEPENDENCIES = 'Signed agreement, required payment, completed
 export const scopeDependencies = (projectType: OnboardingData['projectType']) =>
     `Signed agreement, completed onboarding form, any required access verified, and starting funnel information recorded.${projectType === 'CASE_STUDY' ? ' No project payment is required.' : ' The agreed initial payment must also be received.'}`;
 
-export const REQUIRED_ONBOARDING_FORM_FIELDS = [
-    ['offer', FUNNEL_OFFER_QUESTION],
-    ['audience', 'Target audience'],
-    ['customerProblem', 'Main customer problem'],
-    ['desiredOutcome', 'Desired outcome'],
-] as const;
+export const REQUIRED_ONBOARDING_FORM_FIELDS = ONBOARDING_ESSENTIAL_FIELDS.map(
+    ([key, briefKey]) => [key, OFFER_ESSENTIAL_LABELS[briefKey]] as const,
+);
 
 export function missingOnboardingFormFields(data: OnboardingData): string[] {
     const missing: string[] = REQUIRED_ONBOARDING_FORM_FIELDS
-        .filter(([key]) => !String(data.form[key] || '').trim())
+        .filter(([key]) => String(data.form[key] || '').trim().length < ESSENTIAL_MIN_LENGTH)
         .map(([, label]) => label);
     if (data.projectType === 'CASE_STUDY' && (!data.form.caseStudyConsent || !data.form.testimonialCommitment))
         missing.push('Case-study permission and testimonial commitment');
+    if (data.journey && !data.journey.offerConfirmed) missing.push('Client offer review');
     return missing;
 }
 
@@ -405,6 +415,7 @@ export type ProjectData = {
     invoiceStatus: 'NOT_INVOICED' | 'DRAFT' | 'SENT' | 'PAID';
     invoiceUrl: string;
     onboarding?: OnboardingData;
+    delivery?: import('./project-workspace').DeliveryWorkspace;
 };
 export type ClientProject = {
     id: string;
@@ -566,6 +577,7 @@ export function createOnboardingData(
         },
         form: {
             status: 'NOT_SENT',
+            offerName: '',
             offer: '',
             audience: opportunity?.audience || '',
             customerProblem: '',
@@ -644,6 +656,7 @@ export function normalizeOnboarding(
     if ((form.status === 'NOT_SENT' || form.status === 'SENT') && form.offer === opportunity?.currentOffer) {
         form.offer = '';
     }
+    if (savedForm.offerName === undefined) form.offerName = legacyOfferName(form.offer);
     const agreement = { ...fallback.agreement, ...saved.agreement };
     const scope = { ...fallback.scope, ...saved.scope };
     const signed = ['SIGNED_CLIENT', 'FULLY_SIGNED'].includes(agreement.status) || Boolean(agreement.clientSignature || agreement.signedPdfData || agreement.signedPdfName);
@@ -671,8 +684,8 @@ export function normalizeOnboarding(
         form,
         baseline: { ...fallback.baseline, ...saved.baseline },
         scope,
-        access: form.status === 'COMPLETE'
-            ? mergeAccessChecklist(Array.isArray(saved.access) ? saved.access : [], generateAccessChecklist(form))
+        access: form.status === 'COMPLETE' || current.journey
+            ? reconcileOnboardingAccess({ ...fallback, ...current, form, access: Array.isArray(saved.access) ? saved.access : [] })
             : Array.isArray(saved.access) ? saved.access : [],
         overrides: Array.isArray(saved.overrides) ? saved.overrides : [],
         documents: Array.isArray(saved.documents) ? saved.documents : [],
@@ -687,6 +700,7 @@ export function generateAccessChecklist(form: OnboardingData['form']): AccessIte
     const add = (role: string, platform: string, reason: string, permission: string, instructions: string) => {
         if (!namedTool(platform)) return;
         items.push({
+            generated: true,
             id: `${accessKey(platform)}-${role}`,
             platform: platform.trim(),
             reason,
@@ -756,6 +770,23 @@ export function generateAccessChecklist(form: OnboardingData['form']): AccessIte
     return items;
 }
 
+export function onboardingAccessChecklist(data: OnboardingData): AccessItem[] {
+    const generated = generateAccessChecklist(data.form);
+    if (!data.journey) return generated;
+    const journey = journeyFor(data);
+    if (journey.publisher === 'DEVELOPER') return [];
+    const roles: Record<string, string> = { domain: 'domain', website: 'website', booking: 'booking', email: 'email', tracking: 'analytics' };
+    return generated.filter(item => journey.accessNeeds.some(need => item.id.endsWith(`-${roles[need]}`)));
+}
+
+export function reconcileOnboardingAccess(data: OnboardingData): AccessItem[] {
+    const generated = onboardingAccessChecklist(data);
+    const existing = data.access.map(item => data.journey && item.generated
+        ? { ...item, required: generated.some(next => next.id === item.id), nonBlocking: !generated.some(next => next.id === item.id) }
+        : item);
+    return mergeAccessChecklist(existing, generated);
+}
+
 export function mergeAccessChecklist(existing: AccessItem[], generated: AccessItem[]): AccessItem[] {
     const merged = existing.map((item) => ({ ...item }));
     for (const item of generated) {
@@ -768,9 +799,10 @@ export function mergeAccessChecklist(existing: AccessItem[], generated: AccessIt
 }
 
 export function onboardingAccessComplete(data: OnboardingData): boolean {
-    const required = mergeAccessChecklist(data.access, generateAccessChecklist(data.form)).filter(
+    const required = reconcileOnboardingAccess(data).filter(
         (item) => item.required && !item.nonBlocking,
     );
+    if (data.journey && !publishingReady(data)) return false;
     return required.length
         ? required.every((item) => ['VERIFIED', 'NOT_NEEDED'].includes(item.status))
         : onboardingFormComplete(data);
@@ -800,7 +832,9 @@ export function onboardingBlockers(data: OnboardingData, audience: 'internal' | 
             data.form.status === 'COMPLETE'
                 ? `Missing: ${missingOnboardingFormFields(data).join(', ')}.`
                 : 'Collect the structured business, funnel, tool, and asset details.');
-    const missingAccess = mergeAccessChecklist(data.access, generateAccessChecklist(data.form)).filter(
+    if (data.journey && !publishingReady(data))
+        add('publishing', 'Publishing handoff needs confirmation', 'Confirm who will publish the page and verify the access or developer arrangement. A contact or introduction alone is not confirmation.');
+    const missingAccess = reconcileOnboardingAccess(data).filter(
         (item) => item.required && !item.nonBlocking && !['VERIFIED', 'NOT_NEEDED'].includes(item.status),
     );
     if (missingAccess.length)
@@ -819,8 +853,9 @@ export function onboardingBlockers(data: OnboardingData, audience: 'internal' | 
             ? { label: 'Waiting for Compel to sign', detail: 'You have signed. Compel will complete the agreement and share the signed copy with you.' }
             : { label: 'Review and sign your agreement', detail: 'Read the included work and exclusions, then review your agreement PDF and arrange your signature with Compel.' },
         payment: { label: data.payment.status === 'OVERDUE' ? 'Complete your overdue payment' : 'Complete the agreed initial payment', detail: data.payment.link ? 'Use the secure payment link in the Payment section.' : 'Compel will share your payment link. Contact Aymen if you need help.' },
-        form: { label: 'Tell us about your business', detail: data.form.status === 'COMPLETE' ? `Please add the missing answers: ${missingOnboardingFormFields(data).join(', ')}.` : 'Complete the business questions below. You can save your answers and finish later.' },
+        form: !clientBriefReady(data) ? { label: 'Compel is preparing your offer summary', detail: 'We will prepare a prefilled summary for you to review. No need to start from a blank form.' } : { label: 'Review your offer and business details', detail: data.form.status === 'COMPLETE' ? `Please add the missing answers: ${missingOnboardingFormFields(data).join(', ')}.` : 'Review the prefilled facts, add anything missing, and save your answers as you go.' },
         access: { label: 'Share the requested tool access', detail: 'Follow the access instructions below and let us know when you have sent the invitations. Never send passwords.' },
+        publishing: { label: 'Arrange how your page will go live', detail: 'Tell us who manages your website. Compel will confirm the publishing responsibility and the access needed with you or your website contact.' },
         baseline: { label: 'Compel is preparing your starting-point record', detail: 'We will record your current funnel and available booking figures. We will contact you if we need anything else.' },
         scope: { label: 'Confirm the work we will deliver', detail: 'Review what is included, what is excluded and what we need before starting, then select Confirm this scope.' },
     };
@@ -830,10 +865,9 @@ export function onboardingBlockers(data: OnboardingData, audience: 'internal' | 
 export function onboardingProgress(data: OnboardingData) {
     const stages = [
         data.agreement.status === 'FULLY_SIGNED' || data.overrides.includes('agreement'),
-        data.projectType === 'CASE_STUDY' ||
-            data.payment.status === 'FULLY_PAID' ||
+        ...(data.projectType === 'PAID' ? [data.payment.status === 'FULLY_PAID' ||
             (data.payment.structure !== 'FULL' && data.payment.status === 'DEPOSIT_PAID') ||
-            data.overrides.includes('payment'),
+            data.overrides.includes('payment')] : []),
         onboardingFormComplete(data) || data.overrides.includes('form'),
         onboardingAccessComplete(data),
         data.baseline.captured || data.overrides.includes('baseline'),

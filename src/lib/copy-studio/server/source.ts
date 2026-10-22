@@ -13,6 +13,9 @@ const CRAWL_TIMEOUT = 120_000;
 type FetchDocument = typeof fetchSourceDocument;
 type PageResult = NonNullable<Source['crawl']>['pages'][number];
 
+const containsProof = (page: Source) => /testimonial|review|success.stor|case.stud|client.result/i.test(`${page.url} ${page.title}`)
+  || /^(?:testimonials?|success stories|client (?:stories|results|reviews)|(?:personal|professional) recommendations?|what (?:our |my )?clients (?:say|have to say))\s*$/im.test(page.text);
+
 function routePriority(url: URL): number {
   if (url.pathname === '/') return 0;
   if (/\/(?:blog|learn|articles)\//i.test(url.pathname)) return 4;
@@ -28,7 +31,8 @@ export function parsePage(html: string, url: string): Source {
   $('script,style,noscript,svg,iframe,nav,footer,[hidden],[aria-hidden="true"],input[type="hidden"]').remove();
   const headings = $('h1,h2,h3').map((_, e) => $(e).text().replace(/\s+/g, ' ').trim()).get().filter(Boolean).slice(0, 60);
   $('br').replaceWith('\n');
-  $('p,div,section,article,li,h1,h2,h3,h4,button,a,label').each((_, e) => { $(e).append('\n'); });
+  $('p,blockquote,figure,figcaption,cite,li,h1,h2,h3,h4').each((_, e) => { $(e).append('\n\n'); });
+  $('div,section,article,button,a,label').each((_, e) => { $(e).append('\n'); });
   const body = $('body').text().replace(/[\t ]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   return { title: title || new URL(url).hostname, url, headings, text: [title, description, body].filter(Boolean).join('\n\n') };
 }
@@ -70,7 +74,13 @@ function combinePages(pages: Source[], records: PageResult[]): string {
   const budget = MAX_SOURCE_CHARACTERS - labels.join('\n\n').length;
   const sizes = pages.map(() => 0);
   let remaining = budget;
-  let active = pages.map((_, index) => index);
+  // Keep testimony whole before distributing the remaining budget across other copy.
+  const proofPages = pages.map((page, index) => containsProof(page) ? index : -1).filter(index => index >= 0);
+  for (const index of proofPages) {
+    sizes[index] = Math.min(remaining, pages[index].text.length);
+    remaining -= sizes[index];
+  }
+  let active = pages.map((_, index) => index).filter(index => sizes[index] < pages[index].text.length && !proofPages.includes(index));
   while (remaining > 0 && active.length) {
     const share = Math.max(1, Math.floor(remaining / active.length));
     for (const index of active) {
@@ -138,8 +148,9 @@ export async function crawlWebsite(
       return;
     }
     content.add(page.text);
-    records.push({ url: canonical.href, title: page.title, status: 'read', ...(page.text.length > PAGE_CHARACTERS ? { truncated: true } : {}) });
-    page.text = page.text.slice(0, PAGE_CHARACTERS);
+    const allowance = containsProof(page) ? MAX_SOURCE_CHARACTERS : PAGE_CHARACTERS;
+    records.push({ url: canonical.href, title: page.title, status: 'read', ...(page.text.length > allowance ? { truncated: true } : {}) });
+    page.text = page.text.slice(0, allowance);
     pages.push(page);
   };
   const seedUrl = crawlRoute(seed.url.href, seed.url, origin);
@@ -205,7 +216,9 @@ export async function crawlWebsite(
   if (discoveryLimited) warnings.add(`Discovery stopped at ${MAX_DISCOVERED} public routes; further routes may exist.`);
   if (signal.aborted) warnings.add('The site crawl time limit was reached. Coverage is partial.');
   if (records.some(page => ['failed', 'unreadable'].includes(page.status))) warnings.add('Some routes could not be read. Check the page list and paste missing copy if needed.');
-  if (records.some(page => page.truncated)) warnings.add(`Some page text was shortened (${PAGE_CHARACTERS.toLocaleString('en-US')} characters per page; ${MAX_SOURCE_CHARACTERS.toLocaleString('en-US')} total). Review the captured copy before generating.`);
+  if (records.some(page => page.truncated)) warnings.add(`Some page text was shortened (${PAGE_CHARACTERS.toLocaleString('en-US')} characters per ordinary page; proof-bearing pages are prioritized within ${MAX_SOURCE_CHARACTERS.toLocaleString('en-US')} total). Review the captured copy before generating.`);
+  if (pages.some(page => containsProof(page) && records.some(record => record.url === page.url && record.truncated)))
+    warnings.add('Some pages containing social proof exceeded the total capture budget. Their coverage is incomplete; add the missing full testimonials before claiming all proof was captured.');
   warnings.add('Only public HTML routes found through links and sitemaps can be discovered. Unlisted routes, JavaScript-only content, embedded content and login-protected pages may need pasted copy.');
   return {
     title: pages[0].title, url: seed.url.href, text,

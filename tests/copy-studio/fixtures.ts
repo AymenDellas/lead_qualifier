@@ -24,6 +24,11 @@ export const strategy = {
   objection: 'Whether another messaging exercise will be useful.',
   action: 'Book a fit call',
   missingEvidence: ['No customer results have been supplied.'],
+  frameworkPlan: [
+    { stage: 'Problem', application: 'Recognize that prospects struggle to understand the existing offer.', sectionIds: ['hero', 'problem'] },
+    { stage: 'Agitation', application: 'Show how an unclear explanation leaves suitable prospects hesitating.', sectionIds: ['problem'] },
+    { stage: 'Solution', application: 'Connect the customer-language review to a clearer offer and the fit call.', sectionIds: ['approach', 'cta'] },
+  ],
 };
 export const draft: Draft = {
   strategy,

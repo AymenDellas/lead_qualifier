@@ -1,12 +1,12 @@
 @import "tailwindcss";
 
-/* Balanced dashboard system: a deep navigation rail, readable ink, and a calm
-   light working surface shared by the internal app and client portal. */
+/* Shared control vocabulary. The internal workbench owns its dark theme;
+   client portals keep the light defaults and their scoped brand system. */
 
 @theme {
-  --color-background: #edf2f8;
-  --color-text: #142139;
-  --color-accent: #294cc7;
+  --color-background: var(--surface-0);
+  --color-text: var(--text);
+  --color-accent: var(--signal);
   --color-danger: #c43f48;
   --font-sans: var(--font-inter), 'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-fira-code), 'Fira Code', ui-monospace, SFMono-Regular, monospace;
@@ -43,6 +43,7 @@
   --background: var(--surface-0);
   --foreground: var(--text);
   --accent: var(--signal);
+  --on-signal: #ffffff;
 
   color-scheme: light;
 }
@@ -55,7 +56,42 @@ body {
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  overflow-x: hidden;
+}
+
+.dashboard-app {
+  --surface-0: #111214;
+  --surface-1: #18191c;
+  --surface-2: #202125;
+  --surface-3: #292b30;
+  --line: #2b2e34;
+  --line-strong: #41454e;
+  --text: #f0f0f2;
+  --text-dim: #b8bbc4;
+  --text-faint: #9296a2;
+  --signal: #d5f37c;
+  --signal-dim: #252c1e;
+  --signal-line: #526139;
+  --on-signal: #17200d;
+  --success: #8cdbb0;
+  --success-dim: #1b3027;
+  --warn: #edc17a;
+  --warn-dim: #342a1e;
+  --bad: #f09598;
+  --bad-dim: #382326;
+  --info: #9cbff0;
+  --info-dim: #202d3d;
+  --radius: 10px;
+  --radius-sm: 7px;
+  --background: var(--surface-0);
+  --foreground: var(--text);
+  --accent: var(--signal);
+  --workspace-sticky-offset: 88px;
+  min-height: 100dvh;
+  background: var(--surface-0);
+  color: var(--text);
+  color-scheme: dark;
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 ::selection { background: var(--signal-dim); color: var(--text); }
@@ -79,16 +115,15 @@ body {
 
 /* Small uppercase caption for column heads and meta rows. */
 .label-micro {
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
   color: var(--text-faint);
 }
 
 /* Screen title. One per view, above the content, never inside a panel. */
 .screen-title {
-  font-size: 23px;
+  font-size: 28px;
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--text);
@@ -111,7 +146,7 @@ body {
   background: var(--surface-1);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  box-shadow: 0 5px 20px rgba(25, 42, 72, 0.065);
+  box-shadow: none;
 }
 
 /* Header strip inside a panel. Sits slightly above its body. */
@@ -132,8 +167,7 @@ body {
   position: absolute;
   inset: 0 0 auto 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, var(--signal), transparent);
-  opacity: 0.7;
+  background: var(--line-strong);
 }
 
 /* Title row of a panel: a name on the left, a quiet hint on the right. */
@@ -141,10 +175,10 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 15px 18px;
+  padding: 18px 22px;
   border-bottom: 1px solid var(--line);
   font-size: 15px;
-  font-weight: 650;
+  font-weight: 600;
   color: var(--text);
 }
 .panel-head .hint {
@@ -154,7 +188,7 @@ body {
   color: var(--text-faint);
 }
 
-.panel-body { padding: 18px; }
+.panel-body { padding: 22px; }
 
 /* Footnote strip under a panel: legends, caveats, the count that qualifies the
    numbers above it. The honest number lives here. */
@@ -170,56 +204,51 @@ body {
 
 /* ---- app shell --------------------------------------------------------- */
 
-.sidebar {
-  background: #17243b;
-  border-right: 1px solid #293a56;
-  box-shadow: 5px 0 24px rgba(17, 31, 54, 0.12);
-}
-.sidebar .label-micro { color: #9dadc8; }
+.sidebar { background: #141517; border-right: 1px solid var(--line); }
+.sidebar .label-micro { color: var(--text-faint); }
 
 .nav-item {
   display: flex;
   align-items: center;
   gap: 11px;
   width: 100%;
-  padding: 10px 11px;
+  padding: 9px 11px;
   border-radius: var(--radius-sm);
   font-size: 13.5px;
   font-weight: 500;
-  color: #c3cfe2;
+  color: var(--text-dim);
   background: transparent;
   border: 1px solid transparent;
   cursor: pointer;
   text-align: left;
   transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
 }
-.nav-item:hover { background: #243653; color: #ffffff; transform: translateX(2px); }
+.nav-item:hover { background: var(--surface-2); color: var(--text); }
 .nav-item-active {
-  background: #314b79;
-  border-color: #5473a9;
-  color: #ffffff;
+  background: #282c23;
+  border-color: #3b4431;
+  color: #e7f6c8;
   font-weight: 600;
 }
 .nav-item-signal.nav-item-active {
-  background: #314b79;
-  border-color: #5473a9;
-  color: #ffffff;
+  background: #282c23;
+  border-color: #3b4431;
+  color: #e7f6c8;
 }
-.nav-item-signal:not(.nav-item-active) { color: #c3cfe2; opacity: 1; }
+.nav-item-signal:not(.nav-item-active) { color: var(--text-dim); }
 
 /* Count sitting at the right edge of a nav row. */
 .nav-count {
   margin-left: auto;
   font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
-  color: #aebed7;
+  font-size: 12px;
+  color: var(--text-faint);
 }
 
 .topbar {
-  background: rgba(255, 255, 255, 0.97);
+  background: var(--surface-0);
   border-bottom: 1px solid var(--line);
-  backdrop-filter: blur(14px);
 }
 
 /* ---- buttons ----------------------------------------------------------- */
@@ -229,7 +258,8 @@ body {
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
-  padding: 0.56rem 0.85rem;
+  min-height: 36px;
+  padding: 0.55rem 0.85rem;
   border-radius: var(--radius-sm);
   font-size: 13.5px;
   font-weight: 500;
@@ -254,16 +284,16 @@ body {
 /* The one action a screen is for. There should be at most one visible. */
 .btn-primary {
   background: var(--signal);
-  color: #ffffff;
+  color: var(--on-signal);
   font-weight: 600;
   border-color: var(--signal);
-  box-shadow: 0 4px 12px rgba(41, 76, 199, 0.18);
+  box-shadow: none;
 }
 .btn-primary:hover:not(:disabled) {
-  background: #213eaa;
-  border-color: #213eaa;
-  color: #ffffff;
-  box-shadow: 0 6px 15px rgba(41, 76, 199, 0.24);
+  background: color-mix(in srgb, var(--signal) 88%, white);
+  border-color: var(--signal);
+  color: var(--on-signal);
+  box-shadow: none;
 }
 
 /* Secondary actions: hairline outline, no fill until hover. */
@@ -317,7 +347,7 @@ body {
   transition: background-color 0.14s ease, color 0.14s ease;
 }
 .seg-item:hover { color: var(--text-dim); }
-.seg-item-active { background: var(--surface-1); color: var(--signal); box-shadow: 0 1px 4px rgba(28, 45, 78, 0.10); }
+.seg-item-active { background: var(--surface-1); color: var(--text); box-shadow: 0 1px 3px #0002; }
 
 /* ---- tabs -------------------------------------------------------------- */
 
@@ -347,9 +377,9 @@ body {
 }
 .tab:hover { color: var(--text-dim); }
 .tab-active {
-  color: var(--signal);
-  background: var(--signal-dim);
-  border-color: var(--signal-line);
+  color: var(--text);
+  background: var(--surface-3);
+  border-color: var(--line-strong);
 }
 /* The send list. Always reads as the live one. */
 .tab-signal {
@@ -380,9 +410,9 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   color: var(--text-dim);
   white-space: nowrap;
 }
@@ -407,15 +437,15 @@ body {
   gap: 0.3rem;
   padding: 0.12rem 0.4rem;
   border-radius: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
   border: 1px solid transparent;
 }
-.badge-ok { color: var(--success); background: var(--success-dim); border-color: #bce7d1; }
-.badge-warn { color: var(--warn); background: var(--warn-dim); border-color: #f3d9ad; }
-.badge-bad { color: var(--bad); background: var(--bad-dim); border-color: #f1c8cc; }
-.badge-info { color: var(--info); background: var(--info-dim); border-color: #c6e7f5; }
+.badge-ok { color: var(--success); background: var(--success-dim); border-color: color-mix(in srgb, var(--success) 25%, var(--line)); }
+.badge-warn { color: var(--warn); background: var(--warn-dim); border-color: color-mix(in srgb, var(--warn) 25%, var(--line)); }
+.badge-bad { color: var(--bad); background: var(--bad-dim); border-color: color-mix(in srgb, var(--bad) 25%, var(--line)); }
+.badge-info { color: var(--info); background: var(--info-dim); border-color: color-mix(in srgb, var(--info) 25%, var(--line)); }
 .badge-idle { color: var(--text-faint); background: var(--surface-3); border-color: var(--line); }
 
 /* Quiet mono chip for provenance: a method name, a provider, a source. Never
@@ -423,8 +453,8 @@ body {
 .chip {
   display: inline-flex;
   align-items: center;
-  font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-family: var(--font-sans);
+  font-size: 12px;
   letter-spacing: 0.02em;
   padding: 0.1rem 0.32rem;
   border-radius: 3px;
@@ -488,26 +518,27 @@ body {
 .figures {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 14px;
-}
-.fig {
-  padding: 20px;
-  background: var(--surface-1);
+  gap: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  box-shadow: 0 5px 20px rgba(25, 42, 72, 0.065);
+  background: var(--surface-1);
+}
+.fig {
+  padding: 22px 26px;
+  border-right: 1px solid var(--line);
   min-width: 0;
 }
 .fig-value {
   font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 600;
   line-height: 1.1;
   letter-spacing: -0.03em;
   color: var(--text);
 }
-.fig-value-signal { color: var(--signal); }
+.fig-value-signal { color: var(--text); }
+.fig:last-child { border-right: 0; }
 .fig-value-warn { color: var(--warn); }
 .fig-sub {
   font-size: 12.5px;
@@ -537,13 +568,12 @@ body {
 /* ---- table ------------------------------------------------------------- */
 
 .tbl-head {
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
   color: var(--text-faint);
   background: var(--surface-2);
-  border-bottom: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line);
 }
 
 .tbl-row {
@@ -613,11 +643,10 @@ body {
    correct value isn't obvious. */
 .field-label {
   display: block;
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-faint);
+  letter-spacing: 0;
+  color: var(--text-dim);
   margin-bottom: 6px;
 }
 .field-hint {
@@ -651,8 +680,8 @@ body {
 .feed-row-ok { border-left-color: var(--signal); }
 .feed-row-bad { border-left-color: var(--bad); }
 .feed-time {
-  font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-family: var(--font-sans);
+  font-size: 12px;
   letter-spacing: 0.04em;
   color: var(--text-faint);
 }
@@ -662,12 +691,12 @@ body {
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: #ccd5e2;
+  background: var(--line-strong);
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: #aab8ca; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-faint); background-clip: content-box; }
 
 /* The overview has a little more breathing room than the operational tools. */
 .overview { max-width: 1320px; margin: 0 auto; }

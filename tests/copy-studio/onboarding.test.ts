@@ -11,7 +11,7 @@ function client(id = 'client-a', landingPage = 'https://coach.example/executive'
   data.onboarding!.clientName = 'Example Coach';
   data.onboarding!.website = 'https://www.coach.example/';
   Object.assign(data.onboarding!.form, {
-    offer: 'Executive Program\nSix individual sessions.', audience: 'Newly promoted leaders',
+    offerName: 'Executive Program', offer: 'Six individual sessions.', audience: 'Newly promoted leaders',
     customerProblem: 'Leading former peers', desiredOutcome: 'Lead with clearer expectations',
     landingPageUrl: landingPage, mustStay: 'Keep the approved positioning', avoid: 'Do not promote the group course',
     trafficSources: 'LinkedIn', importantContext: 'Visitors are considering their first management role.',
@@ -27,7 +27,7 @@ function client(id = 'client-a', landingPage = 'https://coach.example/executive'
 test('onboarding maps client offer answers while excluding agency fees, deliverables and private portal data', () => {
   const record = toOnboardingBrief(client())!;
   assert.equal(record.brief.offerName, 'Executive Program');
-  assert.equal(record.brief.description, 'Executive Program\nSix individual sessions.');
+  assert.equal(record.brief.description, 'Six individual sessions.');
   assert.equal(record.brief.audience, 'Newly promoted leaders');
   assert.equal(record.template, 'vsl');
   assert.equal(record.context.avoid, 'Do not promote the group course');
@@ -39,6 +39,15 @@ test('onboarding maps client offer answers while excluding agency fees, delivera
   assert.equal(record.brief.deliverables, '');
   assert.equal(record.brief.proof, '');
   assert.doesNotMatch(JSON.stringify(record), /private-token|private-signature|4000|Nurture email sequence/);
+});
+
+test('legacy combined offer answers remain readable, while a new blank offer name stays missing', () => {
+  const saved = client();
+  delete (saved.data.onboarding!.form as { offerName?: string }).offerName;
+  saved.data.onboarding!.form.offer = 'Previous Program\nSix individual sessions.';
+  assert.equal(toOnboardingBrief(saved)!.brief.offerName, 'Previous Program');
+  saved.data.onboarding!.form.offerName = '';
+  assert.equal(toOnboardingBrief(saved)!.brief.offerName, '');
 });
 
 test('client detection normalizes www and ranks exact landing pages before other same-domain projects', () => {

@@ -1,4 +1,5 @@
 import { briefSchema, librarySchema, type Project } from '@/lib/copy-studio/shared/contracts';
+import { packSavedProject, unpackSavedProject } from '@/lib/copy-studio/shared/saved-projects';
 
 export const storageKey = 'compel:copy-studio:library:v2';
 export function newProject(): Project {
@@ -21,7 +22,7 @@ export function loadProjects(): { projects: Project[]; error: string | null } {
     const raw = localStorage.getItem(storageKey);
     if (!raw) return { projects: [newProject()], error: null };
     const data = librarySchema.parse(JSON.parse(raw));
-    return { projects: data.projects.length ? data.projects : [newProject()], error: null };
+    return { projects: data.projects.length ? data.projects.map(unpackSavedProject) : [newProject()], error: null };
   } catch {
     return {
       projects: [newProject()],
@@ -32,7 +33,7 @@ export function loadProjects(): { projects: Project[]; error: string | null } {
 }
 export function saveProjects(projects: Project[]): string | null {
   try {
-    localStorage.setItem(storageKey, JSON.stringify({ version: 2, projects }));
+    localStorage.setItem(storageKey, JSON.stringify({ version: 2, projects: projects.map(packSavedProject) }));
     return null;
   } catch {
     return 'Browser storage is full or unavailable. Download a project backup to keep your work.';

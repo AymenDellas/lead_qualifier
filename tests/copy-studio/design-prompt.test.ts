@@ -10,6 +10,24 @@ const project = (): Project => projectSchema.parse({
 });
 const copyData = (prompt: string) => JSON.parse(prompt.split('FINAL COPY DATA (the page content)\n')[1].split('\n\nEDITORIAL HANDOFF DATA')[0]);
 
+test('the prompt’s near-black and text calibration colors actually meet its luminance and contrast targets', () => {
+  const prompt = buildDesignPrompt(project());
+  const hexColors = (text: string) => [...text.matchAll(/#[\dA-Fa-f]{6}\b/g)].map(match => match[0]);
+  const backgrounds = hexColors(prompt.split('NEAR-BLACK THEME REQUIRED:')[1].split('\n')[0]);
+  const readingColors = hexColors(prompt.split('Define and use separate opaque color tokens')[1].split('\n')[0]);
+  const luminance = (hex: string) => {
+    const channels = [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16) / 255)
+      .map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+  };
+  assert.ok(backgrounds.length >= 2);
+  assert.ok(readingColors.length >= 2);
+  for (const background of backgrounds) {
+    assert.ok(luminance(background) <= 0.01);
+    for (const text of readingColors) assert.ok((luminance(text) + 0.05) / (luminance(background) + 0.05) >= 7);
+  }
+});
+
 test('the design handoff preserves complete final copy, omits empty proof, and isolates editorial notes', () => {
   const saved = project();
   saved.result!.draft.notes.push('INTERNAL_REVIEW_ONLY');
@@ -20,7 +38,7 @@ test('the design handoff preserves complete final copy, omits empty proof, and i
   assert.doesNotMatch(JSON.stringify(copyData(prompt)), /INTERNAL_REVIEW_ONLY|INTERNAL_CLAIM_FLAG/);
   assert.match(prompt.split('EDITORIAL HANDOFF DATA')[1], /INTERNAL_REVIEW_ONLY/);
   assert.match(prompt, /No navbar.*navigation menu/);
-  assert.match(prompt, /No mesh gradients/);
+  assert.match(prompt, /Custom grain-treated mesh gradients are allowed/);
   assert.match(prompt, /No repeated cards/);
   assert.match(prompt, /No fake testimonials/);
   assert.match(prompt, /375px and 1440px/);
@@ -78,26 +96,47 @@ test('no draft has no prompt, and old backups work without leaking raw source or
   assert.doesNotMatch(buildDesignPrompt(saved), /OUTDATED_OTHER_OFFER_DATA|PRIVATE_ONBOARDING_ID|PRIVATE_CONTACT_NAME/);
 });
 
-test('the quality brief stays portable without enforcing the reference page identity', () => {
+test('the quality brief preserves rich art direction across offers without requiring a reference design', () => {
   for (const template of ['direct_to_call', 'lead_magnet', 'vsl'] as const) {
     const saved = project();
     saved.generatedFrom = fingerprint({ ...input, template });
     const prompt = buildDesignPrompt(saved);
     assert.match(prompt, /QUALITY STANDARD, NOT A VISUAL TEMPLATE/);
-    assert.match(prompt, /DARK THEME REQUIRED/);
-    assert.match(prompt, /one continuous dark canvas/);
+    assert.match(prompt, /NEAR-BLACK THEME REQUIRED/);
+    assert.match(prompt, /relative luminance at most 0.01/);
     assert.doesNotMatch(prompt, /Light, dark and chromatic grounds are all valid/);
     assert.match(prompt, /Content sections remain transparent/);
     assert.match(prompt, /three materially different visual directions/);
     assert.match(prompt, /Dots and overhead lighting are optional/);
+    assert.match(prompt, /Framer and Dribbble/);
+    assert.match(prompt, /FIXED QUALITY, FLEXIBLE IDENTITY/);
+    assert.match(prompt, /no reference page or screenshot is required/);
+    assert.match(prompt, /Custom grain-treated mesh gradients are allowed/);
+    assert.match(prompt, /No individual technique is mandatory/);
+    assert.match(prompt, /WHEN THE USER REQUESTS A NEW DESIGN DIRECTION/);
+    assert.match(prompt, /Preserve exact copy, section order, approved assets, functionality and real integrations/);
+    assert.match(prompt, /almost invisible effect/);
+    assert.doesNotMatch(prompt, /No mesh gradients|mesh gradients[^\n]*remain excluded|The approved reference establishes/);
     assert.match(prompt, /copy template controls section meaning and order/);
-    assert.match(prompt, /one coherent supporting-content grid/);
-    assert.match(prompt, /heading directly above its related text or list/);
+    assert.match(prompt, /SECTION ARCHITECTURE — WIDE COMPOSITION, COMFORTABLE READING/);
+    assert.match(prompt, /Reading width and composition width are different decisions/);
+    assert.match(prompt, /50–65 characters per line/);
+    assert.match(prompt, /one shared grid with content-specific compositions/);
+    assert.match(prompt, /separate opaque color tokens/);
+    assert.match(prompt, /Inspect the full-page silhouette/);
+    assert.match(prompt, /EVERY remaining full quotation/);
+    assert.match(prompt, /Show all testimonials disclosure/);
+    assert.match(prompt, /112–160px/);
+    assert.match(prompt, /64–88px/);
+    assert.match(prompt, /7:1 contrast/);
+    assert.match(prompt, /marker\/highlighter treatment/);
+    assert.doesNotMatch(prompt, /established content spine|Set a stable content spine|same supporting-content grid and heading\/body relationship throughout|without changing the reading axis/);
     assert.match(prompt, /There is no layout-variation quota/);
     assert.doesNotMatch(prompt, /at least three content-appropriate|Do not repeat the problem composition|Distinguish its arrangement from the conversation area through alignment/);
     assert.doesNotMatch(prompt, /#101113|#F1AD94|Outfit|IMPLEMENTATION STARTING POINT|\.light-left|\.light-right|approved charcoal\/soft-light/);
     assert.doesNotMatch(prompt, /luminous light main canvas|distinct tonal or material stage|reliable starting structure is an asymmetric hero/);
     assert.doesNotMatch(prompt, /judgment clear|through divorce|127\.0\.0\.1:3012|\.codex\/visualizations/);
+    assert.doesNotMatch(prompt, /Lisa Hack|Together we map out a career plan|#101116|#B8ACFF|Explore, Clarify and Identify/);
     assert.deepEqual(copyData(prompt), saved.result!.draft.sections.filter(section => !['proof', 'about'].includes(section.id)));
   }
 });
@@ -109,6 +148,8 @@ test('client asset references use the generated draft snapshot and omit query or
   saved.reference = { ...reference, url: 'https://different-client.com/UNGENERATED_REFERENCE' };
   const prompt = buildDesignPrompt(saved);
   assert.match(prompt, /https:\/\/www\.clientstudio\.com\/coaching\//);
+  assert.match(prompt, /client asset discovery only, not a visual design reference/);
+  assert.match(prompt, /Do not reproduce the source page's layout, section styling or background composition/);
   assert.doesNotMatch(prompt, /PRIVATE_QUERY|PRIVATE_FRAGMENT|RAW_REFERENCE_COPY|different-client|UNGENERATED_REFERENCE/);
 });
 

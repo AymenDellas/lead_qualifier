@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { Upload, Download, Trash2 } from "lucide-react";
 import { cn, extractLinkedInName } from "@/lib/utils";
 import Papa from 'papaparse';
+import './acquisition-workspace.css';
 
 export default function UrlCleaner() {
     const [csvData, setCsvData] = useState<{ original: string, cleaned: string }[]>([]);
@@ -72,22 +73,23 @@ export default function UrlCleaner() {
     };
 
     return (
-        <div className="space-y-4 max-w-[900px]">
+        <div className="acquisition-workspace utility-workspace url-cleaner-workspace">
             <section className="panel">
                 <div className="panel-head">
-                    Messy list in
+                    <h2>Import your list</h2>
                     {csvData.length > 0 && (
                         <span className="hint"><span className="num">{csvData.length.toLocaleString()}</span> cleaned</span>
                     )}
                 </div>
 
-                <div className="panel-body space-y-3">
+                <div className="panel-body space-y-4">
+                    <p className="acquisition-intro">Upload a CSV with LinkedIn profile URLs in the first column, then review the cleaned values before downloading.</p>
                     <div
                         onDragOver={handleDragOver}
                         onDragLeave={handleDragLeave}
                         onDrop={handleDrop}
                         className={cn(
-                            "drop px-5 py-6 flex items-center gap-4 cursor-pointer",
+                            "drop utility-upload flex items-center gap-4 cursor-pointer",
                             isDragging && "drop-active",
                             csvData.length > 0 && !isDragging && "drop-loaded",
                         )}
@@ -101,14 +103,14 @@ export default function UrlCleaner() {
                         />
                         <Upload className={cn("w-5 h-5 flex-none", csvData.length > 0 ? "text-[var(--signal)]" : "text-[var(--text-faint)]")} />
                         <div className="min-w-0">
-                            <p className="text-[13px] font-medium text-[var(--text)]">
+                            <p className="text-sm font-medium text-[var(--text)]">
                                 {isProcessing
                                     ? "Cleaning…"
                                     : csvData.length > 0
                                         ? <><span className="num">{csvData.length.toLocaleString()}</span> URLs cleaned</>
                                         : "Drop a CSV here, or click to choose one"}
                             </p>
-                            <p className="text-[11.5px] text-[var(--text-faint)] mt-0.5">
+                            <p className="text-xs text-[var(--text-faint)] mt-1">
                                 Tracking parameters and trailing junk are stripped
                             </p>
                         </div>
@@ -135,11 +137,12 @@ export default function UrlCleaner() {
                         Preview
                         <span className="hint">First {Math.min(50, csvData.length)}</span>
                     </div>
-                    <div className="max-h-[420px] overflow-y-auto">
+                    <div className="utility-preview-columns" aria-hidden><span>Original URL</span><span>Cleaned value</span></div>
+                    <div className="utility-preview-rows max-h-[420px] overflow-y-auto">
                         {csvData.slice(0, 50).map((item, i) => (
                             <div key={i} className="tbl-row px-4 py-2.5 flex items-center justify-between gap-4">
-                                <span className="text-[11.5px] text-[var(--text-faint)] truncate max-w-[55%]">{item.original}</span>
-                                <span className="text-[12.5px] font-[family-name:var(--font-mono)] text-[var(--text)]">{item.cleaned}</span>
+                                <span className="text-[13px] text-[var(--text-dim)] truncate max-w-[55%]" title={item.original}>{item.original}</span>
+                                <span className="text-[13px] font-[family-name:var(--font-mono)] text-[var(--text)] break-all">{item.cleaned}</span>
                             </div>
                         ))}
                     </div>

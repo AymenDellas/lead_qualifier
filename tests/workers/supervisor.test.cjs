@@ -3,11 +3,11 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),{EventEmitter}=require('node:events');
 const source=fs.readFileSync(path.resolve(__dirname,'../../scripts/linkedin-worker-supervisor.cjs'),'utf8');
 
-function supervisor(selectedIds=['one']) {
- const accounts=[{id:'one',label:'Account 1',changed_at:'version-1',archived:false,login_requested_at:null},
-  {id:'two',label:'Account 2',changed_at:'version-1',archived:false,login_requested_at:'request-1'}];
+function supervisor(selectedIds=['one'],savedStatus={status:'offline'}) {
+ const accounts=[{id:'one',label:'Account 1',changed_at:'version-1',archived:false,processing_enabled:true,login_requested_at:null},
+  {id:'two',label:'Account 2',changed_at:'version-1',archived:false,processing_enabled:true,login_requested_at:'request-1'}];
  const launches=[],errors=[];
- const pool={query:async(sql,values)=>({rows:sql.startsWith('UPDATE')?[]:sql.startsWith('SELECT status')?[{status:{status:'offline'}}]:accounts.filter(a=>!a.archived&&(a.login_requested_at||a.logout_requested_at||values[0].includes(a.id)))}),end:async()=>{}};
+ const pool={query:async(sql,values)=>({rows:sql.startsWith('UPDATE')?[]:sql.startsWith('SELECT status')?[{status:savedStatus}]:accounts.filter(a=>!a.archived&&(a.login_requested_at||a.logout_requested_at||values[0].includes(a.id)))}),end:async()=>{}};
  const modules={
   'node:fs':{readFileSync:()=>'',mkdirSync(){},existsSync:()=>false},'node:path':path,
   'node:child_process':{fork:(_file,args)=>{
@@ -16,7 +16,7 @@ function supervisor(selectedIds=['one']) {
    launches.push(child);return child;
   },execFileSync:()=>assert.fail('No force termination expected')},
   pg:{Pool:class{constructor(){return pool;}}},
-  '../src/lib/linkedin-workers.cjs':{selectedAccounts:async()=>accounts.filter(a=>!a.archived&&!a.logout_requested_at&&!a.signed_out_at&&selectedIds.includes(a.id))},
+  '../src/lib/linkedin-workers.cjs':{expireLoginRequests:async()=>{},selectedAccounts:async()=>accounts.filter(a=>!a.archived&&!a.logout_requested_at&&!a.signed_out_at&&a.processing_enabled&&selectedIds.includes(a.id)),pauseProcessing:async(_pool,id)=>{accounts.find(a=>a.id===id).processing_enabled=false;}},
  };
  const context=vm.createContext({__dirname:path.resolve(__dirname,'../../scripts'),require:name=>modules[name],
   process:{env:{},on(){},platform:'win32'},console:{log(){},error:(...args)=>errors.push(args)},
@@ -37,10 +37,12 @@ test('consuming a sign-in request keeps an unselected manual browser alive until
  assert.deepEqual(s.errors,[]);
 });
 
-test('successful sign-in transitions a selected account to one normal worker without repeated checks or crash delay',async()=>{
+test('successful sign-in leaves the account idle until processing is explicitly authorized',async()=>{
  const s=supervisor(['one','two']);await s.tick();
  const manual=s.launches.find(child=>child.args.includes('two'));
- s.accounts[1].login_requested_at=null;await exited(manual);await s.tick();
+ s.accounts[1].login_requested_at=null;s.accounts[1].processing_enabled=false;await exited(manual);await s.tick();
+ assert.equal(s.launches.length,2,'connecting must not start processing');
+ s.accounts[1].processing_enabled=true;s.accounts[1].changed_at='version-2';await s.tick();
  assert.equal(s.launches.length,3);
  const normal=s.launches[2];assert.deepEqual([...normal.args],['--account','two']);
  await s.tick();await s.tick();assert.equal(s.launches.length,3);
@@ -63,4 +65,9 @@ test('sign-out stops the normal browser before opening the same profile solely f
  const logout=s.launches.at(-1);await s.tick();assert.equal(logout.stopped,undefined);
  s.accounts[0].logout_requested_at=null;s.accounts[0].signed_out_at='done';await exited(logout);await s.tick();
  assert.equal(s.launches.length,3,'a signed-out account must not auto-login');assert.deepEqual(s.errors,[]);
+});
+
+test('a supervisor restart preserves a manual LinkedIn pause until sign-in is explicitly requested',async()=>{
+ const s=supervisor(['one'],{status:'paused',reason:'LinkedIn requires attention.',manualResumeRequired:true});await s.tick();assert.equal(s.launches.filter(c=>c.args.includes('one')).length,0);
+ s.accounts[0].login_requested_at='new-manual-request';await s.tick();const manual=s.launches.find(c=>c.args.includes('one'));assert.ok(manual.args.includes('--login'));assert.deepEqual(s.errors,[]);
 });

@@ -30,7 +30,7 @@ export function exportMarkdown(project: Project): string {
         .filter((s) => sectionText(s).trim())
         .map((s) => {
           const name = template.sections.find((o) => o.id === s.id)?.name || s.id;
-          return `## ${name}\n\n${s.headline ? `### ${s.headline}\n\n` : ''}${s.body}${s.bullets.length ? `\n\n${s.bullets.map((b) => `- ${b}`).join('\n')}` : ''}${s.cta ? `\n\n**Button:** ${s.cta}` : ''}`;
+          return `## ${s.headline || name}\n\n${s.body}${s.bullets.length ? `\n\n${s.bullets.map((b) => `- ${b}`).join('\n')}` : ''}${s.cta ? `\n\n**Button:** ${s.cta}` : ''}`;
         }),
     ]
       .join('\n\n')

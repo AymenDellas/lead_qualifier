@@ -12,7 +12,7 @@ const request = (operation: string, body: unknown, headers: Record<string, strin
 
 test('dashboard API validates before calling AI and preserves the streaming contract', async () => {
   let calls = 0;
-  const complete = async () => JSON.stringify(++calls % 2 ? strategy : draft);
+  const complete = async () => JSON.stringify([strategy, draft, { findings: [] }][calls++]);
   const invalid = await handleCopyStudio(request('generate', {}), 'generate', complete);
   assert.equal(invalid.status, 400);
   assert.equal(calls, 0);
@@ -22,7 +22,7 @@ test('dashboard API validates before calling AI and preserves the streaming cont
   const events = await response.text();
   assert.match(events, /"type":"progress"/);
   assert.match(events, /"type":"result"/);
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
 });
 
 test('dashboard API rejects foreign origins, oversized bodies, private URLs, and removed features', async () => {

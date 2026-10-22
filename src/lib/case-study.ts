@@ -100,6 +100,7 @@ export type WebsiteScan = {
 };
 
 export type CaseStudyProspectData = {
+    prospecting?: import('./coach-prospecting').CoachProspecting;
     name: string;
     linkedinUrl: string;
     headline: string;

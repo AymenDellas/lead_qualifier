@@ -31,6 +31,8 @@ Typecheck with `node node_modules/typescript/bin/tsc --noEmit --incremental fals
 
 ## Onboarding template refinements
 
+The client and operator forms now ask the same five offer essentials as Copy Studio, including separate offer-name and description fields. All five must contain 3–6,000 characters before the onboarding form can be completed. Drafts still save, and older open forms cannot erase a newer offer-name answer. Legacy records with no name field retain the short first line of their combined offer answer as an editable name; explicit blank new answers remain blank. Copy Studio's two prefill choices review either these saved client answers or supported page facts while retaining the full original copy as a reference.
+
 New scopes explicitly exclude lead generation, advertising, third-party subscriptions/platform costs, and ongoing optimization outside the agreed scope unless separately agreed in writing. Free case-study projects have no project-payment prerequisite; paid projects retain their agreed initial payment requirement. Untouched legacy start requirements are updated by engagement type. Empty exclusions are upgraded only for unsigned, unconfirmed scopes; custom terms, confirmed scopes and signed agreement contents are preserved.
 
 The client sees included work, exclusions and start requirements above the agreement PDF link and again when confirming the scope. Confirmation persists the normalized scope shown to the client. Generated agreement drafts include exclusions and start requirements before signature lines; uploaded signed PDFs are served unchanged. Portal statuses and outstanding items use client-facing actions, with baseline capture clearly assigned to Compel.

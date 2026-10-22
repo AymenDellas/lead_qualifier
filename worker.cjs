@@ -5,23 +5,30 @@
  * coordinates the selected accounts through leased database jobs.
  *
  * Usage:
- *   node worker.cjs          → Start and resume pending queue jobs
- *   node worker.cjs --resume → Resumes processing any leftover queue jobs
+ *   npm run worker              → Watch explicit dashboard account requests
+ *   node worker.cjs --start      → Explicit legacy single-account processing
  */
 
-const puppeteerExtra = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const puppeteer = require('puppeteer');
+const {pageSignal, failure:sessionFailure,isFeed,sameMember}=require('./src/lib/linkedin-session-policy.cjs');
+const pageReader=require('./src/lib/linkedin-browser-page.cjs');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { researchProspect } = require('./src/lib/prospect-research.cjs');
-const {extractActivity}=require('./src/lib/linkedin-activity.cjs');
-const {publishedProfileWebsites}=require('./src/lib/profile-public-contacts.cjs');
-const { identityFromMe } = require('./src/lib/linkedin-session-identity.cjs');
 const {failureOf}=require('./src/lib/worker-failure.cjs');
-const { VERSION: QUALIFICATION_VERSION, assessProspect, pipelineForAssessment, extractMatchingProfile, extractProfileLocation, extractProfileContactInfo, isPlatformWebsite, isUnsafeContact, hostOf } = require('./src/lib/prospect-qualification.cjs');
+const prospectingStore=require('./src/lib/coach-prospecting-store.cjs');
+const prospectingWorker=require('./src/lib/coach-prospecting-worker.cjs');
+let prospectingContext=false;
+let prospectingFailure=null;
+let linkedinStop=null;
+let checkDay='';
+let linkedinChecks={};
+let sessionChecks={};
+let localNextCheckAt=0;
+const { VERSION: QUALIFICATION_VERSION, assessProspect, pipelineForAssessment, isPlatformWebsite, isUnsafeContact, hostOf } = require('./src/lib/prospect-qualification.cjs');
 
-puppeteerExtra.use(StealthPlugin());
+
 
 // ── Config ──
 const ACTIVITY_DAYS_THRESHOLD = 30;
@@ -33,8 +40,7 @@ const RESULT_TTL_DAYS = 7; // Auto-purge results older than this
 // How many leads may be in the post-LinkedIn enrichment stage at once. These do
 // not touch LinkedIn, so they're safe to run in parallel with the scrape loop.
 const ENRICH_CONCURRENCY = Math.max(1, parseInt(process.env.ENRICH_CONCURRENCY || '3', 10));
-// Profiles per day for this LinkedIn account. 400 is the tested ceiling; going
-// higher is what triggers the commercial-use limit warning.
+// Application profile budget; this is not an allowance guaranteed by LinkedIn.
 const DEFAULT_DAILY_SCRAPE_LIMIT = '400';
 
 // ── CLI Flags ──
@@ -57,6 +63,7 @@ if (!fs.existsSync(RESULTS_DIR)) fs.mkdirSync(RESULTS_DIR, { recursive: true });
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const LIMITS_FILE = path.join(DATA_DIR, 'worker-limits.json');
+const CHECKS_FILE = path.join(DATA_DIR, 'worker-checks.json');
 const WORKER_PID_FILE = path.join(DATA_DIR, ACCOUNT_ID ? `worker-${ACCOUNT_ID}.pid` : 'worker.pid');
 let workerLockOwned = false;
 
@@ -117,12 +124,6 @@ function loadEnv() {
     }
 }
 
-function getAccounts() {
-    const raw = process.env.LINKEDIN_ACCOUNTS;
-    if (!raw) throw new Error('LINKEDIN_ACCOUNTS not set in .env.local');
-    return JSON.parse(raw);
-}
-
 async function startDatabaseAccount() {
     if (!ACCOUNT_ID) return;
     const core = require('./src/lib/linkedin-workers.cjs');
@@ -131,10 +132,10 @@ async function startDatabaseAccount() {
         ssl: process.env.DATABASE_CA_CERT ? { ca: process.env.DATABASE_CA_CERT.replace(/\\n/g, '\n'), rejectUnauthorized: true } : { rejectUnauthorized: false } });
     const owner = require('node:crypto').randomUUID();
     await core.ensure(pool);
+    await prospectingStore.ensure(pool);
     const account = (await pool.query('SELECT *,login_requested_at::text AS login_request_token,logout_requested_at::text AS logout_request_token FROM compel_linkedin_accounts WHERE id=$1 AND archived IS FALSE', [ACCOUNT_ID])).rows[0];
     if (!account || !await core.acquireSession(pool, ACCOUNT_ID, owner)) { await pool.end(); return false; }
     dbWorker = { core, pool, owner, account, timer: null };
-    if (!SIGN_OUT_MODE) process.env.LINKEDIN_ACCOUNTS = JSON.stringify([{ email: account.email, password: core.decrypt(account.secret) }]);
     if (MANUAL_LOGIN_MODE) await core.consumeLoginRequest(pool, ACCOUNT_ID, account.login_request_token);
     let updating = false;
     dbWorker.timer = setInterval(async () => {
@@ -294,7 +295,10 @@ function purgeOldResults() {
 // ── Write worker status ──
 function writeStatus(status, extra = {}) {
     if(isShuttingDown&&!['offline','paused','signed_out'].includes(status))return;
-    latestStatus = { status, qualificationVersion: QUALIFICATION_VERSION, accountId: ACCOUNT_ID, ...extra, signedIn: signedInIdentity, updatedAt: new Date().toISOString() };
+    const currentChecks=checkDay===new Date().toISOString().slice(0,10)?linkedinChecks:{};
+    latestStatus = { status, qualificationVersion: QUALIFICATION_VERSION, prospectingVersion:'COACH_EVIDENCE_V1', accountId: ACCOUNT_ID,
+        dailyRequests:Object.entries(currentChecks).reduce((sum,[kind,count])=>sum+(kind==='cache'?0:count),0),dailyCachedProfiles:currentChecks.cache||0,
+        ...extra, signedIn: signedInIdentity, updatedAt: new Date().toISOString() };
     try {
         fs.writeFileSync(
             path.join(RESULTS_DIR, ACCOUNT_ID ? `worker-status-${ACCOUNT_ID}.json` : 'worker-status.json'),
@@ -495,189 +499,56 @@ const emailExtractHelpers = {
     }
 };
 
-// ── Voyager API call via browser fetch() ──
-async function voyagerFetch(page, apiPath) {
-    return await page.evaluate(async (p) => {
-        try {
-            const csrfMatch = document.cookie.match(/JSESSIONID="?([^";]+)"?/);
-            const csrf = csrfMatch ? csrfMatch[1] : '';
-            const res = await fetch(`https://www.linkedin.com${p}`, {
-                headers: {
-                    'accept': 'application/vnd.linkedin.normalized+json+2.1',
-                    'x-restli-protocol-version': '2.0.0',
-                    'x-li-lang': 'en_US',
-                    'csrf-token': csrf,
-                },
-                credentials: 'include',
-                signal: AbortSignal.timeout(15000),
-            });
-            if (res.status === 200) return { status: 200, data: await res.json() };
-            return { status: res.status };
-        } catch (e) { return { status: 0, error: e.message }; }
-    }, apiPath);
-}
-function requireLinkedInResponse(response,stage,final=false) {
-    if(![0,401,429,999,...(final?[403]:[])].includes(response.status))return;
-    const auth=[401,403,999].includes(response.status);
-    const code=auth?'LINKEDIN_AUTH':response.status===429?'LINKEDIN_RATE_LIMIT':'BROWSER_TIMEOUT';
-    throw Object.assign(new Error(`${stage}: ${auth?'LinkedIn session needs attention':response.status===429?'LinkedIn rate limit reached':response.error||'LinkedIn request timed out'}`),{failure:{stage:'linkedin',code,reason:auth?'LinkedIn requires sign-in or a security check.':response.status===429?'LinkedIn rate limit reached.':'LinkedIn browser request timed out.',retryable:true}});
-}
-
-// ── Scrape a single profile via Voyager API ──
-async function scrapeProfile(page, profileUrl, browserInstance) {
-    const result = {
-        url: profileUrl, firstName: '', lastName: '', headline: '',
-        activityStatus: 'Unknown', emails: [], websites: [],
-        website: '', primaryEmail: '', websiteSource: '',
-        emailSource: '',
-        latestPostText: '',
-        about: '', profileLocation: '', profileIdentityConfirmed: false, lastActivityAt: null,
-        status: 'PENDING', logs: [],
-    };
-    const slug = profileUrl.replace(/\/+$/, '').split('/').pop().split('?')[0];
-
-    try {
-        // ── 1. Contact Info (website + email) ──
-        result.logs.push('Fetching contact info via Voyager API...');
-        let contactRes = await voyagerFetch(page, `/voyager/api/identity/profiles/${slug}/profileContactInfo`);
-        requireLinkedInResponse(contactRes,'Contact info');
-        if (contactRes.status !== 200) {
-            await sleep(1000);
-            contactRes = await voyagerFetch(page, `/voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity=${slug}&decorationId=com.linkedin.voyager.dash.deco.identity.profile.ProfileContactInfo-14`);
-        }
-
-        if (contactRes.status === 200) {
-            const data = extractProfileContactInfo(contactRes.data, slug);
-            const websites = Array.isArray(data.websites) ? data.websites : [];
-            const emailAddress = data.emailAddress || null;
-            result.websites = websites.map(w => (typeof w === 'string' ? w : (w.url || w.label || ''))).filter(Boolean);
-            if (emailAddress) {
-                const email = typeof emailAddress === 'string' ? emailAddress : (emailAddress.emailAddress || emailAddress.email || '');
-                if (email) { result.emails.push(email); result.emailSource = 'linkedin'; }
-            }
-            if (result.websites.length > 0) result.website = result.websites[0];
-            result.logs.push(`Contact: ${result.websites.length} website(s), ${result.emails.length} email(s)`);
-        } else {
-            result.logs.push(`Contact info failed: ${contactRes.status}`);
-        }
-
-        await jitter(180, 520);
-
-        // ── 2. Profile Data (name, headline, URN) ──
-        result.logs.push('Fetching profile data via Voyager API...');
-        let profileRes = await voyagerFetch(page, `/voyager/api/identity/profiles/${slug}/profileView`);
-        requireLinkedInResponse(profileRes,'Profile');
-        if (profileRes.status !== 200) {
-            await sleep(1000);
-            profileRes = await voyagerFetch(page, `/voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity=${slug}&decorationId=com.linkedin.voyager.dash.deco.identity.profile.FullProfileWithEntities-101`);
-        }
-        requireLinkedInResponse(profileRes,'Profile',true);
-        if(profileRes.status!==200)throw Object.assign(new Error(`Profile unavailable (HTTP ${profileRes.status}).`),{failure:{stage:'linkedin',code:'PROFILE_UNAVAILABLE',reason:`LinkedIn profile unavailable (HTTP ${profileRes.status}).`,retryable:profileRes.status>=500}});
-
-        let profileUrn = null;
-        if (profileRes.status === 200) {
-            const item = extractMatchingProfile(profileRes.data, slug);
-            if (item) {
-                result.profileIdentityConfirmed = true;
-                result.firstName = item.firstName || '';
-                result.lastName = item.lastName || '';
-                result.headline = item.headline || item.occupation || '';
-                result.about = item.summary || item.about || '';
-                result.profileLocation = extractProfileLocation(profileRes.data, slug);
-                const urnMatch = [item.entityUrn,item.urn,item.objectUrn,item.dashEntityUrn].map(v=>String(v||'').match(/urn:li:(?:fsd_profile|fs_profile|fs_miniProfile):(ACoA[a-zA-Z0-9_-]+)/)).find(Boolean);
-                if (urnMatch) profileUrn = `urn:li:fsd_profile:${urnMatch[1]}`;
-                result.logs.push(`Name: ${result.firstName} ${result.lastName} (profile identity matched)`);
-                result.logs.push(result.profileLocation ? `Profile location: ${result.profileLocation}` : 'Profile location was not returned; target market remains unconfirmed.');
-            } else {
-                result.logs.push('Requested profile identity could not be matched; referenced members were not substituted.');
-            }
-        } else {
-            result.logs.push(`Profile data failed: ${profileRes.status}`);
-        }
-        if(!result.profileIdentityConfirmed)throw Object.assign(new Error('Requested profile was not present in the response.'),{failure:{stage:'linkedin',code:'PROFILE_IDENTITY',reason:'LinkedIn response did not contain the requested profile.',retryable:true}});
-
-        await jitter(180, 520);
-
-        // ── Website Fallback Chain (if contact modal had no website) ──
-        if (result.websites.length === 0) {
-            result.logs.push('No website in contact info — trying fallback chain...');
-
-            const aboutUrls=publishedProfileWebsites(result);
-            result.websites.push(...aboutUrls);
-            if(aboutUrls.length){result.website=aboutUrls[0];result.websiteSource='about_section';result.logs.push('Published About websites: '+aboutUrls.length);}
-
-            // Layer 3: Featured section links
-            if (result.websites.length === 0) {
-                try {
-                    const featuredRes = await voyagerFetch(page, `/voyager/api/identity/profiles/${slug}/featuredContent`);
-                    if (featuredRes.status === 200) {
-                        const fStr = JSON.stringify(featuredRes.data);
-                        const fUrlRegex = /https?:\/\/[^\s"'<>\\]+/g;
-                        const featuredUrls = (fStr.match(fUrlRegex) || [])
-                            .filter(u => !u.includes('linkedin.com') && !u.includes('licdn.com')
-                                      && !u.includes('media.licdn') && !u.includes('static.licdn'))
-                            .map(u => u.replace(/[\\"',]+$/, ''));
-                        const uniqueFeatured = [...new Set(featuredUrls)];
-                        if (uniqueFeatured.length > 0) {
-                            result.websites.push(...uniqueFeatured.slice(0, 3));
-                            result.website = uniqueFeatured[0];
-                            result.websiteSource = 'featured_section';
-                            result.logs.push(`Fallback L3: Found ${uniqueFeatured.length} URL(s) in Featured section`);
-                        }
-                    }
-                } catch (e) { result.logs.push(`Fallback L3 failed: ${e.message}`); }
-                await jitter(250, 700);
-            }
-
-        } else {
-            result.websiteSource = 'contact_modal';
-        }
-
-        // ── 3. Activity Check ──
-        if (profileUrn) {
-            result.logs.push('Checking activity via Voyager API...');
-            const actRes = await voyagerFetch(page,
-                `/voyager/api/identity/profileUpdatesV2?count=10&includeLongTermHistory=true&moduleKey=creator_profile_all_content_view%3Adesktop&numComments=0&numLikes=0&profileUrn=${encodeURIComponent(profileUrn)}&q=memberShareFeed`
-            );
-            result.activityCheck={httpStatus:actRes.status,retryable:actRes.status===0||actRes.status>=500};
-            if (actRes.status === 200) {
-                const activity=extractActivity(actRes.data,{profileUrn,profileUrl:result.url});
-                Object.assign(result,activity);
-                const e=activity.activityEvidence;
-                result.logs.push('Activity: '+activity.activityStatus+' — '+e.reason+' ('+e.feedElements+' feed records, '+e.unresolved+' undated/unmatched)');
-                if(e.selected)result.logs.push('Dated activity: '+e.selected.at+'; source '+e.selected.method+'; '+e.selected.association);
-            } else {
-                result.activityStatus = 'Unknown';
-                result.logs.push(`Activity check failed: ${actRes.status}`);
-            }
-        } else {
-            result.activityStatus = 'Unknown';
-            result.logs.push('No URN — cannot check activity');
-        }
-
-        if(result.activityStatus==='Unknown'&&browserInstance){
-            try{
-                const visible=await require('./src/lib/linkedin-activity-page.cjs').checkActivityPage(browserInstance,result.url,{profileUrn:profileUrn||''});
-                if(visible){
-                    Object.assign(result,visible);
-                    result.logs.push('Visible activity fallback: '+visible.activityStatus+' — '+visible.activityEvidence.reason);
-                }else result.logs.push('Visible activity fallback: no observed activity route available.');
-            }catch(error){result.logs.push('Visible activity fallback could not finish: '+error.message);}
-        }
-
-        // Website crawling, email guessing and final scoring happen in
-        // enrichAndFinalize() instead of here. Those steps need no LinkedIn
-        // session, so running them inline would hold the (rate-limited, ban-prone)
-        // LinkedIn tab open while an unrelated marketing site loads — the single
-        // slowest thing this worker does.
-        result.status = 'PENDING';
-    } catch (e) {
-        result.logs.push(`Fatal error: ${e.message}`);
-        result.status = 'ERROR';
-        result.failure=e.failure||failureOf(result);
+// ── Shared permits for page loads and page controls ──
+async function recordLinkedInCheck(kind) {
+    if(linkedinStop)throw Object.assign(new Error(linkedinStop.reason),{failure:linkedinStop});
+    const day=new Date().toISOString().slice(0,10);
+    if(checkDay!==day){
+        checkDay=day;linkedinChecks={};
+        if(!dbWorker)try{const saved=JSON.parse(fs.readFileSync(CHECKS_FILE,'utf8'));if(saved.day===day){linkedinChecks=saved.counts||{};localNextCheckAt=Number(saved.nextCheckAt)||0;}}catch{/* no saved counters */}
     }
-
-    return result;
+    if(dbWorker) {
+        if(kind==='cache')await dbWorker.core.recordLinkedInCheck(dbWorker.pool,ACCOUNT_ID,dbWorker.owner,kind);
+        else while(!isShuttingDown) {
+            const permit=await dbWorker.core.reserveLinkedInCheck(dbWorker.pool,ACCOUNT_ID,dbWorker.owner,kind,{manual:MANUAL_LOGIN_MODE&&CHECK_LOGIN_MODE});
+            if(permit.stopped){linkedinStop={stage:'control',code:'WORKER_PAUSED',reason:permit.reason,retryable:false};throw Object.assign(new Error(permit.reason),{failure:linkedinStop});}
+            if(!permit.waitMs)break;
+            if(permit.reason)writeStatus('sleeping',{reason:permit.reason});
+            await sleep(Math.min(permit.waitMs,1000));
+        }
+    }
+    if(!dbWorker&&kind!=='cache') {
+        const used=Object.entries(linkedinChecks).reduce((sum,[key,count])=>sum+(key==='cache'?0:count),0);
+        if(used>=100){linkedinStop={stage:'linkedin',code:'WORKER_PAUSED',reason:'Daily LinkedIn check budget reached.',retryable:false};throw Object.assign(new Error(linkedinStop.reason),{failure:linkedinStop});}
+        if(localNextCheckAt>Date.now())await sleep(localNextCheckAt-Date.now());
+        localNextCheckAt=Date.now()+15000;
+    }
+    if(isShuttingDown)throw new Error('Account worker stopped.');
+    linkedinChecks[kind]=(linkedinChecks[kind]||0)+1;
+    sessionChecks[kind]=(sessionChecks[kind]||0)+1;
+    if(!dbWorker)fs.writeFileSync(CHECKS_FILE,JSON.stringify({day,counts:linkedinChecks,nextCheckAt:localNextCheckAt}));
+}
+function checkLinkedInAccess(status,url='') {
+    if(![401,403,429,999].includes(status)&&!/(?:linkedin\.com)?\/(?:checkpoint|challenge|login|authwall)(?:\/|\?|$)/i.test(url))return;
+    linkedinStop={stage:'linkedin',code:status===429?'LINKEDIN_RATE_LIMIT':'LINKEDIN_AUTH',reason:status===429?'LinkedIn reported a limit. Review the account before signing in to resume.':'LinkedIn requires sign-in or a security check. Review the account before resuming.',retryable:false};
+    prospectingFailure=linkedinStop;
+    throw Object.assign(new Error(linkedinStop.reason),{failure:linkedinStop});
+}
+// Every LinkedIn read now follows rendered pages and controls. Browser identity
+// and captured evidence are never reconstructed through private endpoints.
+async function scrapeProfile(page, profileUrl, browserInstance, onCheckpoint, resume) {
+    try {
+        return await pageReader.captureProfile(page,profileUrl,{
+            accountId:ACCOUNT_ID||'legacy-0',beforeCheck:recordLinkedInCheck,
+            checkResponse:checkLinkedInAccess,onCheckpoint,resume,
+        });
+    } catch(error) {
+        if(error.failure?.stage==='linkedin') {
+            if(['LINKEDIN_AUTH','LINKEDIN_RATE_LIMIT'].includes(error.failure.code))linkedinStop=error.failure;
+        }
+        return {url:profileUrl,firstName:'',headline:'',activityStatus:'Unknown',emails:[],websites:[],website:'',status:'ERROR',
+            failure:error.failure||{stage:'linkedin',code:'PAGE_CHANGED',reason:'The rendered LinkedIn page could not be read. Saved evidence is retained for review.',retryable:false},logs:['Page reading stopped: '+error.message]};
+    }
 }
 
 // ── Stage 2: enrichment (no LinkedIn session required) ──
@@ -810,11 +681,19 @@ let browser = null;
 let browserPid = null;
 let isShuttingDown = false;
 let browserLaunchTask = null;
+let shutdownTask = null;
 
-async function shutdown(signal, exitCode = 0) {
-    if (isShuttingDown) return;
+function shutdown(signal, exitCode = 0) {
+    if (shutdownTask) return shutdownTask;
     isShuttingDown = true;
-    if (dbWorker) await settleJobs();
+    shutdownTask=(async()=>{
+    if (dbWorker) {
+        // Persist the stop before waiting for outstanding website research.
+        try{await dbWorker.core.pauseProcessing(dbWorker.pool,ACCOUNT_ID,linkedinStop?.reason||signal,
+            ['LINKEDIN_AUTH','LINKEDIN_RATE_LIMIT'].includes(linkedinStop?.code),dbWorker.owner);}
+        catch{log('Could not persist the account stop. Browser activity is still stopping; the lease will expire.');}
+        await settleJobs();
+    }
     log(`${signal} received — shutting down gracefully...`);
     if (!(SIGN_OUT_MODE&&latestStatus.status==='signed_out') && !(latestStatus.status==='paused'&&exitCode!==0)) writeStatus('offline', { reason: signal });
 
@@ -828,6 +707,8 @@ async function shutdown(signal, exitCode = 0) {
     releaseWorkerLock();
     await stopDatabaseAccount();
     process.exit(exitCode);
+    })();
+    return shutdownTask;
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'));
@@ -846,29 +727,36 @@ process.on('exit', () => {
 });
 
 // ── Browser lifecycle management ──
-const RECYCLE_EVERY_N_JOBS = 50; // Restart browser every 50 jobs to prevent OOM
+const RECYCLE_EVERY_N_JOBS = 50; // Stop after 50 jobs; another browser needs an explicit start.
 const workerPages = new WeakMap();
 
-async function closeStartupTabs(b) {
+async function prepareWorkerPage(b, allowPages) {
     // Do not call browser.pages(): it initializes every restored page and its
     // network session before we can close it. That can overwhelm a saved profile.
     const session = await b.target().createCDPSession();
     try {
         const { targetInfos } = await session.send('Target.getTargets');
         const restored = targetInfos.filter(target => target.type === 'page');
+        // Keep a window alive while removing restored tabs. Headful Chrome can
+        // exit when its final tab closes, before Puppeteer opens the login page.
+        const keeper = await session.send('Target.createTarget', { url: 'about:blank' });
         for (const target of restored) {
             const result = await session.send('Target.closeTarget', { targetId: target.targetId });
             if (!result.success) throw new Error('Could not close a saved worker tab.');
         }
         if (restored.length > 1) log(`Closed ${restored.length} saved worker tabs before initializing LinkedIn.`);
+        allowPages();
+        workerPages.set(b, await b.newPage());
+        const closed = await session.send('Target.closeTarget', { targetId: keeper.targetId });
+        if (!closed.success) throw new Error('Could not close the temporary worker tab.');
     } finally {
         await session.detach().catch(() => {});
     }
 }
 
-async function launchBrowser(profileDir, headless = true) {
+async function launchBrowser(profileDir, headless = false) {
     let acceptPages = false;
-    browserLaunchTask = puppeteerExtra.launch({
+    browserLaunchTask = puppeteer.launch({
         headless: headless,
         userDataDir: profileDir,
         timeout: 30000, protocolTimeout: 30000,
@@ -877,19 +765,11 @@ async function launchBrowser(profileDir, headless = true) {
         targetFilter: target => target.type() !== 'page' || acceptPages,
         handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
         args: [
-            '--no-sandbox', '--disable-setuid-sandbox',
-            '--disable-blink-features=AutomationControlled',
-            '--disable-gpu', '--disable-dev-shm-usage',
+            ...(process.platform==='linux'&&process.getuid?.()===0?['--no-sandbox','--disable-setuid-sandbox']:[]),
+            ...(process.platform==='linux'?['--disable-dev-shm-usage']:[]),
             '--window-size=1366,768',
-            // Memory management flags
-            '--js-flags=--max-old-space-size=512',
-            '--disable-extensions',
-            '--disable-background-networking',
-            '--disable-default-apps',
-            '--disable-sync',
-            '--no-first-run',
         ],
-        env: Object.assign({}, process.env, { DISPLAY: ':99' })
+        env: Object.assign({}, process.env, process.platform==='linux'&&!process.env.DISPLAY?{DISPLAY:':99'}:{})
     });
     let b;
     try { b = await browserLaunchTask; } finally { browserLaunchTask = null; }
@@ -900,8 +780,7 @@ async function launchBrowser(profileDir, headless = true) {
     if (browserPid) log(`Chrome launched (PID: ${browserPid}, headless: ${headless})`);
 
     try {
-        await closeStartupTabs(b);
-        acceptPages = true;
+        await prepareWorkerPage(b, () => { acceptPages = true; });
     } catch (error) {
         await killBrowserProcess(b, browserPid);
         browserPid = null;
@@ -910,69 +789,86 @@ async function launchBrowser(profileDir, headless = true) {
     return b;
 }
 
-async function loginAndGetPage(b, accounts) {
-    // One clean tab per worker browser; its cookies/session stay in the profile.
-    let page = workerPages.get(b);
-    if (!page || page.isClosed()) {
-        page = await b.newPage();
-        workerPages.set(b, page);
-    }
-    await page.setViewport({ width: 1366, height: 768 });
-
-    log('Checking login...');
-    await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 45000 });
-    await sleep(3000);
-    let url = page.url();
-    if (url.includes('/feed') && !url.includes('authwall') && !url.includes('/login')) {
-        log('Already logged in ✅');
-    } else {
-        log(`Logging in as ${accounts[0].email}...`);
-        await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await sleep(3000);
+async function inspectSessionPage(page, response, manual=false) {
+    const url=page.url();
+    let text='';
+    try{text=await page.evaluate(()=>{
+        const alert=document.querySelector('[role="alert"], [role="dialog"]');
+        return (document.title+'\n'+(alert?.innerText||(!location.pathname.startsWith('/feed')?document.body?.innerText||'':''))).slice(0,12000);
+    });}catch(error){if(page.isClosed())throw error;}
+    return pageSignal({url:page.url()||url,status:response?.status?.()||0,text:typeof text==='string'?text:'',manual});
+}
+function watchSessionPage(page) {
+    page.on('response',response=>{
         try {
-            await page.waitForSelector('#username, #session_key', { timeout: 15000 });
-            const usernameInput = await page.$('#username') ? '#username' : '#session_key';
-            const passwordInput = await page.$('#password') ? '#password' : '#session_password';
-
-            await page.type(usernameInput, accounts[0].email, { delay: 120 });
-            await sleep(800);
-            await page.type(passwordInput, accounts[0].password, { delay: 120 });
-            await sleep(800);
-            await page.click('button[type="submit"]');
-            await sleep(5000);
-        } catch (e) {
-            log(`⚠️ Login form not found: ${e.message}`);
-        }
-
-        url = page.url();
-        if (url.includes('/feed')) {
-            log('Login successful ✅');
-        } else {
-            // Return null to signal that manual login is needed
-            return null;
-        }
+            const request=response.request();
+            if(!['document','xhr','fetch'].includes(request.resourceType())||!/(^|\.)linkedin\.com$/i.test(new URL(response.url()).hostname))return;
+            if(request.isNavigationRequest()&&response.frame()!==page.mainFrame())return;
+            const signal=pageSignal({url:response.url(),status:response.status()});
+            if(!signal||isShuttingDown)return;
+            linkedinStop=sessionFailure(signal);prospectingFailure=linkedinStop;
+            writeStatus('paused',{reason:signal.reason,manualResumeRequired:linkedinStop?.code!=='WORKER_PAUSED'});
+            shutdown('LinkedIn needs account review.',1).catch(error=>log('Account stop failed: '+error.message));
+        }catch(error){log('Session response check failed: '+error.message);}
+    });
+}
+async function loginAndGetPage(b) {
+    const page=workerPages.get(b);
+    await page.setViewport({width:1366,height:768});
+    watchSessionPage(page);
+    await recordLinkedInCheck('identity');
+    const response=await page.goto('https://www.linkedin.com/feed/',{waitUntil:'domcontentloaded',timeout:45000});
+    if(isShuttingDown)return null;
+    const signal=await inspectSessionPage(page,response);
+    if(signal){linkedinStop=sessionFailure(signal);throw Object.assign(new Error(signal.reason),{failure:linkedinStop});}
+    if(!isFeed(page.url())) {
+        linkedinStop=sessionFailure({code:'LINKEDIN_AUTH',reason:'LinkedIn session could not be confirmed. Use manual sign-in; no password was submitted.'});
+        throw Object.assign(new Error(linkedinStop.reason),{failure:linkedinStop});
     }
     return page;
 }
 async function manualSignIn(profileDir) {
     browser=await launchBrowser(profileDir,false);
     if(isShuttingDown)return;
-    const page=await browser.newPage();workerPages.set(browser,page);
+    const page=workerPages.get(browser);
     await page.setViewport({width:1366,height:768});
-    await page.goto('https://www.linkedin.com/login',{waitUntil:'domcontentloaded',timeout:45000});
+    let loginResponse;
+    let reason='Sign-in browser is open on the worker computer. Complete login or the LinkedIn security check there.';
+    try {
+        loginResponse=await page.goto('https://www.linkedin.com/login',{waitUntil:'domcontentloaded',timeout:45000});
+    } catch(error) {
+        if(page.isClosed()||!browser.isConnected())throw error;
+        // A timeout or interrupted navigation does not mean the browser failed.
+        // Leave the user's account window open so they can refresh and sign in.
+        log(`LinkedIn sign-in page did not finish loading: ${error.message}`);
+        reason='The sign-in browser is open, but LinkedIn did not finish loading. Refresh the page in that window and complete sign-in.';
+    }
     await page.bringToFront();
-    writeStatus('awaiting_login',{reason:'Sign-in browser is open on the worker computer. Complete login or the LinkedIn security check there.'});
+    const initialSignal=await inspectSessionPage(page,loginResponse,true);
+    if(initialSignal){
+        if(dbWorker)await dbWorker.core.pauseProcessing(dbWorker.pool,ACCOUNT_ID,initialSignal.reason,true,dbWorker.owner);
+        reason=initialSignal.reason+' The manual window stays open for you to review it.';
+    }
+    writeStatus('awaiting_login',{reason});
     log('Manual sign-in browser opened. No saved password was entered.');
     for(let attempt=0;attempt<120&&!isShuttingDown;attempt++) {
-        if(page.url().includes('/feed')) {
-            const me=await voyagerFetch(page,'/voyager/api/me');
-            const identity=me?.status===200?identityFromMe(me.data):null;
+        if(page.isClosed()||!browser.isConnected())throw new Error('Manual sign-in window was closed.');
+        if(isFeed(page.url())) {
+            const signal=await inspectSessionPage(page,null,true);
+            if(signal){linkedinStop=sessionFailure(signal);throw new Error(signal.reason);}
+            const identity=await pageReader.readSignedInIdentity(page,{beforeCheck:recordLinkedInCheck,checkResponse:checkLinkedInAccess});
             if(identity) {
-                signedInIdentity=identity;writeStatus('ready',{reason:`Signed in as ${identity.name}.`});
+                if(dbWorker)try{await dbWorker.core.confirmManualSignIn(dbWorker.pool,ACCOUNT_ID,dbWorker.owner,identity);}
+                catch(error){linkedinStop=sessionFailure({code:'LINKEDIN_AUTH',reason:error.message});throw error;}
+                signedInIdentity=identity;writeStatus('ready',{reason:`Signed in as ${identity.name}. Processing is idle until explicitly started.`});
                 log(`Manual login confirmed as ${identity.name} (${identity.profileUrl}).`);
                 await shutdown('Manual sign-in complete');return;
             }
+            linkedinStop=sessionFailure({code:'LINKEDIN_AUTH',reason:'LinkedIn identity could not be confirmed. Processing remains paused; no repeated identity checks were sent.'});
+            throw new Error(linkedinStop.reason);
         }
+        const signal=await inspectSessionPage(page,null,true);
+        if(signal&&dbWorker)await dbWorker.core.pauseProcessing(dbWorker.pool,ACCOUNT_ID,signal.reason,true,dbWorker.owner);
         await sleep(5000);
     }
     if(!isShuttingDown){writeStatus('paused',{reason:'Manual sign-in timed out. Click Sign in on worker computer to reopen the browser.'});await shutdown('Manual sign-in timed out',1);}
@@ -1044,13 +940,16 @@ async function nativePostProcess(job, result, log) {
 
 async function main() {
     loadEnv();
+    if(!ACCOUNT_ID&&!MANUAL_LOGIN_MODE&&!CHECK_LOGIN_MODE&&!process.argv.includes('--start')) {
+        log('Use dashboard account controls to start processing. Legacy workers require an explicit --start.');return;
+    }
     if (!acquireWorkerLock()) return;
     if (await startDatabaseAccount() === false) { releaseWorkerLock(); return; }
     if (SIGN_OUT_MODE) {
         if (!dbWorker?.account.logout_request_token) { await shutdown('No sign-out request.'); return; }
         const profileDir = path.join(BROWSER_PROFILES_DIR, dbWorker.account.profile_key);
         try {
-            browser = await launchBrowser(profileDir, true);
+            browser = await launchBrowser(profileDir, false);
             if (isShuttingDown) return;
             await require('./src/lib/linkedin-signout.cjs').signOut(browser,log);
             await killBrowserProcess(browser,browserPid); browser=null; browserPid=null;
@@ -1064,15 +963,17 @@ async function main() {
         }
         return;
     }
-    const accounts = getAccounts();
     const profileDir = path.join(BROWSER_PROFILES_DIR, dbWorker ? dbWorker.account.profile_key : 'account-0');
     if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });
     if(MANUAL_LOGIN_MODE&&CHECK_LOGIN_MODE){
         try{await manualSignIn(profileDir);}catch(error){
-            writeStatus('paused',{reason:'The sign-in browser could not open or load LinkedIn. Click Sign in on worker computer to try again.'});
+            writeStatus('paused',{reason:linkedinStop?.reason||'The sign-in browser could not open or load LinkedIn. Click Sign in on worker computer to try again.',manualResumeRequired:Boolean(linkedinStop)});
             log(`Manual sign-in failed: ${error.message}`);await shutdown('Manual sign-in failed',1);
         }
         return;
+    }
+    if(dbWorker&&!await dbWorker.core.processingAllowed(dbWorker.pool,ACCOUNT_ID,dbWorker.owner)) {
+        await shutdown('Processing has not been explicitly started.');return;
     }
 
     // Startup housekeeping
@@ -1091,138 +992,47 @@ async function main() {
     let dailyErrors = 0;
     let lastJobDurationMs = 0;
     let jobDurations = []; // rolling window for avg calculation
-    let startupFailures = 0;
     const pendingPostProcessing = []; // track background post-processing promises
     settleJobs = () => Promise.allSettled([...pendingPostProcessing]);
     const inFlightJobs = new Set();
 
     // Outer loop: manages browser lifecycle
     while (!isShuttingDown) {
-        // Try headless first (silent, no visible windows)
-        log(`Launching browser in HEADLESS mode... (cycle start, total processed: ${totalJobsProcessed})`);
+        // Reuse the same visible browser mode as manual sign-in.
+        log(`Launching the saved account browser... (cycle start, total processed: ${totalJobsProcessed})`);
 
-        browser = await launchBrowser(profileDir, true);
+        browser = await launchBrowser(profileDir, false);
         if (isShuttingDown) return;
         let page;
         try {
-            page = await loginAndGetPage(browser, accounts);
+            page = await loginAndGetPage(browser);
         } catch (e) {
+            if(linkedinStop){writeStatus('paused',{reason:linkedinStop.reason,manualResumeRequired:linkedinStop?.code!=='WORKER_PAUSED'});await shutdown('LinkedIn needs account review.',1);return;}
             // A navigation/CDP timeout does not establish that login expired.
-            // Retry once with a clean headless browser; never open visible Chrome
-            // or request manual login solely because the browser failed to load.
+            // Stop after this attempt; a new browser requires an explicit start.
             log(`❌ Browser could not check LinkedIn: ${e.message}`);
             await killBrowserProcess(browser, browserPid);
             browser = null; browserPid = null;
             if (isShuttingDown) return;
-            startupFailures++;
-            if (startupFailures < 2) {
-                log('Retrying the browser startup once. Pending jobs are preserved.');
-                await sleep(2000);
-                continue;
-            }
-            writeStatus('paused', { reason: 'Browser could not load LinkedIn after two attempts. Check the connection and restart the worker; login status could not be determined.' });
-            log('Browser startup failed twice. Login status is unknown. Pending jobs are preserved.');
-            releaseWorkerLock();
-            if (CHECK_LOGIN_MODE) process.exitCode = 1;
-            return;
+            writeStatus('paused', { reason: 'Browser could not load LinkedIn. Processing is paused; check the connection before explicitly starting again.' });
+            log('Browser startup failed. No automatic login or browser retry will run. Pending jobs are preserved.');
+            await shutdown('Browser startup failed',1);return;
         }
-        startupFailures = 0;
+        if(linkedinStop){writeStatus('paused',{reason:linkedinStop.reason,manualResumeRequired:linkedinStop?.code!=='WORKER_PAUSED'});await shutdown('LinkedIn needs account review.',1);return;}
 
-        // If headless login failed, fall back to headful for manual login
-        if (!page) {
-            if (!MANUAL_LOGIN_MODE) {
-                const loginHelp = ACCOUNT_ID ? 'Use Sign in on worker computer in the dashboard account settings.' : 'Run npm run worker:single -- --login once.';
-                log(`LinkedIn login is required. ${loginHelp} Pending jobs are preserved.`);
-                await killBrowserProcess(browser, browserPid);
-                browser = null; browserPid = null;
-                writeStatus('paused', { reason: `LinkedIn login required. ${loginHelp}` });
-                releaseWorkerLock();
-                if (CHECK_LOGIN_MODE) process.exitCode = 1;
-                return;
-            }
-            log('⚠️ Session expired or CAPTCHA needed — switching to HEADFUL mode for manual login...');
-            await killBrowserProcess(browser, browserPid);
-            browser = null;
-            browserPid = null;
+        if(!page||isShuttingDown)return;
 
-            browser = await launchBrowser(profileDir, false);
-            try {
-                const headfulPage = await loginAndGetPage(browser, accounts);
-                if (!headfulPage) {
-                    // loginAndGetPage returned null = needs manual intervention
-                    log('⚠️ Please complete login or CAPTCHA in the browser window within 10 minutes...');
-                    const manualPage = workerPages.get(browser);
-                    let loggedIn = false;
-                    for (let i = 0; i < 120; i++) {
-                        await sleep(5000);
-                        try {
-                            const currentUrl = manualPage.url();
-                            if (currentUrl.includes('/feed') && !currentUrl.includes('authwall')) {
-                                log('Manual login detected ✅');
-                                loggedIn = true;
-                                break;
-                            }
-                        } catch { /* page may have navigated */ }
-                    }
-                    if (!loggedIn) {
-                        log('❌ Manual login timed out. Exiting.');
-                        await killBrowserProcess(browser, browserPid);
-                        process.exit(1);
-                    }
-                    page = manualPage;
-                } else {
-                    page = headfulPage;
-                }
-            } catch (e) {
-                log(`❌ Headful login also failed: ${e.message}. Retrying in 30s...`);
-                await killBrowserProcess(browser, browserPid);
-                browser = null;
-                browserPid = null;
-                await sleep(30000);
-                continue;
-            }
-
-            // Login succeeded in headful mode — close it and relaunch headlessly
-            log('Login session saved. Switching back to HEADLESS mode...');
-            await killBrowserProcess(browser, browserPid);
-            browser = null;
-            browserPid = null;
-            await sleep(2000);
-
-            browser = await launchBrowser(profileDir, true);
-            try {
-                page = await loginAndGetPage(browser, accounts);
-                if (!page) {
-                    log('❌ Headless still failed after manual login. Running in headful mode for this cycle.');
-                    await killBrowserProcess(browser, browserPid);
-                    browser = null;
-                    browserPid = null;
-                    browser = await launchBrowser(profileDir, false);
-                    page = await loginAndGetPage(browser, accounts);
-                    if (!page) {
-                        log('❌ Cannot login. Exiting.');
-                        await killBrowserProcess(browser, browserPid);
-                        process.exit(1);
-                    }
-                }
-            } catch (e) {
-                log(`❌ Headless relaunch failed: ${e.message}. Retrying in 30s...`);
-                await killBrowserProcess(browser, browserPid);
-                browser = null;
-                browserPid = null;
-                await sleep(30000);
-                continue;
-            }
+        signedInIdentity = await pageReader.readSignedInIdentity(page,{beforeCheck:recordLinkedInCheck,checkResponse:checkLinkedInAccess});
+        if(!signedInIdentity||dbWorker?.account.confirmed_identity&&!sameMember(dbWorker.account.confirmed_identity,signedInIdentity)){
+            linkedinStop=sessionFailure({code:'LINKEDIN_AUTH',reason:'The signed-in LinkedIn member could not be matched to this account. Processing stopped; reconnect manually.'});
+            writeStatus('paused',{reason:linkedinStop.reason,manualResumeRequired:linkedinStop?.code!=='WORKER_PAUSED'});await shutdown('LinkedIn identity needs review.',1);return;
         }
-
-        const me = await voyagerFetch(page, '/voyager/api/me');
-        signedInIdentity = me?.status === 200 ? identityFromMe(me.data) : null;
         if (signedInIdentity) log(`Signed in as ${signedInIdentity.name} (${signedInIdentity.profileUrl || signedInIdentity.memberUrn}).`);
         else log('Signed-in LinkedIn profile could not be confirmed; no saved email was substituted.');
         log('🟢 Worker is READY. Watching queue/ for jobs...');
         log(`   Queue dir: ${QUEUE_DIR}`);
         log(`   Results dir: ${RESULTS_DIR}`);
-        log(`   Memory: ${getMemoryMB()} MB | Recycle after: ${RECYCLE_EVERY_N_JOBS} jobs`);
+        log(`   Memory: ${getMemoryMB()} MB | Pause after: ${RECYCLE_EVERY_N_JOBS} jobs`);
 
         writeStatus('ready', { startedAt: new Date().toISOString(), totalJobsProcessed });
 
@@ -1239,6 +1049,10 @@ async function main() {
         // Inner loop: processes jobs with current browser
         while (!isShuttingDown && !needsRecycle) {
             try {
+                if(linkedinStop){
+                    if(dbWorker)await prospectingStore.pauseAccount(dbWorker.pool,ACCOUNT_ID,linkedinStop.reason);
+                    writeStatus('paused',{reason:linkedinStop.reason,manualResumeRequired:linkedinStop?.code!=='WORKER_PAUSED'});await shutdown('LinkedIn needs account review.',1);return;
+                }
                 // Heartbeat every 30s
                 if (Date.now() - lastHeartbeat > 30000) {
                     writeStatus('ready', { totalJobsProcessed, cycleJobCount, memoryMB: getMemoryMB(), idle: true });
@@ -1247,6 +1061,17 @@ async function main() {
 
                 let reservation, job, jobFile, jobPath;
                 if (dbWorker) {
+                    const sourceRun=await prospectingStore.claimSource(dbWorker.pool,ACCOUNT_ID,dbWorker.owner);
+                    if(sourceRun){
+                        if(!signedInIdentity){const reason='LinkedIn viewer identity could not be confirmed. Sign in on the worker computer before prospecting.';await prospectingStore.pauseAccount(dbWorker.pool,ACCOUNT_ID,reason);writeStatus('paused',{reason,manualResumeRequired:linkedinStop?.code!=='WORKER_PAUSED'});await shutdown('Prospecting needs account identity confirmation.',1);return;}
+                        writeStatus('processing',{phase:'PROSPECT_DISCOVERY',url:sourceRun.data.sourceUrl,runId:sourceRun.id});
+                        const discovery=await prospectingWorker.discover(page,sourceRun,{pool:dbWorker.pool,owner:dbWorker.owner,log,beforeCheck:recordLinkedInCheck});
+                    if(discovery.paused){
+                        if(!linkedinStop)linkedinStop=sessionFailure({code:/rate limit/i.test(discovery.paused)?'LINKEDIN_RATE_LIMIT':'LINKEDIN_AUTH',reason:discovery.paused});
+                        writeStatus('paused',{reason:discovery.paused,manualResumeRequired:linkedinStop?.code!=='WORKER_PAUSED'});await shutdown('Prospecting paused for LinkedIn attention.',1);return;
+                    }
+                        continue;
+                    }
                     reservation = await dbWorker.core.claim(dbWorker.pool, ACCOUNT_ID, dbWorker.owner);
                     if (reservation?.disabled) { await shutdown('Account disabled or no longer selected.'); return; }
                     if (reservation?.limited) {
@@ -1349,29 +1174,51 @@ async function main() {
                 if(isShuttingDown){inFlightJobs.delete(jobFile);break;}
 
                 let result;
-                if(job.resumeResult) {
+                const checksBefore={...sessionChecks};
+                if(job.prospecting&&!signedInIdentity){
+                    const reason='LinkedIn viewer identity could not be confirmed. Sign in on the worker computer before prospecting.';
+                    await prospectingStore.pauseAccount(dbWorker.pool,ACCOUNT_ID,reason);
+                    await dbWorker.core.defer(dbWorker.pool,jobId,dbWorker.owner,{status:'ERROR',failure:{stage:'linkedin',code:'LINKEDIN_AUTH',reason,retryable:false}},new Date().toISOString());
+                    writeStatus('paused',{reason,manualResumeRequired:linkedinStop?.code!=='WORKER_PAUSED'});await shutdown('Prospecting needs account identity confirmation.',1);return;
+                }
+                if(job.resumeCapture) {
+                    result=await scrapeProfile(page,profileUrl,browser,captured=>dbWorker.core.checkpoint(dbWorker.pool,jobId,dbWorker.owner,captured),job.resumeResult);
+                } else if(job.resumeResult) {
+                    await recordLinkedInCheck('cache');
                     result=structuredClone(job.resumeResult);result.status='PENDING';
                     result.logs=['Resuming saved LinkedIn profile; no new LinkedIn scrape or daily slot used.'];
                     if(result.failure?.code==='AI_SIZE')result.compactAI=true;
                     if(job.activityOnly&&result.activityStatus==='Unknown'&&result.profileIdentityConfirmed){
                         try{
-                            const activity=await require('./src/lib/linkedin-activity-page.cjs').checkSavedActivity(browser,result.url,{profileUrn:result.activityEvidence?.profileUrn||'',fetchActivity:endpoint=>voyagerFetch(page,endpoint)});
+                            const activity=await require('./src/lib/linkedin-activity-page.cjs').checkSavedActivity(browser,result.url,{page,beforeCheck:recordLinkedInCheck,checkResponse:checkLinkedInAccess});
                             if(activity){Object.assign(result,activity);result.logs.push('Saved profile activity recovery: '+activity.activityStatus+' — '+activity.activityEvidence.reason);if(dbWorker)await dbWorker.core.checkpoint(dbWorker.pool,jobId,dbWorker.owner,result);}
                             else result.logs.push('Saved profile activity recovery: no confirmed feed or observed activity route.');
-                        }catch(error){result.logs.push('Saved profile activity recovery could not finish: '+error.message);}
+                        }catch(error){if(error.failure&&['LINKEDIN_AUTH','LINKEDIN_RATE_LIMIT'].includes(error.failure.code))linkedinStop=error.failure;result.logs.push('Saved profile activity recovery could not finish: '+error.message);}
                     }
                 } else if (pageAlive) {
                     try {
-                        result = await scrapeProfile(page, profileUrl, browser);
+                        prospectingFailure=null;prospectingContext=Boolean(job.prospecting);
+                        result = await scrapeProfile(page, profileUrl, browser, dbWorker ? captured=>dbWorker.core.checkpoint(dbWorker.pool,jobId,dbWorker.owner,captured) : undefined);
                     } catch (e) {
                         log(`⚠️ scrapeProfile threw: ${e.message}`);
-                        result = { url: profileUrl, firstName: '', headline: '', activityStatus: 'Unknown', emails: [], websites: [], website: '', status: 'ERROR', logs: [`Fatal: ${e.message}`] };
-                    }
+                        result = { url: profileUrl, firstName: '', headline: '', activityStatus: 'Unknown', emails: [], websites: [], website: '', status: 'ERROR', failure:e.failure||prospectingFailure||undefined, logs: [`Fatal: ${e.message}`] };
+                    } finally {prospectingContext=false;}
                 } else {
                     result = { url: profileUrl, firstName: '', headline: '', activityStatus: 'Unknown', emails: [], websites: [], website: '', status: 'ERROR', logs: ['Browser page crashed before scrape'] };
                 }
+                result.linkedinChecks=Object.fromEntries(Object.entries(sessionChecks).filter(([kind])=>kind!=='cache').map(([kind,count])=>[kind,count-(checksBefore[kind]||0)]));
+                result.linkedinCacheHit=Boolean(job.resumeResult&&!job.resumeCapture);
+                if(linkedinStop){result.status='ERROR';result.failure=linkedinStop;}
                 if(result.status==='ERROR') {
                     result.failure=result.failure||failureOf(result);
+                    if(linkedinStop||['LINKEDIN_AUTH','LINKEDIN_RATE_LIMIT'].includes(result.failure.code)){
+                        linkedinStop=result.failure;
+                        if(dbWorker){
+                            await prospectingStore.pauseAccount(dbWorker.pool,ACCOUNT_ID,result.failure.reason);
+                            await dbWorker.core.defer(dbWorker.pool,jobId,dbWorker.owner,result,new Date().toISOString());
+                        }
+                        writeStatus('paused',{reason:result.failure.reason,manualResumeRequired:linkedinStop?.code!=='WORKER_PAUSED'});await shutdown('LinkedIn needs account review.',1);return;
+                    }
                     needsRecycle=true;
                 } else if(dbWorker&&!job.resumeResult) {
                     await dbWorker.core.checkpoint(dbWorker.pool,jobId,dbWorker.owner,result);
@@ -1388,7 +1235,10 @@ async function main() {
                 // Retain the job through research and persistence so a restart can resume it.
 
                 const finishJob = (async () => {
-                    if (result.status !== 'ERROR') {
+                    if(job.prospecting){
+                        try{result=await prospectingWorker.finish(dbWorker.pool,dbWorker.owner,job,result);}
+                        catch(error){result={...result,status:'ERROR',failure:{stage:'research',code:'PROSPECT_RESEARCH',reason:'Prospect research could not finish. The captured profile is retained for an explicit retry.',retryable:false},logs:[...(result.logs||[]),'Prospect research stopped: '+error.message]};}
+                    } else if (result.status !== 'ERROR') {
                         try {
                             result = await enrichAndFinalize(result, browser, job.retryCount || 0);
                         } catch (e) {
@@ -1406,9 +1256,9 @@ async function main() {
                         await nativePostProcess(job, result, log)
                             .catch(err => { result.crmSaved = false; log(`  [Research] Save error: ${err.message}`); });
                     }
-                    if(result.status==='ERROR'&&dbWorker) {
+                    if(result.status==='ERROR'&&dbWorker&&!job.prospecting) {
                         result.failure=result.failure||failureOf(result);
-                        if(result.failure.retryable && job.retryCount < 3) {
+                        if(result.failure.stage!=='linkedin' && result.failure.retryable && job.retryCount < 3) {
                             const retryAt=result.failure.retryAt||new Date(Date.now()+(result.failure.stage==='linkedin'?15000:60000)).toISOString();
                             result.failure.retryAt=retryAt;
                             if (result.failure.stage !== 'linkedin') await dbWorker.core.checkpoint(dbWorker.pool,jobId,dbWorker.owner,result);
@@ -1471,12 +1321,11 @@ async function main() {
                 // Check if we need to recycle the browser
                 if (!pageAlive || cycleJobCount >= RECYCLE_EVERY_N_JOBS) {
                     needsRecycle = true;
-                    log(`🔄 Browser recycle triggered (${!pageAlive ? 'page crashed' : `${cycleJobCount} jobs reached`}). Restarting browser...`);
+                    log(`🔄 Browser recycle triggered (${!pageAlive ? 'page crashed' : `${cycleJobCount} jobs reached`}). Pausing account...`);
                 }
 
-                // Clear page memory between jobs: navigate back to LinkedIn feed
-                // API calls use the existing authenticated page. Reloading the
-                // entire feed for every prospect needlessly filled Chrome memory.
+                // Reuse the same account tab. The next job follows normal profile
+                // pages; no feed reload or private endpoint fallback is required.
 
                 // Delay between profiles
                 await jitter(700, 1600);
@@ -1487,7 +1336,7 @@ async function main() {
             }
         }
 
-        // Wait for any pending post-processing to finish before recycling
+        // Wait for any pending post-processing to finish before stopping.
         // Enrichment tasks may still be using this browser for a rendered crawl,
         // so they must all settle before it is killed.
         if (pendingPostProcessing.length > 0) {
@@ -1498,7 +1347,7 @@ async function main() {
         }
 
         // Close the old browser before starting a new one — use proper Windows process killing
-        log(`Closing browser for recycle... (processed ${cycleJobCount} jobs this cycle)`);
+        log(`Closing account browser... (processed ${cycleJobCount} jobs this cycle)`);
         await killBrowserProcess(browser, browserPid);
         browser = null;
         browserPid = null;
@@ -1509,12 +1358,15 @@ async function main() {
             log(`GC forced. Memory after: ${getMemoryMB()} MB`);
         }
 
-        // Brief pause before relaunching
         if (!isShuttingDown) {
-            log('Waiting 5s before relaunching browser...');
-            await sleep(5000);
+            const reason='The worker browser stopped or reached its cycle limit. Start processing explicitly to continue.';
+            writeStatus('paused',{reason});await shutdown(reason,1);return;
         }
     }
 }
 
-main().catch(async e => { console.error('Fatal:', e.message); await shutdown('Fatal error', 1); }).finally(stopDatabaseAccount);
+main().catch(async e => {
+    if(linkedinStop)writeStatus('paused',{reason:linkedinStop.reason,manualResumeRequired:['LINKEDIN_AUTH','LINKEDIN_RATE_LIMIT'].includes(linkedinStop.code)});
+    else console.error('Fatal:',e.message);
+    await shutdown(linkedinStop?'Account processing stopped':'Fatal error',1);
+}).finally(async()=>{if(shutdownTask)await shutdownTask;await stopDatabaseAccount();});

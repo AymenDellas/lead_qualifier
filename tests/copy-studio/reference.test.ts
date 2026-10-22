@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   copyContextSchema, fingerprint, generationPayload, generationSchema, projectSchema, MAX_SOURCE_CHARACTERS,
 } from '../../src/lib/copy-studio/shared/contracts';
-import { generate, revise } from '../../src/lib/copy-studio/server/engine';
+import { generate, revise } from './reviewed-engine';
 import { handleCopyStudio } from '../../src/lib/copy-studio/server/http';
 import { generateCopy, reviseCopy } from '../../src/components/copy-studio/api';
 import { input, draft, strategy } from './fixtures';
@@ -43,7 +43,7 @@ test('the full reference and priority rules reach strategy, drafting, claim repa
   const payload = generationPayload({ ...project(), context: copyContextSchema.parse({ direction: 'Focus on the approved coaching offer', avoid: 'Exclude the group course' }) });
   const bad = structuredClone(draft);
   bad.sections[0].headline = 'Guaranteed 300% growth';
-  const responses = [strategy, bad, draft];
+  const responses = [strategy, bad, { sections: [draft.sections[0]] }];
   const calls: { system: string; prompt: string }[] = [];
   await generate(async (system, prompt) => {
     calls.push({ system, prompt });

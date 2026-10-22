@@ -10,7 +10,7 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
  const raw=new Pool({connectionString:process.env.DATABASE_URL,max:6,connectionTimeoutMillis:10000,ssl:{rejectUnauthorized:false}});
  const schema='compel_worker_test_'+randomUUID().replaceAll('-','');
  assert.match(schema,/^compel_worker_test_[a-f0-9]{32}$/);
- const qualify=sql=>sql.replace(/\b(compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_sessions|compel_worker_jobs|compel_research_budget|leads)\b/g,`"${schema}".$1`);
+ const qualify=sql=>sql.replace(/\b(compel_worker_events|compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_sessions|compel_worker_jobs|compel_research_budget|compel_prospect_runs|leads)\b/g,`"${schema}".$1`);
  const pool={query:(sql,values)=>raw.query(qualify(sql),values),connect:async()=>{
   const client=await raw.connect();return{query:(sql,values)=>client.query(qualify(sql),values),release:()=>client.release()};
  }};
@@ -22,16 +22,17 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   assert.ok(!JSON.stringify(config).includes('private'));assert.equal(config.activeCount,1);
   const originalProfile=(await pool.query('SELECT profile_key FROM compel_linkedin_accounts WHERE id=$1',['legacy-0'])).rows[0].profile_key;
   config=await core.saveSettings(pool,{...config,activeCount:2,accounts:config.accounts.map(a=>({...a,password:''}))});
-  assert.equal((await core.selectedAccounts(pool)).length,2);
+  assert.equal((await core.selectedAccounts(pool)).length,0,'saving accounts never authorizes processing');
   assert.equal((await pool.query('SELECT profile_key FROM compel_linkedin_accounts WHERE id=$1',['legacy-0'])).rows[0].profile_key,originalProfile);
   assert.equal(core.decrypt((await pool.query('SELECT secret FROM compel_linkedin_accounts WHERE id=$1',['legacy-0'])).rows[0].secret),'private');
   await core.ensure({query:pool.query});
-  assert.equal((await raw.query(`SELECT count(*)::integer AS n FROM information_schema.sequences WHERE sequence_schema=$1`,[schema])).rows[0].n,1);
+  assert.equal((await raw.query(`SELECT count(*)::integer AS n FROM information_schema.sequences WHERE sequence_schema=$1`,[schema])).rows[0].n,2);
   await assert.rejects(core.saveSettings(pool,{...config,revision:0}));
   await assert.rejects(core.saveSettings(pool,{...config,accounts:config.accounts.map((a,i)=>({...a,email:i===0?'replacement@example.test':a.email}))}));
   const duplicate=await Promise.all([core.enqueue(pool,['https://www.linkedin.com/in/first/']),core.enqueue(pool,['https://uk.linkedin.com/in/FIRST/?trk=fixture'])]);
   assert.equal(duplicate.reduce((sum,r)=>sum+r.jobs.length,0),1);
   await core.enqueue(pool,['https://www.linkedin.com/in/second/','https://www.linkedin.com/in/third/']);
+  await pool.query("UPDATE compel_linkedin_accounts SET processing_enabled=TRUE,processing_until=NOW()+interval '2 hours',connected_at=NOW()");
   assert.equal(await core.acquireSession(pool,'legacy-0','one'),true);
   assert.equal(await core.acquireSession(pool,'legacy-0','impostor'),false);
   assert.equal(await core.acquireSession(pool,'legacy-1','two'),true);
@@ -63,12 +64,14 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   assert.equal((await core.claim(pool,'legacy-0','one')).disabled,true);
   config=await core.saveSettings(pool,{...config,activeCount:1,accounts:config.accounts.map(a=>({...a,dailyLimit:1}))});
   assert.equal((await core.claim(pool,'legacy-0','one')).limited,true);
+  await pool.query("UPDATE compel_worker_events SET created_at=NOW()-interval '6 minutes' WHERE kind='sign_in_requested'");
   await core.requestLogin(pool,'legacy-1');assert.equal((await core.settings(pool)).accounts[1].loginPending,true);
   await pool.query("UPDATE compel_linkedin_accounts SET login_requested_at='2026-10-09 00:11:49.280123+00' WHERE id='legacy-1'");
   const request=(await pool.query("SELECT login_requested_at,login_requested_at::text AS token FROM compel_linkedin_accounts WHERE id='legacy-1'")).rows[0];
   assert.equal(await core.consumeLoginRequest(pool,'legacy-1',request.login_requested_at),false,'a hydrated Date loses the PostgreSQL microseconds');
   assert.equal(await core.consumeLoginRequest(pool,'legacy-1',request.token),true);
   assert.equal((await core.settings(pool)).accounts[1].loginPending,false);
+  await pool.query("UPDATE compel_worker_events SET created_at=NOW()-interval '6 minutes' WHERE kind='sign_in_requested'");
   await core.requestLogin(pool,'legacy-1');
   assert.equal(await core.consumeLoginRequest(pool,'legacy-1',request.token),false,'a newer sign-in request must survive an old browser');
   assert.equal((await core.settings(pool)).accounts[1].loginPending,true);
@@ -85,6 +88,7 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   config=await core.settings(pool);assert.equal(config.accounts[1].signedOut,true);assert.equal(config.accounts[1].signedIn,null);
   config=await core.saveSettings(pool,{...config,activeCount:2,accounts:config.accounts.map(a=>({...a,enabled:true}))});
   assert.equal((await core.selectedAccounts(pool)).length,1,'saved credentials cannot auto-login a signed-out account');
+  await pool.query("UPDATE compel_worker_events SET created_at=NOW()-interval '6 minutes' WHERE kind='sign_in_requested'");
   await core.requestLogin(pool,'legacy-1');
   config=await core.settings(pool);assert.equal(config.accounts[1].signedOut,false);assert.equal(config.accounts[1].loginPending,true);
   const beforeRemove=config.accounts[0].dailyCount;
@@ -93,6 +97,7 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   assert.equal(config.accounts.find(a=>a.email==='first@example.test').id,'legacy-0');
   assert.equal(config.accounts.find(a=>a.id==='legacy-0').dailyCount,beforeRemove);
   const status=await core.queueStatus(pool);assert.equal(status.queueSize,1);assert.equal(status.recentResults.length,1);
+  await pool.query("UPDATE compel_linkedin_accounts SET processing_enabled=TRUE,processing_until=NOW()+interval '2 hours',connected_at=NOW(),login_requested_at=NULL");
   // Failed interpretation resumes the saved profile even when the scrape allowance is exhausted.
   const savedProfile={url:'https://www.linkedin.com/in/recover/',profileIdentityConfirmed:true,firstName:'Saved',status:'PENDING',logs:[]};
   await core.clearQueue(pool);

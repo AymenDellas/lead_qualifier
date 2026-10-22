@@ -115,13 +115,13 @@ test('source facts need explicit selection before replacing user input', async (
   await page.goto('/');
   await page.getByRole('button', { name: 'Copy Studio', exact: true }).click();
   await page.getByRole('textbox', { name: 'Offer name', exact: true }).fill('Keep my name');
-  await page.getByRole('button', { name: 'Start with an existing page' }).click();
+  await page.getByRole('button', { name: 'Prefill from page' }).click();
   await page
     .locator('.copy-studio')
     .getByLabel('Page URL', { exact: true })
     .fill('https://example.com');
-  await page.getByRole('button', { name: 'Extract offer facts' }).click();
-  await expect(page.getByRole('heading', { name: 'Review what we found' })).toBeVisible();
+  await page.getByRole('button', { name: 'Read page and prefill' }).click();
+  await expect(page.getByRole('heading', { name: 'Review your page prefill' })).toBeVisible();
   await expect(page.getByRole('checkbox', { name: /Offer name/ })).not.toBeChecked();
   await expect(page.getByRole('checkbox', { name: /Who is it for/ })).toBeChecked();
   await page.getByRole('button', { name: 'Apply 1 field', exact: true }).click();

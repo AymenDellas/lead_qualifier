@@ -9,7 +9,7 @@ import {
 } from '../../src/lib/copy-studio/shared/contracts';
 import { auditDraft, validateStructure } from '../../src/lib/copy-studio/shared/quality';
 import { parseJson, structured } from '../../src/lib/copy-studio/server/provider';
-import { generate, extract, revise } from '../../src/lib/copy-studio/server/engine';
+import { generate, extract, revise } from './reviewed-engine';
 import { draft, input, strategy } from './fixtures';
 
 test('incomplete briefs fail before a provider call', () => {
@@ -110,12 +110,12 @@ test('generation runs strategy, writing, review, and returns the validated resul
   assert.equal(result.draft.sections.length, 9);
   assert.deepEqual(result.issues, []);
   assert.equal(responses.length, 0);
-  assert.equal(stages.length, 3);
+  assert.equal(stages.length, 4);
 });
 test('unsupported claims trigger a factual revision before the result is returned', async () => {
   const bad = structuredClone(draft);
   bad.sections[0].headline = 'Guaranteed 300% growth';
-  const responses = [strategy, bad, draft];
+  const responses = [strategy, bad, { sections: [draft.sections[0]] }];
   const result = await generate(
     async () => JSON.stringify(responses.shift()),
     input,

@@ -14,10 +14,10 @@ async function openStudio(page: Page) {
   await page.getByRole('button', { name: 'Copy Studio', exact: true }).click();
 }
 async function attach(page: Page) {
-  await page.getByRole('button', { name: 'Start with an existing page' }).click();
+  await page.getByRole('button', { name: 'Prefill from page' }).click();
   await page.getByRole('button', { name: 'Paste text', exact: true }).click();
   await page.getByLabel('Visible page copy', { exact: true }).fill(originalText);
-  await page.getByRole('button', { name: 'Use full copy as reference', exact: true }).click();
+  await page.getByRole('button', { name: 'Add as reference only', exact: true }).click();
   await expect(page.getByLabel('How to use the original copy')).toHaveValue('preserve_voice');
 }
 
@@ -37,7 +37,7 @@ test('onboarding, full original copy, and requested changes travel together thro
     return route.fulfill({ json: { section: draft.sections[0], issues: [] } });
   });
   await openStudio(page);
-  await page.getByRole('button', { name: 'Choose client onboarding' }).click();
+  await page.getByRole('button', { name: 'Prefill from onboarding' }).click();
   await page.getByRole('radio', { name: /Example Coach/ }).check();
   await expect(page.getByRole('checkbox', { name: /Offer name/ })).toBeChecked();
   await page.getByRole('button', { name: 'Use this onboarding' }).click();
@@ -87,10 +87,10 @@ test('an existing imported page is also sent as a full reference without reimpor
   });
   await openStudio(page);
   await page.getByRole('button', { name: 'Try a sample brief' }).click();
-  await page.getByRole('button', { name: 'Start with an existing page' }).click();
+  await page.getByRole('button', { name: 'Prefill from page' }).click();
   await page.getByRole('button', { name: 'Paste text', exact: true }).click();
   await page.getByLabel('Visible page copy').fill(originalText);
-  await page.getByRole('button', { name: 'Extract offer facts', exact: true }).click();
+  await page.getByRole('button', { name: 'Read page and prefill', exact: true }).click();
   await page.getByRole('checkbox', { name: /Who is it for/ }).check();
   await page.getByRole('button', { name: 'Apply 1 field', exact: true }).click();
   await page.getByRole('button', { name: 'Generate my copy' }).click();

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { briefSchema, fingerprint, projectSchema } from '../../src/lib/copy-studio/shared/contracts';
 import { auditDraft, isLegacyDirectCallDraft, validateStructure } from '../../src/lib/copy-studio/shared/quality';
-import { generate, extract, revise } from '../../src/lib/copy-studio/server/engine';
+import { generate, extract, revise } from './reviewed-engine';
 import { buildDesignPrompt } from '../../src/lib/copy-studio/shared/design-prompt';
 import { draft, input, strategy } from './fixtures';
 
@@ -34,9 +34,9 @@ test('the approved biography and descriptive-title rules reach generation, rewri
   assert.deepEqual(result.draft.sections.map(section => section.id), ['hero', 'problem', 'approach', 'call', 'fit', 'about', 'proof', 'objections', 'cta']);
   for (const call of calls) {
     assert.match(call.prompt, /Jordan Lee/);
-    assert.match(call.system, /Supporting section headings must act as descriptive titles/);
-    assert.match(call.system, /The hero stays outcome-led/);
-    assert.match(call.system, /Do not invent personal experiences/);
+    assert.match(call.system, /Write original, concise, descriptive section headings/);
+    assert.match(call.system, /hero follows the selected framework’s opening role/);
+    assert.match(call.system, /only approved coachBio facts/);
   }
   const saved = projectSchema.parse({ id: 'bio', name: 'Example project', updatedAt: '', ...withBio, result, source: null, generatedFrom: fingerprint(withBio), history: [] });
   const prompt = buildDesignPrompt(saved);
@@ -55,7 +55,7 @@ test('approved coach background cannot be silently omitted from a fresh draft', 
 test('missing coach facts omit public biography and request details even if a model fabricates an introduction', async () => {
   const fabricated = bioDraft();
   assert.ok(auditDraft(fabricated, input.brief).some(issue => issue.sectionId === 'about' && issue.severity === 'warning'));
-  const responses = [strategy, fabricated, fabricated];
+  const responses = [strategy, fabricated, { sections: [fabricated.sections.find(section => section.id === 'about')] }];
   const result = await generate(async () => JSON.stringify(responses.shift()), input, new AbortController().signal, () => {});
   assert.deepEqual(result.draft.sections.find(section => section.id === 'about'), { id: 'about', headline: '', body: '', bullets: [], cta: '' });
   assert.ok(result.draft.notes.some(note => note.includes('Coach background & credentials')));

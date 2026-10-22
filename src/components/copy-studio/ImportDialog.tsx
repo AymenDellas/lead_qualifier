@@ -2,13 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Check, FileText, Link2, LoaderCircle, ShieldCheck, X } from 'lucide-react';
 import {
   fieldLabels,
+  requiredKeys,
   MAX_SOURCE_CHARACTERS,
+  EXTRACTION_VERSION,
   type Brief,
   type BriefKey,
   type ImportResult,
 } from '@/lib/copy-studio/shared/contracts';
 import { importSource, readReference } from './api';
 import { SourceCoverage } from './SourceCoverage';
+import { approvedTestimonials } from '@/lib/copy-studio/shared/evidence';
 
 export function ImportDialog({
   current,
@@ -31,7 +34,7 @@ export function ImportDialog({
   const form = useRef<HTMLFormElement>(null);
   const controller = useRef<AbortController | null>(null);
   const [mode, setMode] = useState<'url' | 'text'>(initial && !initial.source.url ? 'text' : 'url');
-  const reusable = initial && (Object.keys(initial.extraction.fields).length || initial.extraction.offers?.length) && (!targetOffer || initial.selectedOffer === targetOffer) ? initial : null;
+  const reusable = initial?.extractionVersion === EXTRACTION_VERSION && (Object.keys(initial.extraction.fields).length || initial.extraction.offers?.length) && (!targetOffer || initial.selectedOffer === targetOffer) ? initial : null;
   const [url, setUrl] = useState(initial?.source.url || initialUrl);
   const [text, setText] = useState(initial?.source.url ? '' : initial?.source.text.slice(0, MAX_SOURCE_CHARACTERS) || '');
   const [offerFocus, setOfferFocus] = useState(targetOffer);
@@ -59,6 +62,7 @@ export function ImportDialog({
     );
     try {
       const extracted = await importSource(input, request.signal);
+      request.signal.throwIfAborted();
       if (original) extracted.source = original;
       setResult(extracted);
       setChosenOffer(extracted.selectedOffer ?? input.targetOffer ?? '');
@@ -116,7 +120,7 @@ export function ImportDialog({
         <div>
           <span className="eyebrow">A HEAD START, GROUNDED IN FACTS</span>
           <h2 id="import-heading">
-            {choosing ? 'Choose the offer for this page' : result ? 'Review what we found' : 'Bring your offer into focus'}
+            {choosing ? 'Choose the offer for this page' : result ? 'Review your page prefill' : 'Prefill from page'}
           </h2>
         </div>
         <button className="icon-button" onClick={onClose} aria-label="Close import">
@@ -125,10 +129,13 @@ export function ImportDialog({
       </div>
       {result && <SourceCoverage source={result.source} />}
       {!result ? (
-        <form ref={form} onSubmit={(event) => { event.preventDefault(); void attachReference(); }}>
+        <form ref={form} onSubmit={(event) => {
+          event.preventDefault();
+          if (!busy) void runExtraction({ ...(mode === 'url' ? { url } : { text }), targetOffer: offerFocus });
+        }}>
           <p className="muted">
-            Add the original page so the writer can use its full copy, tone, and context alongside
-            your onboarding answers and requested changes. Extracting offer facts is optional.
+            We’ll read the page and propose answers to the five essentials for you to review.
+            The full original copy also stays attached for its voice and context. Existing answers change only when you select replacements.
           </p>
           <div className="segmented import-tabs">
             <button
@@ -153,7 +160,7 @@ export function ImportDialog({
           <div className="field">
             <label htmlFor="source-offer-focus">Offer to focus on <span className="optional">Optional</span></label>
             <input id="source-offer-focus" value={offerFocus} maxLength={200} disabled={busy} onChange={(event) => setOfferFocus(event.target.value)} placeholder="e.g. Executive Leadership Program" />
-            <small className="field-hint">Used for optional fact extraction. Your brief decides which offer the new page promotes.</small>
+            <small className="field-hint">If the website has several offers, choose which one this page should promote.</small>
           </div>
           <div className="field">
             {mode === 'url' ? (
@@ -203,21 +210,16 @@ export function ImportDialog({
               <ShieldCheck size={15} />
               Your approved brief controls the facts
             </span>
-            <button type="button" className="button secondary" disabled={busy} onClick={() => {
-              if (form.current?.reportValidity()) void runExtraction({ ...(mode === 'url' ? { url } : { text }), targetOffer: offerFocus });
-            }}>
-              {busy && !readingReference ? <LoaderCircle size={16} className="spin" /> : <FileText size={16} />}
-              Extract offer facts
-            </button>
+            <button type="button" className="button secondary" disabled={busy} onClick={() => void attachReference()}>Add as reference only</button>
             <button className="button primary" disabled={busy}>
               {busy ? (
                 <>
                   <LoaderCircle size={16} className="spin" />
-                  {mode === 'url' ? 'Reading website pages…' : readingReference ? 'Reading original copy…' : 'Reading the offer…'}
+                  {readingReference ? 'Reading original copy…' : 'Reading page facts…'}
                 </>
               ) : (
                 <>
-                  Use full copy as reference
+                  Read page and prefill
                   <ArrowRight size={16} />
                 </>
               )}
@@ -254,9 +256,9 @@ export function ImportDialog({
       ) : (
         <div>
           <p className="muted">
-            Choose the fields to apply. Existing values are preserved unless you select their
-            replacements. You can also use the full copy as a reference while keeping your brief unchanged.
+            Review the proposed answers and choose which fields to prefill. Existing values are preserved unless you select replacements. The full original copy stays attached as a reference.
           </p>
+          {requiredKeys.some(key => (result.extraction.fields[key] || (differentOffer ? '' : current[key])).trim().length < 3) && <p className="notice warning">The page is missing essential facts: {requiredKeys.filter(key => (result.extraction.fields[key] || (differentOffer ? '' : current[key])).trim().length < 3).map(key => fieldLabels[key]).join(', ')}. Add these in the brief before generating. We won’t invent missing answers.</p>}
           <div className="extraction-source">
             <FileText size={16} />
             <span>{result.source.title}</span>
@@ -300,12 +302,13 @@ export function ImportDialog({
                     <span>
                       <strong>{fieldLabels[key]}</strong>
                       {current[key] && <small>Replaces your existing value</small>}
-                      <p>{value}</p>
+                      <p>{key === 'proof' && approvedTestimonials(value).length > 3
+                        ? `${approvedTestimonials(value).length} complete testimonials retained. Review the full social proof below; no quotes have been shortened.` : value}</p>
                     </span>
                   </label>
                   <details>
-                    <summary>Source evidence</summary>
-                    {result.extraction.evidence
+                    <summary>{key === 'proof' && approvedTestimonials(value).length > 3 ? 'Show all collected social proof' : 'Source evidence'}</summary>
+                    {key === 'proof' && approvedTestimonials(value).length > 3 ? <p className="full-proof-review">{value}</p> : result.extraction.evidence
                       .filter((e) => e.field === key)
                       .map((e, i) => (
                         <blockquote key={i}>{e.quote}</blockquote>

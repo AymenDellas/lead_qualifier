@@ -26,8 +26,9 @@ export function ReferencePanel({ source, mode, disabled, onMode, onChange }: {
           <option value="off">Do not use this reference</option>
         </select>
         <small className="field-hint" role="status">
-          {mode === 'off' ? 'Generation uses your brief and client notes. This reference is turned off.' : mode === 'rework_voice' ? 'The writer reads the full copy for context and follows your requested brand voice.' : 'The writer reads the full copy and keeps the client’s voice while applying your changes.'}
+          {mode === 'off' ? 'Generation uses your brief and client notes. This reference is turned off.' : mode === 'rework_voice' ? 'Your original copy provides context while your requested brand voice guides the writing.' : 'Your original copy guides the client’s voice while your changes shape the writing.'}
         </small>
+        {mode !== 'off' && <small className="field-hint">The full captured copy stays attached. Large captures use relevant passages selected across the captured routes to fit the AI provider’s limit.</small>}
       </div>
       <details className="reference-preview">
         <summary>View original copy · {text.length.toLocaleString()} characters <ChevronDown size={15} /></summary>

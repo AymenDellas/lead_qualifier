@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, LoaderCircle, X } from 'lucide-react';
-import { fieldLabels, type BriefKey, type Project } from '@/lib/copy-studio/shared/contracts';
+import { fieldLabels, requiredKeys, type BriefKey, type Project } from '@/lib/copy-studio/shared/contracts';
 import { matchOnboardings, type OnboardingBrief } from '@/lib/copy-studio/shared/onboarding';
 import { templates } from '@/lib/copy-studio/shared/templates';
 
@@ -11,13 +11,14 @@ export function OnboardingDialog({ project, records, loading, error, onRefresh, 
   error: string;
   onRefresh: () => void;
   onClose: () => void;
-  onApply: (record: OnboardingBrief, fields: BriefKey[], useTemplate: boolean, useConstraints: boolean) => void;
+  onApply: (record: OnboardingBrief, fields: BriefKey[], useTemplate: boolean, useConstraints: boolean, useReference: boolean) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState(project.onboarding?.id || '');
   const [fields, setFields] = useState<BriefKey[]>([]);
   const [useTemplate, setUseTemplate] = useState(!project.result);
+  const [useReference, setUseReference] = useState(!project.source);
   const [useConstraints, setUseConstraints] = useState(!project.context?.mustKeep && !project.context?.avoid && !project.context?.background);
   const matches = matchOnboardings(records, query || project.source?.source.url || '');
   const selected = records.find((record) => record.id === selectedId);
@@ -34,7 +35,7 @@ export function OnboardingDialog({ project, records, loading, error, onRefresh, 
     <dialog ref={dialog} className="import-dialog onboarding-dialog" aria-labelledby="onboarding-picker-heading"
       onCancel={onClose} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="dialog-header">
-        <div><span className="eyebrow">CLIENT BRIEF</span><h2 id="onboarding-picker-heading">Choose client onboarding</h2></div>
+        <div><span className="eyebrow">CLIENT BRIEF</span><h2 id="onboarding-picker-heading">Prefill from onboarding</h2></div>
         <button className="icon-button" aria-label="Close onboarding picker" onClick={onClose}><X size={20} /></button>
       </div>
       <p className="muted">Find the client by name or page URL. Review their answers before adding them to this copy project.</p>
@@ -49,7 +50,7 @@ export function OnboardingDialog({ project, records, loading, error, onRefresh, 
           <label className={`onboarding-option ${selectedId === record.id ? 'selected' : ''}`} key={record.id}>
             <input type="radio" name="client-onboarding" checked={selectedId === record.id} onChange={() => setSelectedId(record.id)} />
             <span><strong>{record.clientName || record.businessName || record.projectName}</strong>
-              <small>{record.projectName} · {record.formStatus === 'COMPLETE' ? 'Form complete' : 'Form in progress'}</small>
+              <small>{record.projectName} · {requiredKeys.every(key => record.brief[key].trim().length >= 3) ? 'Essentials complete' : 'Answers incomplete'}</small>
               {matches.some((match) => match.id === record.id) && <small className="onboarding-match">Matches this page’s website</small>}
             </span>
           </label>
@@ -59,6 +60,7 @@ export function OnboardingDialog({ project, records, loading, error, onRefresh, 
       {selected && <div className="onboarding-review">
         <h3>Review {selected.clientName || selected.projectName}’s answers</h3>
         <p className="muted">Select fields to apply. Existing values change only when you select a replacement. Missing answers stay editable in your brief.</p>
+        {requiredKeys.some(key => selected.brief[key].trim().length < 3) && <p className="notice warning">This onboarding is missing: {requiredKeys.filter(key => selected.brief[key].trim().length < 3).map(key => fieldLabels[key]).join(', ')}. Use any saved answers, then prefill from the page or add the missing details yourself.</p>}
         <div className="selection-actions">
           <button onClick={() => setFields((Object.keys(fieldLabels) as BriefKey[]).filter((key) => key !== 'voice' && Boolean(selected.brief[key])))}>Select all answers</button>
           <button onClick={() => setFields([])}>Clear selection</button>
@@ -73,6 +75,7 @@ export function OnboardingDialog({ project, records, loading, error, onRefresh, 
           ))}
         </div>
         <label className="onboarding-check"><input type="checkbox" checked={useTemplate} onChange={(event) => setUseTemplate(event.target.checked)} />Use the onboarding page goal: {templates[selected.template].name}</label>
+        {selected.source && <label className="onboarding-check"><input type="checkbox" checked={useReference} onChange={event => setUseReference(event.target.checked)} />Attach the original website capture used to prepare this onboarding as a voice and context reference{project.source ? ' (replaces your current reference)' : ''}</label>}
         {(selected.context.mustKeep || selected.context.avoid || selected.context.background) && <div>
           <label className="onboarding-check"><input type="checkbox" checked={useConstraints} onChange={(event) => setUseConstraints(event.target.checked)} />Apply the client’s context, must-keep and avoid notes</label>
           <p className="muted onboarding-client-notes">{[selected.context.background, selected.context.mustKeep && `Keep: ${selected.context.mustKeep}`, selected.context.avoid && `Avoid: ${selected.context.avoid}`].filter(Boolean).join('\n\n')}</p>
@@ -80,7 +83,7 @@ export function OnboardingDialog({ project, records, loading, error, onRefresh, 
       </div>}
       <div className="dialog-footer">
         <button className="button secondary" onClick={onRefresh} disabled={loading}>Refresh onboarding</button>
-        <button className="button primary" disabled={!selected || loading} onClick={() => selected && onApply(selected, fields, useTemplate, useConstraints)}><Check size={16} />Use this onboarding</button>
+        <button className="button primary" disabled={!selected || loading} onClick={() => selected && onApply(selected, fields, useTemplate, useConstraints, useReference)}><Check size={16} />Use this onboarding</button>
       </div>
     </dialog>
   );

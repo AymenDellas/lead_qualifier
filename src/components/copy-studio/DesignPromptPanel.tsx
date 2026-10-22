@@ -14,7 +14,7 @@ export function DesignPromptPanel({ prompt, busy, onCopy, onExport }: {
           <p>Your copy, section layouts, and design direction in one prompt. Ready automatically, and updated when you save a copy change.</p>
         </div>
       </div>
-      <p className="design-prompt-constraints">One clear action. No navigation, mesh gradients, repeated cards, or decorative distractions.</p>
+      <p className="design-prompt-constraints">Distinct section compositions, readable copy, and custom atmosphere. One dark canvas and one clear action. No navigation or repeated card grids.</p>
       <div className="design-prompt-actions">
         <button className="button primary small-button" disabled={busy} onClick={() => onCopy(prompt)}>
           <Copy size={14} /> Copy design prompt

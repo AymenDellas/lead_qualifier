@@ -14,6 +14,7 @@ import { isExportableUnverifiable, wasRefusedByHost } from "@/lib/send-tiers";
 import { startVerificationRun, addVerificationBatch, getUnknownLabel, UNKNOWN_CAUSE_LABELS, type VerificationRun, type UnknownCause } from '@/lib/crm-email-verification';
 import { importCrmLeadsToHunterAction, markCrmLeadLinkedinDmSentAction } from "@/app/actions/linkedin-outreach-actions";
 import { isQualifiedRecord, hasQualifiedEmail, type ProspectAssessment } from '@/lib/prospect-qualification.cjs';
+import './acquisition-workspace.css';
 
 
 interface LeadRecord {
@@ -129,6 +130,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
     const [leads, setLeads] = useState<LeadRecord[]>([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState<string>('ALL');
+    const [leadSearch, setLeadSearch] = useState('');
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [hunterImporting, setHunterImporting] = useState(false);
     const [dmPendingId, setDmPendingId] = useState<string | null>(null);
@@ -227,6 +229,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
         fetchLeads();
     }, []);
 
+    const leadQuery = leadSearch.trim().toLocaleLowerCase();
     const filteredLeads = leads.filter(l => {
         let passesPrimary = false;
         if (filter === 'ALL') passesPrimary = true;
@@ -261,6 +264,8 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
         }
 
         if (!passesPrimary) return false;
+        if (leadQuery && ![l.first_name, l.last_name, `${l.first_name || ''} ${l.last_name || ''}`, l.company, l.email, l.website, l.linkedin_url]
+            .some(value => String(value || '').toLocaleLowerCase().includes(leadQuery))) return false;
 
         if (emailFilter === 'PROVEN_VALID') { if (!isProvenValid(l)) return false; }
         else if (emailFilter === 'UNPROVEN_VALID') { if (!isUnprovenValid(l)) return false; }
@@ -1035,10 +1040,9 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
     const queuedOnlyCount = leads.filter(l => l.contacted && !l.contacted_source).length;
 
     return (
-        // Fills the shell's main area: viewport less the 52px header and the
-        // 20px padding above and below it.
-        <div className="w-full flex flex-col h-[calc(100vh-92px)]">
-            <div className="panel flex-1 flex flex-col overflow-hidden">
+        // Keep the record grid in its own scroll area beneath the view controls.
+        <div className="acquisition-workspace crm-workspace">
+            <div className="panel crm-database-panel" aria-busy={loading}>
                 {(outreachMessage || outreachError) && (
                     <div className={cn('px-4 py-2 text-sm flex items-center gap-3', outreachError ? 'text-[var(--bad)]' : 'text-[var(--signal)]')} role={outreachError ? 'alert' : 'status'}>
                         <span className="flex-1">{outreachError || outreachMessage}</span>
@@ -1047,27 +1051,27 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                 {/* Rail 1 — the live readout and the single primary action. The
                     screen's name lives in the app header now; repeating it here
                     just pushed the numbers that matter further to the right. */}
-                <div className="rail rail-live px-4 py-3 flex items-center justify-between gap-6 flex-wrap">
-                    <div className="flex items-center gap-6">
+                <div className="crm-command-bar">
+                    <div className="crm-summary" aria-label="Lead database summary">
                         {/* The readout. Ready is the number the whole tool exists to produce. */}
-                        <div className="flex items-center">
+                        <div className="crm-summary-values">
                             <div className="stat">
-                                <span className="stat-value stat-value-signal">{readyCount.toLocaleString()}</span>
+                                <span className="stat-value stat-value-signal">{loading ? '—' : readyCount.toLocaleString()}</span>
                                 <span className="label-micro">Ready to send</span>
                             </div>
                             <div className="stat">
-                                <span className="stat-value">{leads.filter(l => isQualifiedStage(l.pipeline_status)).length.toLocaleString()}</span>
+                                <span className="stat-value">{loading ? '—' : leads.filter(l => isQualifiedStage(l.pipeline_status)).length.toLocaleString()}</span>
                                 <span className="label-micro">Qualified</span>
                             </div>
                             <div className="stat">
-                                <span className="stat-value">{leads.length.toLocaleString()}</span>
+                                <span className="stat-value">{loading ? '—' : leads.length.toLocaleString()}</span>
                                 <span className="label-micro">Total leads</span>
                             </div>
                         </div>
                     </div>
 
                     {selectedIds.size > 0 ? (
-                        <div className="flex items-center gap-1.5">
+                        <div className="crm-commands crm-selection-actions" aria-label="Selected lead actions">
                             <span className="num text-[13px] text-[var(--signal)] mr-1">{selectedIds.size} selected</span>
                             <button
                                 onClick={handleVerifySelected}
@@ -1102,7 +1106,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                             </button>
                         </div>
                     ) : (
-                        <div className="flex max-w-full flex-wrap items-center gap-1.5">
+                        <div className="crm-commands" aria-label="Lead database actions">
                             <button
                                 onClick={handleExportValid}
                                 disabled={validCount === 0}
@@ -1143,6 +1147,8 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                                 <button
                                     type="button"
                                     onClick={() => setToolsOpen(v => !v)}
+                                    aria-expanded={toolsOpen}
+                                    onKeyDown={event => { if (event.key === 'Escape') setToolsOpen(false); }}
                                     className={cn("btn btn-outline", toolsOpen && "bg-[var(--surface-3)] text-[var(--text)]")}
                                 >
                                     {gmailSyncing || importingCampaigns || syncingBounces
@@ -1321,37 +1327,68 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                 )}
 
                 {/* Rail 2 — where you are, and how the view is narrowed. */}
-                <div className="px-4 py-2 border-b border-[var(--line)] flex flex-col gap-2">
-                    <div className="tabs w-full" style={{ flexWrap: 'wrap', overflow: 'visible', rowGap: 4 }}>
+                <div className="crm-view-controls">
+                    <div className="crm-view-row">
+                    <div className="tabs crm-view-tabs" aria-label="Lead views">
                         <button
                             onClick={() => setFilter('READY')}
+                            aria-pressed={filter === 'READY'}
                             title="Qualified, mailbox proven to exist, not suppressed, not already reached. This is your send list."
                             className={cn("tab tab-signal", filter === 'READY' && "tab-active")}
                         >
                             <ShieldCheck className="w-3.5 h-3.5" /> Ready <span className="num">{readyCount}</span>
                         </button>
-                        <button onClick={() => setFilter('LINKEDIN')} title="Qualified leads with a LinkedIn profile who have not been contacted or suppressed. Email verification is not required for manual DMs." className={cn('tab', filter === 'LINKEDIN' && 'tab-active')}>
+                        <button onClick={() => setFilter('LINKEDIN')} aria-pressed={filter === 'LINKEDIN'} title="Qualified leads with a LinkedIn profile who have not been contacted or suppressed. Email verification is not required for manual DMs." className={cn('tab', filter === 'LINKEDIN' && 'tab-active')}>
                             LinkedIn prospects <span className="num">{linkedinProspectCount}</span>
                         </button>
-                        <div className="tab-sep" />
-                        <button onClick={() => setFilter('ALL')} className={cn("tab", filter === 'ALL' && "tab-active")}>All</button>
-                        <div className="tab-sep" />
-                        <button onClick={() => setFilter('UK')} className={cn("tab", filter === 'UK' && "tab-active")}>UK inbox</button>
-                        <button onClick={() => setFilter('UK_QUALIFIED')} className={cn("tab", filter === 'UK_QUALIFIED' && "tab-active")}>UK qualified</button>
-                        <div className="tab-sep" />
-                        <button onClick={() => setFilter('NA')} className={cn("tab", filter === 'NA' && "tab-active")}>NA inbox</button>
-                        <button onClick={() => setFilter('NA_QUALIFIED')} className={cn("tab", filter === 'NA_QUALIFIED' && "tab-active")}>NA qualified</button>
-                        <div className="tab-sep" />
-                        <button onClick={() => setFilter('HUNTER')} title="Already managed in Case Study Hunter; kept out of new outreach lists" className={cn("tab", filter === 'HUNTER' && "tab-active")}>In Hunter <span className="num">{leads.filter((lead) => lead.in_hunter).length}</span></button>
-                        <button onClick={() => setFilter('CONTACTED')} title="Contacted leads and leads reserved in Hunter" className={cn("tab", filter === 'CONTACTED' && "tab-active")}>Contacted</button>
-                        <button onClick={() => setFilter('NOT_QUALIFIED')} className={cn("tab", filter === 'NOT_QUALIFIED' && "tab-active")}>Not qualified</button>
+                        <button onClick={() => setFilter('ALL')} aria-pressed={filter === 'ALL'} className={cn("tab", filter === 'ALL' && "tab-active")}>All</button>
+                        <button onClick={() => setFilter('HUNTER')} aria-pressed={filter === 'HUNTER'} title="Already managed in Case Study Hunter; kept out of new outreach lists" className={cn("tab", filter === 'HUNTER' && "tab-active")}>In Hunter <span className="num">{leads.filter((lead) => lead.in_hunter).length}</span></button>
+                        <button onClick={() => setFilter('CONTACTED')} aria-pressed={filter === 'CONTACTED'} title="Contacted leads and leads reserved in Hunter" className={cn("tab", filter === 'CONTACTED' && "tab-active")}>Contacted</button>
+                        <button onClick={() => setFilter('NOT_QUALIFIED')} aria-pressed={filter === 'NOT_QUALIFIED'} className={cn("tab", filter === 'NOT_QUALIFIED' && "tab-active")}>Not qualified</button>
                         {unconfirmedIds.size > 0 && (
-                            <button onClick={() => setFilter('UNCONFIRMED')} title="Marked contacted, but the last Gmail scan found no sent mail to them" className={cn("tab", filter === 'UNCONFIRMED' && "tab-active")}>
+                            <button onClick={() => setFilter('UNCONFIRMED')} aria-pressed={filter === 'UNCONFIRMED'} title="Marked contacted, but the last Gmail scan found no sent mail to them" className={cn("tab", filter === 'UNCONFIRMED' && "tab-active")}>
                                 <AlertCircle className="w-3.5 h-3.5" /> Unconfirmed <span className="num">{unconfirmedIds.size}</span>
                             </button>
                         )}
                     </div>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label className="crm-regional-view">
+                        <span className="sr-only">Regional lead view</span>
+                        <select className="field" value={['UK', 'UK_QUALIFIED', 'NA', 'NA_QUALIFIED'].includes(filter) ? filter : ''} onChange={event => setFilter(event.target.value || 'ALL')}>
+                            <option value="">Regional views</option>
+                            <option value="UK">UK inbox</option>
+                            <option value="UK_QUALIFIED">UK qualified</option>
+                            <option value="NA">NA inbox</option>
+                            <option value="NA_QUALIFIED">NA qualified</option>
+                        </select>
+                    </label>
+                    </div>
+                    <div className="crm-filter-row">
+                        <label className="crm-search">
+                            <Search className="w-4 h-4" aria-hidden />
+                            <span className="sr-only">Search leads</span>
+                            <input className="field" type="search" placeholder="Search name, company or email…" value={leadSearch} onChange={event => { setLeadSearch(event.target.value); setCurrentPage(1); }} />
+                        </label>
+                        <div className="crm-filter-options">
+                            <select aria-label="Email status" value={emailFilter} onChange={e => setEmailFilter(e.target.value)} className="field cursor-pointer">
+                                <option value="ALL">Any email status</option>
+                                <option value="PROVEN_VALID">Valid — safe to send</option>
+                                <option value="UNPROVEN_VALID">Valid label, no proof</option>
+                                <option value="VALID">Valid — any</option>
+                                <option value="RISKY">Risky</option>
+                                <option value="INVALID">Invalid</option>
+                                <option value="UNKNOWN">Unknown</option>
+                                <option value="UNVERIFIED">Unverified</option>
+                                <option value="GUESSED">Guessed</option>
+                            </select>
+                            <select aria-label="Hook status" value={hookFilter} onChange={e => setHookFilter(e.target.value)} className="field cursor-pointer">
+                                <option value="ALL">Any hook</option>
+                                <option value="HAS_HOOK">Has hook</option>
+                                <option value="NO_HOOK">Missing hook</option>
+                            </select>
+                        </div>
+                        <span className="crm-result-count num" role="status">{loading ? 'Loading leads…' : `${filteredLeads.length.toLocaleString()} leads shown`}</span>
+                    </div>
+                    <div className="crm-outreach-row">
                         <div className="flex flex-wrap items-center gap-2">
                             <button
                                 className="btn btn-outline"
@@ -1365,25 +1402,6 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                             {onOpenCaseStudy && <button className="btn btn-ghost" onClick={onOpenCaseStudy}>Open CRM outreach</button>}
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-2">
-                            <select value={emailFilter} onChange={e => setEmailFilter(e.target.value)} className="field cursor-pointer">
-                                <option value="ALL">Any email status</option>
-                                <option value="PROVEN_VALID">Valid — safe to send</option>
-                                <option value="UNPROVEN_VALID">Valid label, no proof</option>
-                                <option value="VALID">Valid — any</option>
-                                <option value="RISKY">Risky</option>
-                                <option value="INVALID">Invalid</option>
-                                <option value="UNKNOWN">Unknown</option>
-                                <option value="UNVERIFIED">Unverified</option>
-                                <option value="GUESSED">Guessed</option>
-                            </select>
-                            <select value={hookFilter} onChange={e => setHookFilter(e.target.value)} className="field cursor-pointer">
-                                <option value="ALL">Any hook</option>
-                                <option value="HAS_HOOK">Has hook</option>
-                                <option value="NO_HOOK">Missing hook</option>
-                            </select>
-                            <span className="num text-[12px] text-[var(--text-faint)] pl-1">{filteredLeads.length.toLocaleString()} shown</span>
-                        </div>
                     </div>
                 </div>
 
@@ -1467,13 +1485,14 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                 )}
 
                 {/* Table Area */}
-                <div className="flex-1 overflow-auto">
-                    <table className="w-full min-w-[1400px] text-sm text-left">
+                <div className="crm-table-scroll" tabIndex={0} aria-label="Lead records, scroll horizontally for all columns">
+                    <table className="crm-leads-table w-full min-w-[1400px] text-sm text-left">
                         <thead className="tbl-head sticky top-0 z-10">
                             <tr>
                                 <th className="px-4 py-2.5 w-10 text-center">
                                     <input
                                         type="checkbox"
+                                        aria-label="Select all filtered leads"
                                         className="rounded-sm border-[var(--line-strong)] bg-[var(--surface-3)] checked:bg-[var(--signal)] focus:ring-[var(--signal)]"
                                         checked={filteredLeads.length > 0 && selectedIds.size === filteredLeads.length}
                                         onChange={toggleSelectAll}
@@ -1671,7 +1690,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
 
                 {/* Pagination Controls */}
                 {filteredLeads.length > 0 && (
-                    <div className="px-4 py-2.5 border-t border-[var(--line)] flex items-center justify-between rail">
+                    <div className="crm-pagination rail">
                         <div className="text-xs text-[var(--text-faint)]">
                             <span className="num text-[var(--text-dim)]">{((currentPage - 1) * itemsPerPage) + 1}–{Math.min(currentPage * itemsPerPage, filteredLeads.length)}</span>
                             {' of '}

@@ -69,6 +69,7 @@ async function tick(){
   if(fs.existsSync(path.join(data,'worker-supervisor.stop'))){fs.unlinkSync(path.join(data,'worker-supervisor.stop'));await shutdown();return;}
   await pool.query('UPDATE compel_worker_config SET supervisor_seen_at=NOW() WHERE id=1');
   await importLegacyQueue();
+  await core.expireLoginRequests(pool);
   const selected=await core.selectedAccounts(pool);
   // Once consumed, a sign-in request is no longer in the database. Let an
   // already running manual browser finish even when its account isn't selected.
@@ -78,25 +79,29 @@ async function tick(){
   for(const a of requested)desired.set(a.id,a);
   for(const [id,entry]of children){
    const account=desired.get(id);
-   if(entry.child&&(!account||entry.version!==String(account.changed_at)||account.logout_requested_at&&!entry.logout||account.login_requested_at&&!entry.manual))await stop(entry);
+    if(entry.child&&(!account||entry.version!==(account.control_version||String(account.changed_at))||account.logout_requested_at&&!entry.logout||account.login_requested_at&&!entry.manual))await stop(entry);
   }
   for(const account of desired.values()){
    if(stopping)return;
-   const version=String(account.changed_at),logout=!!account.logout_requested_at,manual=!logout&&!!account.login_requested_at;
+   const version=account.control_version||String(account.changed_at),logout=!!account.logout_requested_at,manual=!logout&&!!account.login_requested_at;
    const entry=children.get(account.id)||{child:null,blocked:false,lastStart:0,version};
    if(entry.child)continue;
+   if(!manual&&!logout){
+    const saved=(await pool.query('SELECT status FROM compel_worker_sessions WHERE account_id=$1',[account.id])).rows[0]?.status;
+    if(saved?.manualResumeRequired || saved?.status==='paused'&&/^LinkedIn (?:login|required|requires)/i.test(saved.reason||'')){
+     entry.blocked=true;entry.version=version;children.set(account.id,entry);continue;
+    }
+   }
    if(!manual&&entry.blocked&&entry.version===version)continue;
-   if(!manual&&Date.now()-entry.lastStart<60000&&(!logout||entry.logout&&entry.version===version))continue;
+   if(!manual&&entry.version===version&&Date.now()-entry.lastStart<60000&&(!logout||entry.logout))continue;
    const child=fork(path.join(root,'worker.cjs'),['--account',account.id,...(logout?['--logout']:manual?['--login','--check-login']:[])],{cwd:root,windowsHide:true,stdio:['ignore','inherit','inherit','ipc']});
    Object.assign(entry,{child,version,manual,logout,lastStart:Date.now(),blocked:false});children.set(account.id,entry);
    console.log(`[Accounts] Started ${account.label}${logout?' for sign-out':manual?' for sign-in':''}.`);
    child.once('exit',async code=>{
     entry.child=null;
-    // Successful sign-in should proceed to normal work on the next settings
-    // check; the crash backoff is for failures, not completed login checks.
-    if(entry.manual&&code===0)entry.lastStart=0;
     if(stopping)return;
     try{
+     if(!entry.manual&&!entry.logout)await core.pauseProcessing(pool,account.id,'Worker stopped. Start processing explicitly to continue.',false,null,version);
      const row=(await pool.query('SELECT status FROM compel_worker_sessions WHERE account_id=$1',[account.id])).rows[0];
      entry.blocked=row?.status?.status==='paused';
     }catch{ /* retry a disconnected database after backoff */ }
@@ -115,6 +120,7 @@ async function main(){
  let usage;try{usage=JSON.parse(fs.readFileSync(path.join(data,'worker-limits.json'),'utf8'));}catch{}
  let accounts=[];try{accounts=JSON.parse(process.env.LINKEDIN_ACCOUNTS||'[]');}catch{throw new Error('Invalid LINKEDIN_ACCOUNTS configuration.');}
  await core.importAccounts(pool,accounts,usage);
+ await core.resetProcessing(pool);
  await tick();timer=setInterval(tick,10000);
  importLegacyResults().catch(error=>console.error('[Accounts] History remains on disk:',error.message));
  console.log('[Accounts] Watching dashboard account settings. Queue and results are shared with the hosted dashboard.');

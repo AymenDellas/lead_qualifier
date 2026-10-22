@@ -7,6 +7,7 @@ import {
 import {
   clientResult,
   createAgentRouterCompletion,
+  retryClientOutput,
 } from '../../src/lib/copy-studio/server/agentrouter-client';
 import { startAgentRouterRelay } from '../../src/lib/copy-studio/server/agentrouter-relay';
 import { createServer } from 'node:http';
@@ -135,6 +136,47 @@ test('a completed supported-client response is required before accepting text', 
       ),
     /timed out/,
   );
+});
+
+test('an unreadable or incomplete client envelope is retried once and only a complete result is accepted', async () => {
+  const complete = JSON.stringify([{type:'result', is_error:false, result:'{"offerName":"Coaching & Mentoring"}'}]);
+  for (const broken of ['', '[{"type":"result","is_error":false,"result":"cut off', '[]']) {
+    let calls = 0;
+    const result = await retryClientOutput(async () => clientResult(++calls === 1 ? broken : complete), new AbortController().signal);
+    assert.equal(result, '{"offerName":"Coaching & Mentoring"}');
+    assert.equal(calls, 2);
+  }
+  let calls = 0;
+  await assert.rejects(retryClientOutput(async () => {calls++; return clientResult('truncated');}, new AbortController().signal), /unreadable response/);
+  assert.equal(calls, 2, 'Repeated bad output must stop after one retry.');
+});
+
+test('client recovery does not retry provider refusals, tool requests, or cancelled operations', async () => {
+  for (const message of ['Invalid API key', 'quota exhausted', 'unauthorized client detected', 'aliyun_waf_aa', 'rate limit 429']) {
+    let calls = 0;
+    await assert.rejects(retryClientOutput(async () => {calls++; return clientResult(JSON.stringify([{type:'result',is_error:true,error:{message}}]));}, new AbortController().signal));
+    assert.equal(calls, 1, message);
+  }
+  let calls = 0;
+  const controller = new AbortController();
+  await assert.rejects(retryClientOutput(async () => {calls++; controller.abort(); return clientResult('broken');}, controller.signal), {name:'AbortError'});
+  assert.equal(calls, 1);
+  const tools = JSON.stringify([{type:'result', is_error:false, result:'Do not accept', stats:{tools:{totalCalls:1}}}]);
+  calls = 0;
+  await assert.rejects(retryClientOutput(async () => {calls++; return clientResult(tools);}, new AbortController().signal), /unsupported tool/);
+  assert.equal(calls, 1);
+});
+
+test('hosted HTML security challenges and endpoint authentication failures are classified without exposing their contents', () => {
+  const failure = (message: string) => JSON.stringify([{type: 'result', is_error: true, error: {message}}]);
+  assert.throws(() => clientResult(failure('[API Error: Streaming request received a non-SSE response (HTTP 200, Content-Type: text/html). Body prefix: <!doctype html> <meta name="aliyun_waf_aa" content="private-challenge-token">]')), error => {
+    assert.match((error as Error).message, /security gateway blocked the hosted request/);
+    assert.doesNotMatch((error as Error).message, /private-challenge-token|rejected the credentials/);
+    return true;
+  });
+  assert.throws(() => clientResult(failure('[API Error: non-SSE response (HTTP 200, Content-Type: text/html)]')), /HTML page instead of AI data/);
+  assert.throws(() => clientResult(failure('[API Error: 401 status code (no body)]')), /could not authenticate.*configured AgentRouter endpoint/);
+  assert.throws(() => clientResult(failure('Invalid API key')), /rejected the credentials/);
 });
 
 test('private relay preserves genuine client identity and normalizes only provider bookkeeping', async () => {

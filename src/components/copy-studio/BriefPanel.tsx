@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import {
   fieldLabels,
+  MAX_PROOF_CHARACTERS,
   requiredKeys,
   type BriefKey,
   type Project,
@@ -22,6 +23,7 @@ import {
 } from '@/lib/copy-studio/shared/contracts';
 import { ReferencePanel } from './ReferencePanel';
 import { templates, formulas } from '@/lib/copy-studio/shared/templates';
+import { recommendedFramework, resolveFramework } from '@/lib/copy-studio/shared/persuasion';
 
 const placeholders: Partial<Record<BriefKey, string>> = {
   offerName: 'e.g. The Clear Offer Sprint',
@@ -43,7 +45,7 @@ const placeholders: Partial<Record<BriefKey, string>> = {
   customerLanguage: 'Phrases you hear in customer conversations or research.',
   nextStep: 'Call length, delivery method, or what they can expect after taking action.',
 };
-const essential: BriefKey[] = ['offerName', 'description', 'audience', 'problem', 'outcome'];
+const essential: readonly BriefKey[] = requiredKeys;
 const substance: BriefKey[] = ['mechanism', 'deliverables', 'coachBio', 'proof', 'objections'];
 const details: BriefKey[] = [
   'price',
@@ -66,6 +68,7 @@ export function BriefPanel({
   onFormula,
   onImport,
   onGenerate,
+  onReviewEvidence,
   onOnboarding,
   onContext,
   onboardingNote,
@@ -82,6 +85,7 @@ export function BriefPanel({
   onFormula: (value: FormulaId) => void;
   onImport: () => void;
   onGenerate: () => void;
+  onReviewEvidence: () => void;
   onOnboarding: () => void;
   onContext: (value: CopyContext) => void;
   onboardingNote: string;
@@ -96,7 +100,7 @@ export function BriefPanel({
     const props = {
       id: `brief-${key}`,
       value: project.brief[key] ?? '',
-      maxLength: 6000,
+      maxLength: key === 'proof' ? MAX_PROOF_CHARACTERS : 6000,
       onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
         onBrief(key, e.target.value),
       placeholder: key === 'cta' ? templates[project.template].action : placeholders[key],
@@ -127,7 +131,10 @@ export function BriefPanel({
         )}
         {key === 'proof' && (
           <small className="field-hint">
-            No proof yet? Leave this empty. We’ll omit the proof block.
+            Keep complete testimonials with their attributions. The strongest accounts are featured and the rest stay under Show all testimonials. No proof yet? Leave this empty.
+            {!project.brief.proof.trim() && project.source && project.referenceMode !== 'off' && project.context?.mode !== 'new' && <>
+              {' '}<button type="button" className="text-button" disabled={disabled} onClick={onReviewEvidence}>Check page for client evidence</button>
+            </>}
           </small>
         )}
         {key === 'coachBio' && (
@@ -147,20 +154,28 @@ export function BriefPanel({
     );
   };
   return (
-    <section className="brief-panel" aria-labelledby="brief-heading">
+    <section className="brief-panel" id="copy-brief" aria-labelledby="brief-heading">
       <div className="panel-heading">
-        <div className="panel-number">01</div>
+        <div className="panel-number" aria-hidden="true"><FileText size={16} /></div>
         <div>
           <h2 id="brief-heading">Shape the brief</h2>
-          <p>Good copy starts with a clear offer.</p>
+          <p>Offer details, source material, and writing preferences.</p>
         </div>
       </div>
-      <button className="import-trigger onboarding-trigger" onClick={onOnboarding} disabled={disabled}>
-        <span className="import-icon"><UserRound size={18} /></span>
-        <span><strong>{project.onboarding ? project.onboarding.clientName || project.onboarding.projectName : 'Choose client onboarding'}</strong>
-          <small>{project.onboarding ? project.onboarding.projectName : 'Find the client and review their answers'}</small></span>
+      <div className="prefill-options" role="group" aria-label="Prefill the five essentials">
+      <p className="eyebrow">PREFILL THE FIVE ESSENTIALS</p>
+      <button className="import-trigger page-prefill-trigger" onClick={onImport} disabled={disabled}>
+        <span className="import-icon"><Link2 size={18} /></span>
+        <span><strong>Prefill from page</strong><small>Review facts from the page. Keep its full copy as your reference.</small></span>
         <ArrowRight size={17} />
       </button>
+      <button className="import-trigger onboarding-trigger" onClick={onOnboarding} disabled={disabled}>
+        <span className="import-icon"><UserRound size={18} /></span>
+        <span><strong>Prefill from onboarding</strong>
+          <small>{project.onboarding ? `${project.onboarding.clientName} · ${project.onboarding.projectName}` : 'Choose a client and review their saved answers.'}</small></span>
+        <ArrowRight size={17} />
+      </button>
+      </div>
       {onboardingNote && <p className="onboarding-status" role="status">{onboardingNote}</p>}
       {project.onboarding && <button className="text-button small onboarding-unlink" disabled={disabled} onClick={onDetachOnboarding}>Unlink client</button>}
       <fieldset disabled={disabled} className="offer-scope">
@@ -187,16 +202,6 @@ export function BriefPanel({
           </div>
         </details>
       </fieldset>
-      <button className="import-trigger" onClick={onImport} disabled={disabled}>
-        <span className="import-icon">
-          <Link2 size={18} />
-        </span>
-        <span>
-          <strong>Start with an existing page</strong>
-          <small>Add the original copy for its voice and context. Your brief and changes guide the rewrite.</small>
-        </span>
-        <ArrowRight size={17} />
-      </button>
       {project.source && (
         <ReferencePanel source={project.source} mode={project.referenceMode || 'preserve_voice'} disabled={disabled} onMode={onReferenceMode} onChange={onImport} />
       )}
@@ -264,7 +269,7 @@ export function BriefPanel({
           </summary>
           <div className="accordion-content">
             <div className="field">
-              <label htmlFor="formula">Persuasion framework</label>
+              <label htmlFor="formula">Page persuasion framework</label>
               <select
                 id="formula"
                 value={project.formula}
@@ -272,11 +277,12 @@ export function BriefPanel({
               >
                 {Object.entries(formulas).map(([id, formula]) => (
                   <option key={id} value={id}>
-                    {formula.name}
+                    {id === 'recommended' ? `Recommended: ${recommendedFramework(project.template, project.brief).name}` : formula.name}
                   </option>
                 ))}
               </select>
-              <small className="field-hint">{formulas[project.formula].description}</small>
+              <small className="field-hint">{resolveFramework(project).description} {project.formula === 'recommended' && recommendedFramework(project.template, project.brief).reason}</small>
+              <small className="field-hint">Shapes the full page. Section rewrite angles adjust the framing within that flow.</small>
             </div>
           </div>
         </details>

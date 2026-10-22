@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_OFFER, DEFAULT_SCOPE_EXCLUSIONS, blankOpportunity, buildProject, normalizeOnboarding, onboardingBlockers, onboardingFormComplete, scopeDependencies } from '../../src/lib/business';
+import { DEFAULT_OFFER, DEFAULT_SCOPE_EXCLUSIONS, REQUIRED_ONBOARDING_FORM_FIELDS, blankOpportunity, buildProject, normalizeOnboarding, onboardingBlockers, onboardingFormComplete, scopeDependencies } from '../../src/lib/business';
+import { OFFER_ESSENTIAL_KEYS, OFFER_ESSENTIAL_LABELS } from '../../src/lib/offer-essentials';
 import { validateProject } from '../../src/lib/business-validation';
 import { agreementPdf } from '../../src/lib/agreement-pdf';
 
@@ -46,7 +47,7 @@ test('untouched legacy defaults upgrade, while custom and confirmed scope and si
 test('new business answers are optional, validated, saved by normalization and backward compatible', () => {
     const saved = project();
     const form = saved.onboarding!.form;
-    Object.assign(form, { status: 'COMPLETE', offer: 'Private coaching', audience: 'Managers', customerProblem: 'Hard decisions', desiredOutcome: 'Clear decisions', caseStudyConsent: true, testimonialCommitment: true });
+    Object.assign(form, { status: 'COMPLETE', offerName: 'Private coaching', offer: 'One-to-one coaching sessions', audience: 'Managers', customerProblem: 'Hard decisions', desiredOutcome: 'Clear decisions', caseStudyConsent: true, testimonialCommitment: true });
     assert.equal(onboardingFormComplete(saved.onboarding!), true);
     form.differentiation = 'We review your actual decisions.';
     form.unsuitableClients = 'Clients wanting us to manage their team.';
@@ -68,7 +69,7 @@ test('client blockers retain the same start gate with client-facing actions and 
     const client = onboardingBlockers(data, 'client');
     assert.deepEqual(client.map(item => item.key), internal.map(item => item.key));
     assert.doesNotMatch(JSON.stringify(client), /manual override|Collect the structured|Record the full payment|The client needs/i);
-    assert.match(client.find(item => item.key === 'form')!.detail, /Complete the business questions/);
+    assert.match(client.find(item => item.key === 'form')!.detail, /prefilled summary/);
     data.agreement.status = 'SIGNED_CLIENT';
     assert.equal(onboardingBlockers(data, 'client').find(item => item.key === 'agreement')!.label, 'Waiting for Compel to sign');
     data.overrides = ['agreement'];
@@ -101,4 +102,35 @@ test('the agreement uses the client-visible included scope instead of obsolete d
     const pdf = await agreementPdf(data).text();
     assert.match(pdf, /Landing page and booking integration only/);
     assert.doesNotMatch(pdf, /Obsolete package with paid advertising/);
+});
+
+test('onboarding requires the exact five Copy Studio essentials with matching labels and useful answers', () => {
+    assert.deepEqual(REQUIRED_ONBOARDING_FORM_FIELDS.map(([, label]) => label), OFFER_ESSENTIAL_KEYS.map(key => OFFER_ESSENTIAL_LABELS[key]));
+    assert.equal(REQUIRED_ONBOARDING_FORM_FIELDS.length, 5);
+    const saved = project();
+    Object.assign(saved.onboarding!.form, { status: 'COMPLETE', offerName: 'Decision Coaching', offer: 'Six coaching sessions', audience: 'New managers', customerProblem: 'Delayed decisions', desiredOutcome: 'Clear next steps', caseStudyConsent: true, testimonialCommitment: true });
+    assert.doesNotThrow(() => validateProject(saved));
+    for (const [key] of REQUIRED_ONBOARDING_FORM_FIELDS) {
+        for (const answer of ['', '  ', 'ab']) {
+            const incomplete = structuredClone(saved);
+            incomplete.onboarding!.form[key] = answer;
+            assert.equal(onboardingFormComplete(incomplete.onboarding!), false);
+            assert.throws(() => validateProject(incomplete), /required onboarding/);
+            incomplete.onboarding!.form.status = 'IN_PROGRESS';
+            assert.doesNotThrow(() => validateProject(incomplete));
+        }
+    }
+    const long = structuredClone(saved);
+    long.onboarding!.form.offerName = 'a'.repeat(6001);
+    assert.throws(() => validateProject(long), /6000/);
+});
+
+test('legacy onboarding upgrades only a missing name without rewriting an explicitly blank new answer', () => {
+    const saved = project();
+    delete (saved.onboarding!.form as { offerName?: string }).offerName;
+    saved.onboarding!.form.offer = 'Previous Program\nSix coaching sessions';
+    assert.equal(normalizeOnboarding(saved).form.offerName, 'Previous Program');
+    assert.equal(normalizeOnboarding(saved, { currentOffer: saved.onboarding!.form.offer }).form.offerName, '', 'Discarded unsaved prospect data must not become an offer-name answer');
+    saved.onboarding!.form.offerName = '';
+    assert.equal(normalizeOnboarding(saved).form.offerName, '');
 });

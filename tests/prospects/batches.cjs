@@ -30,7 +30,7 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
     const schema='compel_batch_test_'+randomUUID().replaceAll('-','');
     assert.match(schema,/^compel_batch_test_[a-f0-9]{32}$/);
     const raw=new Pool({connectionString:process.env.DATABASE_URL,max:4,connectionTimeoutMillis:10000,ssl:{rejectUnauthorized:false}});
-    const qualify=sql=>sql.replace(/\b(leads|compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_sessions|compel_worker_jobs)\b/g,`"${schema}".$1`);
+    const qualify=sql=>sql.replace(/\b(leads|compel_worker_events|compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_sessions|compel_worker_jobs)\b/g,`"${schema}".$1`);
     // This queue test has no Hunter membership table; never consult real public tables.
     const query=(client,sql,values)=>sql.includes("to_regclass('public.case_study_prospects')")?Promise.resolve({rows:[{table_name:null,lead_table:null}],rowCount:1}):client.query(qualify(sql),values);
     const pool={query:(sql,values)=>query(raw,sql,values),connect:async()=>{

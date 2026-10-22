@@ -4,6 +4,7 @@ import { loadBusinessAction } from '@/app/actions/business-actions';
 import type { BusinessSnapshot, BusinessView } from '@/lib/business';
 import TodayWorkspace from './TodayWorkspace';
 import OnboardingWorkspace from './OnboardingWorkspace';
+import ProjectsWorkspace from './ProjectsWorkspace';
 import type { RunAction } from './BusinessUi';
 
 export default function BusinessWorkspace({
@@ -100,6 +101,7 @@ export default function BusinessWorkspace({
                             focusId={onboardingFocus}
                         />
                     )}
+                    {view === 'projects' && <ProjectsWorkspace snapshot={snapshot} busy={busy || stale} run={run} refresh={refresh} onOnboarding={openOnboarding} />}
                 </>
             )}
         </div>

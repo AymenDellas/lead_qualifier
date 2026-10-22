@@ -29,7 +29,7 @@ test('account counts, duplicate identities, limits and passwords are validated',
  assert.throws(()=>core.validateSettings({...body,activeCount:2}));
  assert.throws(()=>core.validateSettings({...body,accounts:[account,{...account,email:'FIRST@EXAMPLE.TEST'}]}));
  assert.throws(()=>core.validateSettings({...body,accounts:[{...account,dailyLimit:401}]}));
- assert.throws(()=>core.validateSettings({...body,accounts:[{...account,password:''}]}));
+ assert.equal(core.validateSettings({...body,accounts:[{...account,password:''}]}).accounts[0].password,undefined,'account settings do not collect or retain passwords');
  assert.throws(()=>core.validateSettings({...body,accounts:[{...account,id:'../../account-0'}]}));
  assert.equal(core.validateSettings({...body,activeCount:0}).activeCount,0);
 });

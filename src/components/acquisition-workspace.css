@@ -1,0 +1,149 @@
+/* Acquisition workspaces share the dashboard's controls and color roles.
+   Keep tables locally scrollable and their command menus outside that clipping. */
+.dashboard-app .acquisition-workspace { min-width: 0; font-size: 14px; }
+.dashboard-app .acquisition-workspace .panel { box-shadow: none; }
+.dashboard-app .acquisition-workspace .panel-head { padding: 18px 20px; font-size: 15px; }
+.dashboard-app .acquisition-workspace .panel-head h2 { font-weight: 600; font-size: 15px; letter-spacing: -.02em; }
+.dashboard-app .acquisition-workspace .panel-head .hint { font-size: 12px; }
+.dashboard-app .acquisition-workspace .panel-body { padding: 22px; }
+.dashboard-app .acquisition-workspace .panel-note { font-size: 12px; line-height: 1.65; padding: 13px 20px; }
+.dashboard-app .acquisition-workspace .field-label { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 9px; }
+.dashboard-app .acquisition-workspace .field-hint { font-size: 12px; line-height: 1.65; margin-top: 9px; }
+.dashboard-app .acquisition-workspace .label-micro { font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none; }
+.dashboard-app .acquisition-workspace .badge { font-size: 12px; letter-spacing: 0; }
+.dashboard-app .acquisition-workspace .text-xs,
+.dashboard-app .acquisition-workspace [class*="text-[11"],
+.dashboard-app .acquisition-workspace [class*="text-[10"] { font-size: 12px !important; }
+.dashboard-app .acquisition-workspace .mark { font-size: 12px; letter-spacing: 0; }
+.dashboard-app .acquisition-workspace .field { min-height: 38px; font-size: 13px; }
+.dashboard-app .acquisition-intro { color: var(--text-dim); font-size: 14px; line-height: 1.7; max-width: 66ch; }
+
+.dashboard-app .crm-workspace { height: calc(100dvh - 128px); min-height: 690px; display: flex; flex-direction: column; }
+.dashboard-app .crm-database-panel { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: visible; }
+.dashboard-app .crm-command-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 22px; padding: 22px 24px; border-bottom: 1px solid var(--line); }
+.dashboard-app .crm-summary { flex: 0 0 auto; }
+.dashboard-app .crm-summary-values { display: flex; gap: 0; align-items: stretch; }
+.dashboard-app .crm-summary .stat { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 0 24px; border-right: 1px solid var(--line); }
+.dashboard-app .crm-summary .stat:first-child { padding-left: 0; }
+.dashboard-app .crm-summary .stat:last-child { border-right: 0; padding-right: 0; }
+.dashboard-app .crm-summary .stat-value { font-size: 26px; font-weight: 600; letter-spacing: -.045em; color: var(--text); line-height: 1.15; }
+.dashboard-app .crm-summary .label-micro { order: -1; color: var(--text-faint); }
+.dashboard-app .crm-commands { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.dashboard-app .crm-commands .btn { font-size: 12px; min-height: 36px; padding-inline: 12px; }
+.dashboard-app .crm-commands .menu { min-width: 280px; max-width: min(340px, calc(100vw - 48px)); max-height: min(540px, 70dvh); overflow-y: auto; }
+.dashboard-app .crm-view-controls { padding: 0 22px 12px; border-bottom: 1px solid var(--line); }
+.dashboard-app .crm-view-row { display: flex; align-items: center; gap: 18px; }
+.dashboard-app .crm-view-tabs { min-width: 0; flex: 1; align-self: stretch; gap: 18px; }
+.dashboard-app .crm-view-tabs .tab { padding: 16px 0 13px; min-height: 48px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-faint); font-size: 13px; }
+.dashboard-app .crm-view-tabs .tab:hover { color: var(--text); }
+.dashboard-app .crm-view-tabs .tab-active { color: var(--text); border-bottom-color: var(--signal); background: transparent; }
+.dashboard-app .crm-view-tabs .tab .num { font-size: 12px; padding: 2px 5px; background: var(--surface-3); border-radius: 4px; color: var(--text-dim); line-height: 1.1; }
+.dashboard-app .crm-regional-view { flex-shrink: 0; padding: 8px 0; }
+.dashboard-app .crm-regional-view .field { min-width: 150px; min-height: 34px; font-size: 12px; }
+.dashboard-app .crm-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 16px 0 12px; }
+.dashboard-app .crm-search { position: relative; display: flex; flex: 1 1 230px; max-width: 410px; align-items: center; }
+.dashboard-app .crm-search > svg { position: absolute; left: 12px; color: var(--text-faint); pointer-events: none; }
+.dashboard-app .crm-search > input { width: 100%; padding-left: 36px; }
+.dashboard-app .crm-filter-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dashboard-app .crm-filter-options .field { max-width: 210px; }
+.dashboard-app .crm-result-count { margin-left: auto; font-size: 12px; color: var(--text-faint); white-space: nowrap; }
+.dashboard-app .crm-outreach-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.dashboard-app .crm-outreach-row .btn { font-size: 12px; min-height: 34px; }
+.dashboard-app .crm-table-scroll { flex: 1; min-height: 280px; overflow: auto; border-radius: 0; }
+.dashboard-app .crm-table-scroll:focus-visible { outline-offset: -2px; }
+.dashboard-app .crm-leads-table { font-size: 13px; line-height: 1.5; }
+.dashboard-app .crm-leads-table th { height: 42px; padding: 10px 16px; font-size: 12px; text-transform: none; font-weight: 500; letter-spacing: 0; color: var(--text-faint); }
+.dashboard-app .crm-leads-table td { padding: 14px 16px; vertical-align: top; }
+.dashboard-app .crm-leads-table td:nth-child(3) { min-width: 150px; font-size: 14px; font-weight: 500; }
+.dashboard-app .crm-leads-table .tbl-head { background: var(--surface-2); }
+.dashboard-app .crm-leads-table tr { border-bottom-color: var(--line); }
+.dashboard-app .crm-leads-table tbody tr:hover { background: var(--surface-2); }
+.dashboard-app .crm-leads-table input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--signal); }
+.dashboard-app .crm-pagination { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 10px; padding: 13px 20px; border-top: 1px solid var(--line); border-radius: 0 0 var(--radius) var(--radius); }
+
+.dashboard-app .finder-workspace { display: grid; grid-template-columns: minmax(340px, .88fr) minmax(0, 1.12fr); align-items: start; gap: 24px; }
+.dashboard-app .finder-criteria { grid-column: 1; grid-row: 1; }
+.dashboard-app .finder-results { grid-column: 2; grid-row: 1; min-width: 0; }
+.dashboard-app .finder-results .panel-body > .grid { padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+.dashboard-app .finder-results .num.text-\[20px\] { font-size: 26px; font-weight: 600; letter-spacing: -.04em; }
+.dashboard-app .finder-result-row { min-height: 36px; }
+.dashboard-app .finder-results-empty { min-height: 420px; }
+.dashboard-app .finder-empty-content { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; min-height: 340px; padding: 36px; }
+.dashboard-app .finder-empty-content > svg { margin-bottom: 20px; }
+.dashboard-app .finder-empty-content h3 { font-size: 18px; letter-spacing: -.025em; font-weight: 500; margin-bottom: 10px; color: var(--text); }
+.dashboard-app .finder-empty-content > p { max-width: 44ch; font-size: 14px; line-height: 1.75; color: var(--text-dim); }
+.dashboard-app .finder-empty-details { display: flex; flex-direction: column; gap: 10px; padding-top: 24px; margin-top: 24px; border-top: 1px solid var(--line); width: 100%; font-size: 12px; color: var(--text-faint); }
+.dashboard-app .finder-opening-lines { grid-column: 1 / -1; }
+.dashboard-app .finder-optional-summary { display: flex; align-items: center; gap: 10px; padding: 18px 22px; cursor: pointer; list-style: none; font-size: 14px; font-weight: 500; color: var(--text-dim); }
+.dashboard-app .finder-optional-summary::-webkit-details-marker { display: none; }
+.dashboard-app .finder-optional-note { margin-left: auto; color: var(--text-faint); font-size: 12px; font-weight: 400; }
+.dashboard-app .finder-disclosure-indicator { width: 20px; text-align: center; font-size: 18px; line-height: 1; font-weight: 400; }
+.dashboard-app .finder-opening-lines[open] .finder-disclosure-indicator { transform: rotate(45deg); }
+.dashboard-app .finder-optional-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; padding: 18px 22px 0; border-top: 1px solid var(--line); color: var(--text-dim); font-size: 13px; }
+.dashboard-app .finder-opening-lines .panel-body { max-width: 740px; }
+
+.dashboard-app .utility-workspace { display: flex; flex-direction: column; gap: 24px; max-width: 1060px; }
+.dashboard-app .utility-upload { position: relative; padding: 38px 26px; border-style: dashed; background: var(--surface-0); }
+.dashboard-app .utility-upload:hover,
+.dashboard-app .utility-upload:focus-within { border-color: var(--signal-line); background: var(--surface-2); }
+.dashboard-app .utility-upload:focus-within { outline: 2px solid var(--signal); outline-offset: 3px; }
+.dashboard-app .utility-preview-columns { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 12px 22px; border-bottom: 1px solid var(--line); color: var(--text-faint); font-size: 12px; background: var(--surface-2); }
+.dashboard-app .utility-preview-rows > div { min-height: 52px; padding: 14px 22px; }
+.dashboard-app .funnel-workspace { display: flex; flex-direction: column; gap: 24px; max-width: 1250px; }
+.dashboard-app .funnel-scan-input { max-width: 1000px; }
+.dashboard-app .funnel-scan-form { display: flex; align-items: stretch; gap: 12px; }
+.dashboard-app .funnel-scan-form input { min-height: 44px; }
+.dashboard-app .funnel-scan-form .btn { padding-inline: 22px; }
+.dashboard-app .funnel-main-diagnosis { padding-left: 24px; border-left: 2px solid var(--signal-line); }
+.dashboard-app .funnel-workspace details summary { min-height: 52px; }
+.dashboard-app .funnel-workspace .badge { border-radius: 5px; text-transform: none; }
+.dashboard-app .funnel-workspace [class*="text-[13px]"] { font-size: 14px; }
+
+@media (max-width: 1150px) {
+  .dashboard-app .finder-workspace { grid-template-columns: minmax(300px, .95fr) minmax(0, 1.05fr); gap: 18px; }
+  .dashboard-app .crm-command-bar { gap: 20px; }
+  .dashboard-app .crm-commands { flex-basis: 100%; }
+}
+@media (max-width: 860px) {
+  .dashboard-app .finder-workspace { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-app .finder-criteria,
+  .dashboard-app .finder-results { grid-column: 1; grid-row: auto; }
+  .dashboard-app .finder-results-empty { min-height: 300px; }
+  .dashboard-app .finder-empty-content { min-height: 250px; padding: 26px; }
+  .dashboard-app .funnel-main-diagnosis { padding-left: 0; padding-top: 20px; border-left: 0; border-top: 1px solid var(--line); }
+}
+@media (max-width: 600px) {
+  .dashboard-app .acquisition-workspace .panel-head { padding: 16px; }
+  .dashboard-app .acquisition-workspace .panel-head .hint { max-width: 50%; text-align: right; }
+  .dashboard-app .acquisition-workspace .panel-body { padding: 18px 16px; }
+  .dashboard-app .acquisition-workspace .field { min-height: 44px; font-size: 14px; }
+  .dashboard-app .crm-workspace { height: auto; min-height: 0; }
+  .dashboard-app .crm-command-bar { padding: 20px 16px; gap: 20px; }
+  .dashboard-app .crm-summary { width: 100%; }
+  .dashboard-app .crm-summary-values { justify-content: space-between; }
+  .dashboard-app .crm-summary .stat { flex: 1; padding: 0 12px; }
+  .dashboard-app .crm-summary .stat-value { font-size: 25px; }
+  .dashboard-app .crm-summary .label-micro { font-size: 12px; white-space: nowrap; }
+  .dashboard-app .crm-commands { gap: 8px; }
+  .dashboard-app .crm-commands .btn { min-height: 40px; }
+  .dashboard-app .crm-view-controls { padding-inline: 16px; }
+  .dashboard-app .crm-view-row { flex-wrap: wrap; gap: 0; }
+  .dashboard-app .crm-view-tabs { flex-basis: 100%; width: 100%; gap: 20px; }
+  .dashboard-app .crm-regional-view { width: 100%; padding: 12px 0 0; }
+  .dashboard-app .crm-regional-view .field { width: 100%; }
+  .dashboard-app .crm-search { max-width: none; flex-basis: 100%; }
+  .dashboard-app .crm-filter-options { width: 100%; }
+  .dashboard-app .crm-filter-options select { flex: 1; max-width: 100%; min-width: 0; }
+  .dashboard-app .crm-result-count { width: 100%; margin-left: 0; padding: 3px 0; }
+  .dashboard-app .crm-outreach-row .btn { white-space: normal; text-align: left; min-height: 42px; line-height: 1.45; }
+  .dashboard-app .crm-table-scroll { min-height: 320px; max-height: 68dvh; flex: none; }
+  .dashboard-app .crm-pagination { padding-inline: 16px; }
+  .dashboard-app .crm-pagination > div:last-child { width: 100%; justify-content: space-between; }
+  .dashboard-app .finder-optional-summary { padding: 16px; flex-wrap: wrap; }
+  .dashboard-app .finder-optional-note { margin-left: 0; flex: 1; text-align: right; }
+  .dashboard-app .finder-optional-toolbar { padding-inline: 16px; }
+  .dashboard-app .finder-empty-content { padding: 24px 20px; }
+  .dashboard-app .utility-upload { padding: 28px 18px; align-items: flex-start; }
+  .dashboard-app .funnel-scan-form { flex-direction: column; }
+  .dashboard-app .funnel-scan-form .btn { min-height: 44px; }
+}

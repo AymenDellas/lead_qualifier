@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import {
   fingerprint,
+  MAX_PROOF_CHARACTERS,
   projectSchema,
   requiredKeys,
   sectionSchema,
@@ -28,7 +29,8 @@ import {
 } from '@/lib/copy-studio/shared/contracts';
 import { matchOnboardings, type OnboardingBrief } from '@/lib/copy-studio/shared/onboarding';
 import { changeOfferContext } from '@/lib/copy-studio/shared/workspace';
-import { auditDraft, isLegacyDirectCallDraft, validateStructure } from '@/lib/copy-studio/shared/quality';
+import { applyRecoveredEvidence, needsEvidenceReview, recordEvidenceReview } from '@/lib/copy-studio/shared/evidence-recovery';
+import { mergeDraftIssues, isLegacyDirectCallDraft, validateStructure } from '@/lib/copy-studio/shared/quality';
 import { generateCopy, reviseCopy, testConnection, loadOnboardings } from './api';
 import {
   loadProjects,
@@ -42,6 +44,7 @@ import { exportMarkdown } from './export';
 import { BriefPanel } from './BriefPanel';
 import { DraftPanel } from './DraftPanel';
 import { ImportDialog } from './ImportDialog';
+import { EvidenceRecoveryDialog } from './EvidenceRecoveryDialog';
 import { OnboardingDialog } from './OnboardingDialog';
 import './copy-studio.css';
 
@@ -58,6 +61,7 @@ export default function CopyStudio() {
   const [stage, setStage] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [evidenceProject, setEvidenceProject] = useState<Project | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardings, setOnboardings] = useState<OnboardingBrief[]>([]);
   const [onboardingLoading, setOnboardingLoading] = useState(false);
@@ -78,6 +82,8 @@ export default function CopyStudio() {
   const onboardingNote = project.onboarding
     ? linkedOnboarding && linkedOnboarding.revision !== project.onboarding.revision
       ? 'New onboarding answers are available. Open the client brief to review them.'
+      : linkedOnboarding && requiredKeys.some(key => linkedOnboarding.brief[key].trim().length < 3)
+        ? 'This onboarding is missing essential answers. Prefill from page or add the missing details below.'
       : 'Client answers are saved with this project. You can review and edit them anytime.'
     : onboardingMatches.length
       ? `${onboardingMatches.length === 1 ? 'Client onboarding found for this website.' : `${onboardingMatches.length} onboarding projects match this website.`} Choose the client brief above.`
@@ -187,15 +193,18 @@ export default function CopyStudio() {
       inFlight.current = false;
     }
   };
-  const generate = () => {
+  const generate = (captured = project, evidenceReviewed = false) => {
     setAttempted(true);
-    const missing = requiredKeys.find((k) => project.brief[k].trim().length < 3);
+    const missing = requiredKeys.find((k) => captured.brief[k].trim().length < 3);
     if (missing) {
       document.getElementById(`brief-${missing}`)?.focus();
       setError('Complete the five essential fields so the copy can be specific to your offer.');
       return;
     }
-    const captured = project;
+    if (!evidenceReviewed && needsEvidenceReview(captured)) {
+      setEvidenceProject(captured);
+      return;
+    }
     void execute(async (signal) => {
       setStage('Preparing your brief');
       const result = await generateCopy(captured, signal, setStage);
@@ -226,7 +235,7 @@ export default function CopyStudio() {
         return {
           ...p,
           history: snapshot(p),
-          result: { draft, issues: auditDraft(draft, p.brief) },
+          result: { draft, issues: mergeDraftIssues(draft, p.brief, p.result.issues, [sectionId], result.issues) },
         };
       }, captured.id);
       setToast('Section updated. Use Undo to restore the previous version.');
@@ -239,7 +248,7 @@ export default function CopyStudio() {
     });
     if (!parsed.success) {
       setError(
-        'Keep this section within 8 bullets, 800 characters per bullet, and 6,000 characters of body copy.',
+        `Keep this section within 8 bullets, 800 characters per bullet, and ${(section.id === 'proof' ? MAX_PROOF_CHARACTERS : 6000).toLocaleString('en-US')} characters of body copy.`,
       );
       return false;
     }
@@ -261,7 +270,7 @@ export default function CopyStudio() {
     update((p) => ({
       ...p,
       history: snapshot(p),
-      result: { draft, issues: auditDraft(draft, p.brief) },
+      result: { draft, issues: mergeDraftIssues(draft, p.brief, p.result?.issues || [], []) },
     }));
     setToast('Section saved.');
     return true;
@@ -323,7 +332,7 @@ export default function CopyStudio() {
   return (
     <div className="copy-studio">
       <div className="copy-workspace">
-        <div className="copy-project-toolbar panel">
+        <div className="copy-project-toolbar">
           <label className="copy-project-picker">
             <span className="label-micro">Project</span>
             <select
@@ -405,9 +414,7 @@ export default function CopyStudio() {
         <div className="copy-main-content">
           <div className="page-header">
             <div>
-              <div className="eyebrow">
-                <span className="tiny-star">✳</span> YOUR NEXT GREAT LANDING PAGE
-              </div>
+              <div className="project-context">Landing page workspace</div>
               <input
                 className="project-title"
                 aria-label="Project name"
@@ -419,7 +426,7 @@ export default function CopyStudio() {
                   if (!project.name.trim()) update((p) => ({ ...p, name: 'Untitled project' }));
                 }}
               />
-              <p>A thoughtful brief. Persuasive copy. One clear next step.</p>
+              <p>Manage the brief, review your copy, and prepare the design handoff.</p>
             </div>
             <div className="page-header-actions">
               <button className="button secondary" onClick={backup}>
@@ -540,6 +547,7 @@ export default function CopyStudio() {
               </button>
             </section>
           )}
+          <nav className="copy-mobile-sections" aria-label="Copy editor sections"><a href="#copy-brief">Edit brief</a><a href="#copy-draft">Review draft ↓</a></nav>
           <div className="editor-grid">
             <BriefPanel
               project={project}
@@ -548,20 +556,24 @@ export default function CopyStudio() {
               stage={stage}
               onCancel={() => request.current?.abort()}
               onBrief={(key, value) =>
-                update((p) => ({
-                  ...p,
-                  brief: { ...p.brief, [key]: value },
-                  name:
-                    key === 'offerName' &&
-                    (p.name === 'Untitled project' || p.name === p.brief.offerName)
-                      ? value || 'Untitled project'
-                      : p.name,
-                }))
+                update((p) => {
+                  const next = {
+                    ...p,
+                    brief: { ...p.brief, [key]: value },
+                    name:
+                      key === 'offerName' &&
+                      (p.name === 'Untitled project' || p.name === p.brief.offerName)
+                        ? value || 'Untitled project'
+                        : p.name,
+                  };
+                  return key === 'proof' ? recordEvidenceReview(next, value.trim() ? 'included' : 'excluded') : next;
+                })
               }
               onTemplate={(template) => update((p) => ({ ...p, template }))}
               onFormula={(formula) => update((p) => ({ ...p, formula }))}
               onImport={() => setImportOpen(true)}
-              onGenerate={generate}
+              onGenerate={() => generate()}
+              onReviewEvidence={() => setEvidenceProject(project)}
               onOnboarding={() => { setOnboardingOpen(true); refreshOnboardings(); }}
               onboardingNote={onboardingNote}
               onDetachOnboarding={() => update((p) => ({ ...p, onboarding: null }))}
@@ -592,13 +604,6 @@ export default function CopyStudio() {
               onExample={() => add(true)}
             />
           </div>
-          <footer className="workspace-footer">
-            <span>
-              <ShieldIcon />
-              Made for clear offers and considered decisions.
-            </span>
-            <span>Your facts. Your voice. Your final call.</span>
-          </footer>
         </div>
       </div>
       {toast && (
@@ -626,7 +631,7 @@ export default function CopyStudio() {
                 context: { ...copyContextSchema.parse(project.context || {}), mode: 'focused' },
                 name: brief.offerName || source.selectedOffer || 'Untitled project',
               };
-              setProjects((old) => [next, ...old]);
+              setProjects((old) => [recordEvidenceReview(next, keys.includes('proof') ? 'included' : 'excluded'), ...old]);
               select(next.id);
               setImportOpen(false);
               setToast('A separate offer project is ready. Your previous project is saved.');
@@ -635,23 +640,32 @@ export default function CopyStudio() {
             update((p) => {
               const brief = { ...p.brief };
               for (const key of keys) brief[key] = source.extraction.fields[key] || '';
-              return {
+              const next: Project = {
                 ...p,
                 brief,
                 source,
                 referenceMode: p.referenceMode === 'rework_voice' ? 'rework_voice' : 'preserve_voice',
                 name: p.name === 'Untitled project' && brief.offerName ? brief.offerName : p.name,
               };
+              return recordEvidenceReview(next, keys.includes('proof') ? 'included' : 'excluded');
             });
             setImportOpen(false);
             setToast(keys.length ? `${keys.length} reviewed fields added. Full original copy is also attached as a reference.` : 'Original copy attached. Your brief stays unchanged.');
           }}
         />
       )}
+      {evidenceProject && <EvidenceRecoveryDialog project={evidenceProject}
+        onClose={() => setEvidenceProject(null)}
+        onContinue={(source, include) => {
+          const captured = applyRecoveredEvidence(evidenceProject, source, include);
+          update(() => captured, captured.id);
+          setEvidenceProject(null);
+          generate(captured, true);
+        }} />}
       {onboardingOpen && <OnboardingDialog
         project={project} records={onboardings} loading={onboardingLoading} error={onboardingError}
         onRefresh={refreshOnboardings} onClose={() => setOnboardingOpen(false)}
-        onApply={(record, fields, useTemplate, useConstraints) => {
+        onApply={(record, fields, useTemplate, useConstraints, useReference) => {
           update((p) => {
             const brief = { ...p.brief };
             const differentClient = Boolean(p.onboarding && p.onboarding.id !== record.id);
@@ -659,6 +673,7 @@ export default function CopyStudio() {
             for (const key of fields) brief[key] = record.brief[key];
             return {
               ...p, brief,
+              source: useReference && record.source ? record.source : p.source,
               offerBriefs: differentClient && p.offerBriefs ? {
                 current: p.offerBriefs.current && { ...p.offerBriefs.current, coachBio: '' },
                 focused: p.offerBriefs.focused && { ...p.offerBriefs.focused, coachBio: '' },
@@ -693,7 +708,4 @@ function slug(value: string) {
       .replace(/^-|-$/g, '')
       .slice(0, 80) || 'copy-studio'
   );
-}
-function ShieldIcon() {
-  return <Sparkles size={13} />;
 }

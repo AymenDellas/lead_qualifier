@@ -16,23 +16,43 @@ const resultSchema = z.object({
   stats: z.object({ tools: z.object({ totalCalls: z.number() }).optional() }).optional(),
 });
 
+/** Only a broken client envelope is retryable; provider refusals remain actionable errors. */
+export class ClientOutputError extends AppError {}
+
+export async function retryClientOutput(
+  run: () => Promise<string>,
+  signal: AbortSignal,
+): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    signal.throwIfAborted();
+    try {
+      const response = await run();
+      signal.throwIfAborted();
+      return response;
+    } catch (error) {
+      signal.throwIfAborted();
+      if (!(error instanceof ClientOutputError) || attempt >= 1) throw error;
+    }
+  }
+}
+
 export function clientResult(output: string): string {
   let messages: unknown;
   try {
     messages = JSON.parse(output);
   } catch {
-    throw new AppError(
+    throw new ClientOutputError(
       502,
       'The AI client returned an unreadable response. Your previous draft is safe. Please retry.',
     );
   }
   if (!Array.isArray(messages))
-    throw new AppError(502, 'The AI client returned an unexpected response. Please retry.');
+    throw new ClientOutputError(502, 'The AI client returned an unexpected response. Please retry.');
   const parsed = resultSchema.safeParse(
     messages.filter((message) => message?.type === 'result').at(-1),
   );
   if (!parsed.success)
-    throw new AppError(
+    throw new ClientOutputError(
       502,
       'The AI client ended before returning a complete response. Please retry.',
     );
@@ -44,6 +64,16 @@ export function clientResult(output: string): string {
     );
   if (result.is_error) {
     const message = result.error?.message || '';
+    if (/aliyun_waf|cf-chl-|challenge-platform|security challenge/i.test(message))
+      throw new AppError(
+        502,
+        'AgentRouter’s security gateway blocked the hosted request. The API key may still be valid. Ask AgentRouter to allow server-side access from this deployment, or configure a provider that supports it.',
+      );
+    if (/non-SSE response[\s\S]*(?:text\/html|<!doctype)|content.type.{0,10}text\/html/i.test(message))
+      throw new AppError(
+        502,
+        'AgentRouter returned an HTML page instead of AI data. Check its API endpoint and server-access policy. This does not establish that the API key is invalid.',
+      );
     if (/quota|overdue|balance|credits|insufficient/i.test(message))
       throw new AppError(
         502,
@@ -58,6 +88,11 @@ export function clientResult(output: string): string {
       throw new AppError(
         502,
         'AgentRouter rejected the credentials. Check the Copy Studio token in the dashboard environment.',
+      );
+    if (/\b401\b/.test(message))
+      throw new AppError(
+        502,
+        'AgentRouter could not authenticate this request. Check that the deployed API key belongs to the configured AgentRouter endpoint.',
       );
     if (/429|rate.limit/i.test(message))
       throw new AppError(
@@ -117,7 +152,7 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
         '--system-prompt',
         system,
       ];
-      return await new Promise<string>((resolve, reject) => {
+      return await retryClientOutput(() => new Promise<string>((resolve, reject) => {
         const child = spawn(process.execPath, args, {
           cwd: workspace,
           windowsHide: true,
@@ -205,7 +240,7 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
         });
         // Source fields are JSON data. Escape @ to prevent the CLI's file-mention expansion.
         child.stdin.end(prompt.replaceAll('@', '\\u0040'));
-      });
+      }), combinedSignal);
     } finally {
       await closeRelay?.();
       // Remove only the empty directory we created. Never recursively delete unexpected files.

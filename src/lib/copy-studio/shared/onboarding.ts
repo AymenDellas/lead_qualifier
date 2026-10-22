@@ -1,6 +1,7 @@
 import { z } from 'zod/v4';
 import type { ClientProject } from '../../business';
-import { briefSchema, copyContextSchema, onboardingLinkSchema, templateIdSchema } from './contracts';
+import { legacyOfferName } from '../../offer-essentials';
+import { briefSchema, copyContextSchema, onboardingLinkSchema, templateIdSchema, importResultSchema } from './contracts';
 
 export const onboardingBriefSchema = onboardingLinkSchema.extend({
   businessName: z.string(),
@@ -10,6 +11,7 @@ export const onboardingBriefSchema = onboardingLinkSchema.extend({
   template: templateIdSchema,
   brief: briefSchema,
   context: copyContextSchema,
+  source: importResultSchema.nullable().default(null),
 });
 export type OnboardingBrief = z.infer<typeof onboardingBriefSchema>;
 
@@ -19,6 +21,7 @@ export function toOnboardingBrief(project: ClientProject): OnboardingBrief | nul
   const data = project.data.onboarding;
   if (!data) return null;
   const form = data.form;
+    const reviewed = data.journey?.reviewSummaries || {};
   const offer = bounded(form.offer);
   return {
     id: project.id,
@@ -32,21 +35,26 @@ export function toOnboardingBrief(project: ClientProject): OnboardingBrief | nul
     formStatus: form.status,
     template: project.data.funnel === 'VSL' ? 'vsl' : project.data.funnel === 'LEAD_MAGNET' ? 'lead_magnet' : 'direct_to_call',
     brief: briefSchema.parse({
-      // A short first line is a useful editable label, never an invented offer name.
-      offerName: offer.split('\n')[0].length <= 200 ? offer.split('\n')[0] : '',
+      offerName: bounded(form.offerName ?? legacyOfferName(form.offer)),
       description: offer,
       audience: bounded(form.audience),
       problem: bounded(form.customerProblem),
       outcome: bounded(form.desiredOutcome),
-      mechanism: bounded(form.differentiation),
+      mechanism: bounded(reviewed.differentiation ?? form.differentiation),
+      coachBio: bounded(reviewed.coachBio ?? form.coachBio),
+      proof: (form.proof || '').trim().slice(0, 480000),
     }),
+    source: data.journey?.reference || null,
     context: copyContextSchema.parse({
       mustKeep: bounded(form.mustStay), avoid: bounded(form.avoid),
       background: bounded([
-        form.unsuitableClients && `Unsuitable clients (use for audience fit and booking qualification): ${bounded(form.unsuitableClients).slice(0, 2500)}`,
-        form.trafficSources && `Traffic sources: ${form.trafficSources}`,
+        reviewed.proof !== undefined && `Client-reviewed proof: ${reviewed.proof || 'The client removed this detail.'} Treat these corrections as authoritative over conflicting original context; do not rewrite testimonial quotations.`,
+        data.journey?.requestedChanges && `Changes requested by the client: ${data.journey.requestedChanges.slice(0, 2000)}`,
+        (reviewed.unsuitableClients ?? form.unsuitableClients) && `Unsuitable clients (use for audience fit and booking qualification): ${bounded(reviewed.unsuitableClients ?? form.unsuitableClients).slice(0, 2500)}`,
+        (reviewed.trafficSources ?? form.trafficSources) && `Traffic sources: ${reviewed.trafficSources ?? form.trafficSources}`,
         form.qualification && `Buyer qualification: ${form.qualification}`,
         form.importantContext && `Additional client context: ${form.importantContext}`,
+        form.preferences && `Client preferences: ${form.preferences}`,
       ].filter(Boolean).join('\n\n')),
     }),
   };

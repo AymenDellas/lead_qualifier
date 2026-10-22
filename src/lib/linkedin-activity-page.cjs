@@ -1,7 +1,6 @@
 'use strict';
 const cheerio=require('cheerio');
 const {profileUrl}=require('./linkedin-workers.cjs');
-const {extractActivity}=require('./linkedin-activity.cjs');
 function activityRoute(value,person){
  try{const u=new URL(value),prefix=u.pathname.match(/^\/in\/[^/]+\//)?.[0];return u.origin==='https://www.linkedin.com'&&prefix&&profileUrl(u.origin+prefix)===profileUrl(person)&&/^\/in\/[^/]+\/recent-activity\/(?:all|posts)\/?$/.test(u.pathname)?u.href:null;}catch{return null;}
 }
@@ -52,39 +51,13 @@ function extractActivityPage(html,{profileUrl:person,profileUrn='',pageUrl,now=n
  const empty=valid&&/nothing to see for now/i.test($('body').text())&&!cards.length;
  return {activityStatus:status,lastActivityAt:status==='Unknown'?null:selected?.at||null,latestPostText:selected?.text||'',activityEvidence:{version:1,endpoint:'profile_activity_page',profileUrn,profileUrl:person,checkedAt:now,feedElements:cards.length,unresolved,selected,records:records.slice(0,10),reason:!valid?'Activity page did not match the requested profile.':selected?'Visible author-matched activity inspected.':empty?'Activity page reports no visible posts; dated activity remains unconfirmed.':'Activity page did not provide a reliably dated, author-matched post.'}};
 }
-async function checkActivityPage(browser,person,options={}){
- let page;
- try{
-  page=await browser.newPage();await page.setViewport({width:1366,height:768});
-  const deadline=Date.now()+25000;
-  await page.goto(profileUrl(person),{waitUntil:'domcontentloaded',timeout:Math.max(1,deadline-Date.now())});
-  const observedRoute=async()=>page.evaluate(()=>[...document.querySelectorAll('a[href]')].map(a=>a.href).filter(u=>u.includes('/recent-activity/')));
-  try{await page.waitForFunction(()=>[...document.querySelectorAll('a[href]')].some(a=>a.href.includes('/recent-activity/')),{timeout:Math.max(1,Math.min(5000,deadline-Date.now()))});}catch{}
-  const route=(await observedRoute()).map(u=>activityRoute(u,person)).find(Boolean);
-  if(!route)return null;
-  await page.goto(route,{waitUntil:'domcontentloaded',timeout:Math.max(1,deadline-Date.now())});
-  try{await page.waitForFunction(()=>[...document.querySelectorAll('h2')].some(n=>n.textContent.trim()==='Feed post')||document.querySelector('[data-urn*="urn:li:activity"]')||/nothing to see for now/i.test(document.body.innerText),{timeout:Math.max(1,Math.min(5000,deadline-Date.now()))});}catch{}
-  // Keep just visible feed evidence. LinkedIn's full page embeds large scripts,
-  // SVGs and application state that are irrelevant to activity qualification.
-  const html=await page.evaluate(()=>{
-   const modern=[...document.querySelectorAll('h2')].filter(n=>n.textContent.trim()==='Feed post').map(n=>n.parentElement);
-   const cards=modern.length?modern:[...document.querySelectorAll('[data-urn*="urn:li:activity"],.feed-shared-update-v2')].filter(n=>!n.parentElement.closest('[data-urn*="urn:li:activity"],.feed-shared-update-v2'));
-   const content=cards.slice(0,20).map(n=>{const clone=n.cloneNode(true);clone.querySelectorAll('script,style,svg,noscript,template').forEach(v=>v.remove());return clone.outerHTML;}).join('');
-   return '<html><body>'+content+(!cards.length&&/nothing to see for now/i.test(document.body.innerText)?'<p>Nothing to see for now</p>':'')+'</body></html>';
-  });
-  if(Buffer.byteLength(html)>1024*1024)throw new Error('Visible activity evidence exceeded the size limit.');
-  return extractActivityPage(html,{...options,profileUrl:person,pageUrl:page.url()});
- }finally{if(page)await page.close().catch(()=>{});}
+async function checkActivityPage(browser,person,options={}) {
+ // Prefer the account's existing page. Only legacy callers need a temporary tab.
+ const page=options.page||await browser.newPage();
+ try {return await require('./linkedin-browser-page.cjs').readActivity(page,person,options);}
+ finally {if(!options.page)await page.close().catch(()=>{});}
 }
-async function checkSavedActivity(browser,person,{profileUrn='',fetchActivity,now=new Date().toISOString()}={}){
- let api=null,check={httpStatus:0,retryable:false};
- if(profileUrn&&fetchActivity){
-  const response=await fetchActivity('/voyager/api/identity/profileUpdatesV2?count=10&includeLongTermHistory=true&moduleKey=creator_profile_all_content_view%3Adesktop&numComments=0&numLikes=0&profileUrn='+encodeURIComponent(profileUrn)+'&q=memberShareFeed');
-  check={httpStatus:response.status,retryable:response.status===0||response.status>=500};
-  if(response.status===200){api=extractActivity(response.data,{profileUrn,profileUrl:person,now});if(api.activityStatus!=='Unknown')return {...api,activityCheck:check};}
- }
- const visible=await checkActivityPage(browser,person,{profileUrn,now});
- if(visible)return {...visible,activityCheck:{...check,retryable:false}};
- return api?{...api,activityCheck:check}:null;
+async function checkSavedActivity(browser,person,options={}) {
+ return checkActivityPage(browser,person,options);
 }
 module.exports={activityRoute,relativeDate,extractActivityPage,checkActivityPage,checkSavedActivity};

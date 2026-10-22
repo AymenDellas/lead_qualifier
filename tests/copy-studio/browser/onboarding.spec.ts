@@ -24,7 +24,7 @@ test('onboarding is chosen in the studio, reviewed, saved, and sent with generat
     return route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify({ type: 'result', result: { draft, issues: [] } })}\n\n` });
   });
   await openStudio(page);
-  await page.getByRole('button', { name: 'Choose client onboarding' }).click();
+  await page.getByRole('button', { name: 'Prefill from onboarding' }).click();
   await page.getByLabel('Find a client or paste their page URL').fill('https://www.coach.example/executive?utm_source=test');
   await expect(page.getByText('Matches this page’s website')).toBeVisible();
   await page.getByRole('radio', { name: /Example Coach/ }).check();
@@ -89,13 +89,13 @@ test('multi-offer pages require a choice and switching offers leaves the origina
   });
   await openStudio(page);
   await page.getByRole('button', { name: 'Try a sample brief' }).click();
-  await page.getByRole('button', { name: 'Start with an existing page' }).click();
+  await page.getByRole('button', { name: 'Prefill from page' }).click();
   await page.getByLabel('Page URL', { exact: true }).fill(source.url);
-  await page.getByRole('button', { name: 'Extract offer facts' }).click();
+  await page.getByRole('button', { name: 'Read page and prefill' }).click();
   await expect(page.getByRole('heading', { name: 'Choose the offer for this page', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /Apply \d+ field/ })).toHaveCount(0);
   await page.getByRole('button', { name: 'Executive Program Individual coaching', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Review what we found' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Review your page prefill' })).toBeVisible();
   expect(targetSeen).toBe('Executive Program');
   await page.getByRole('button', { name: 'Apply 3 fields', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'Offer name', exact: true })).toHaveValue('Executive Program');
@@ -115,14 +115,14 @@ test('mobile client picker handles long names and onboarding failures leave a ma
     ? route.fulfill({ status: 503, json: { error: 'Onboarding could not be loaded. Retry or continue with a manual brief.' } })
     : route.fulfill({ json: { onboardings: [{ ...onboarding, clientName: 'Example Coach with a very long business and client name for mobile review' }] } }));
   await openStudio(page);
-  await page.getByRole('button', { name: 'Choose client onboarding' }).click();
+  await page.getByRole('button', { name: 'Prefill from onboarding' }).click();
   await page.getByRole('radio', { name: /Example Coach/ }).check();
   await expect(page.getByRole('checkbox', { name: /Offer name/ })).toBeChecked();
   await page.screenshot({ path: 'tmp/copy-studio-screenshots/onboarding-picker-mobile.png', fullPage: true });
   expect(await page.locator('.onboarding-dialog').evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth)).toBe(true);
   await page.getByRole('button', { name: 'Close onboarding picker' }).click();
   failed = true;
-  await page.getByRole('button', { name: 'Choose client onboarding' }).click();
+  await page.getByRole('button', { name: 'Prefill from onboarding' }).click();
   await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Onboarding could not be loaded');
   await page.getByRole('button', { name: 'Close onboarding picker' }).click();
   await page.getByRole('textbox', { name: 'Offer name', exact: true }).fill('Manual brief');

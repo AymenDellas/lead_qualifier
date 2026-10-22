@@ -1,5 +1,6 @@
 'use client';
 import { useId, type ReactNode } from 'react';
+import './business-workspace.css';
 
 export function Field({
     label,
@@ -22,8 +23,8 @@ export function Field({
 }) {
     const id = useId();
     return (
-        <div className="space-y-1.5 min-w-0">
-            <label className="block text-sm text-[var(--text-dim)]" htmlFor={children ? undefined : id}>
+        <div className="business-field space-y-1.5 min-w-0">
+            <label className="business-field-label block text-sm text-[var(--text-dim)]" htmlFor={children ? undefined : id}>
                 {label}
                 {required ? ' *' : ''}
             </label>
@@ -62,9 +63,9 @@ export function Panel({
     action?: ReactNode;
 }) {
     return (
-        <section className="panel min-w-0">
+        <section className="business-panel panel min-w-0">
             <div className="panel-head flex items-center justify-between gap-3">
-                <h2 className="text-base font-medium">{title}</h2>
+                <h2 className="business-panel-title">{title}</h2>
                 {action}
             </div>
             <div className="panel-body space-y-4">{children}</div>
@@ -72,7 +73,7 @@ export function Panel({
     );
 }
 export function Empty({ children }: { children: ReactNode }) {
-    return <p className="py-10 text-[var(--text-dim)] text-base">{children}</p>;
+    return <p className="business-empty py-10 text-[var(--text-dim)] text-base">{children}</p>;
 }
 export function LinkOut({ url, children }: { url: string; children: ReactNode }) {
     return /^https?:\/\//i.test(url) ? (

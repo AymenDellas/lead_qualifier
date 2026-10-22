@@ -10,6 +10,7 @@ import {
   FileText,
   LoaderCircle,
   Pencil,
+  PenLine,
   PanelTop,
   RotateCcw,
   ShieldCheck,
@@ -18,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  MAX_PROOF_CHARACTERS,
   type Issue,
   type Project,
   type Section,
@@ -26,9 +28,12 @@ import {
 } from '@/lib/copy-studio/shared/contracts';
 import { templates } from '@/lib/copy-studio/shared/templates';
 import { isLegacyDirectCallDraft } from '@/lib/copy-studio/shared/quality';
+import { sectionWritingRole } from '@/lib/copy-studio/shared/persuasion';
+import { sectionAngleOptions, wordingOptions } from '@/lib/copy-studio/shared/revision-options';
 import { sectionText } from './export';
 import { buildDesignPrompt } from '@/lib/copy-studio/shared/design-prompt';
 import { DesignPromptPanel } from './DesignPromptPanel';
+import { ProofBody } from './ProofBody';
 
 function SectionCard({
   section,
@@ -36,6 +41,7 @@ function SectionCard({
   index,
   issues,
   disabled,
+  writingRole,
   onEdit,
   onRevise,
   onCopy,
@@ -45,12 +51,14 @@ function SectionCard({
   index: number;
   issues: Issue[];
   disabled: boolean;
+  writingRole: ReturnType<typeof sectionWritingRole>;
   onEdit: (s: Section) => boolean;
   onRevise: (id: string, direction: RevisionInput['direction']) => void;
   onCopy: (text: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(section);
+  const [menuPlacement, setMenuPlacement] = useState({ above: false, space: 400 });
   const empty = !sectionText(section).trim();
   return (
     <article className={`copy-section ${empty ? 'omitted-section' : ''}`}>
@@ -81,20 +89,43 @@ function SectionCard({
           >
             <Pencil size={14} />
           </button>
-          <details className="rewrite-menu">
+          <details className="rewrite-menu" onToggle={event => {
+            if (!event.currentTarget.open) return;
+            const rect = event.currentTarget.getBoundingClientRect();
+            const below = window.innerHeight - rect.bottom - 16;
+            const topBoundary = Math.max(16, ...Array.from(document.querySelectorAll('header')).map(header => {
+              const position = window.getComputedStyle(header).position;
+              const bounds = header.getBoundingClientRect();
+              return ['sticky', 'fixed'].includes(position) && bounds.top <= 0 ? bounds.bottom + 12 : 16;
+            }));
+            const above = rect.top - topBoundary;
+            setMenuPlacement({ above: above > below, space: Math.max(120, Math.max(above, below)) });
+          }} onKeyDown={event => {
+            if (event.key === 'Escape') {
+              event.currentTarget.removeAttribute('open');
+              event.currentTarget.querySelector('summary')?.focus();
+            }
+          }}>
             <summary aria-label={`Rewrite ${name}`} title={`Rewrite ${name}`}>
               <RotateCcw size={14} />
               <ChevronDown size={11} />
             </summary>
-            <div className="rewrite-options">
-              {(
-                [
-                  ['clearer', 'Make it clearer'],
-                  ['shorter', 'Make it shorter'],
-                  ['stronger', 'Sharpen the benefit'],
-                  ['alternative', 'Try another angle'],
-                ] as const
-              ).map(([direction, label]) => (
+            <div className={`rewrite-options ${menuPlacement.above ? 'opens-above' : ''}`}
+              style={{ maxHeight: `min(560px, ${menuPlacement.space}px)` }}>
+              <div className="rewrite-context">
+                <strong>Page framework: {writingRole.framework}</strong>
+                <span>Section role: {writingRole.stages.map(stage => stage.stage).join(' + ') || 'Support the page goal'}</span>
+                <span>Change the framing within this role.</span>
+              </div>
+              {sectionAngleOptions(section.id).length > 0 && <div className="rewrite-group-label">Section angle</div>}
+              {sectionAngleOptions(section.id).map(({ direction, label }) => (
+                <button key={direction} disabled={disabled || editing} onClick={event => {
+                  event.currentTarget.closest('details')?.removeAttribute('open');
+                  onRevise(section.id, direction);
+                }}>{label}</button>
+              ))}
+              <div className="rewrite-group-label">Wording</div>
+              {wordingOptions.map(({ direction, label }) => (
                 <button
                   key={direction}
                   disabled={disabled || editing}
@@ -131,7 +162,7 @@ function SectionCard({
             <textarea
               rows={6}
               value={value.body}
-              maxLength={6000}
+              maxLength={section.id === 'proof' ? MAX_PROOF_CHARACTERS : 6000}
               onChange={(e) => setValue({ ...value, body: e.target.value })}
             />
           </label>
@@ -173,7 +204,7 @@ function SectionCard({
       ) : (
         <div className="section-copy">
           {section.headline && <h3>{section.headline}</h3>}
-          {section.body && <p>{section.body}</p>}
+          {section.body && (section.id === 'proof' ? <ProofBody body={section.body} /> : <p>{section.body}</p>)}
           {section.bullets.length > 0 && (
             <ul>
               {section.bullets.map((bullet, i) => (
@@ -245,12 +276,13 @@ export function DraftPanel({
     result?.draft.sections.map(sectionText).join(' ').trim().split(/\s+/).filter(Boolean).length ||
     0;
   return (
-    <section className="draft-panel" aria-labelledby="draft-heading">
+    <section className="draft-panel" id="copy-draft" aria-labelledby="draft-heading">
+      <a className="copy-mobile-back" href="#copy-brief">↑ Back to brief</a>
       <div className="panel-heading draft-heading">
-        <div className="panel-number">02</div>
+        <div className="panel-number" aria-hidden="true"><PenLine size={16} /></div>
         <div>
           <h2 id="draft-heading">Make every word work</h2>
-          <p>Your strategy, copy, and design prompt in one place.</p>
+          <p>Review sections, refine the writing, and export your page.</p>
         </div>
         {result && <span className="word-count">{wordCount} words</span>}
       </div>
@@ -276,53 +308,11 @@ export function DraftPanel({
       {!result ? (
         <div className="draft-empty">
           <div className="empty-intro">
-            <span className="eyebrow">FROM OFFER TO ACTION</span>
-            <h3>
-              A clear offer.
-              <br />A compelling next step.
-            </h3>
+            <span className="eyebrow">YOUR PAGE OUTLINE</span>
+            <h3>Your first draft starts with the brief.</h3>
             <p>
-              Turn what you know about your customers into copy that gives them a reason to act.
+              Add the five essentials or prefill from a source. Your generated copy and design prompt will appear here.
             </p>
-          </div>
-          <div className="page-preview-illustration" aria-hidden="true">
-            <div className="mini-browser">
-              <i />
-              <i />
-              <i />
-              <span>your next landing page</span>
-            </div>
-            <div className="mini-page">
-              <div className="mini-eyebrow" />
-              <div className="mini-headline" />
-              <div className="mini-headline short-line" />
-              <div className="mini-line" />
-              <div className="mini-line medium-line" />
-              <div className="mini-button">
-                A clear next step <ArrowUpRight size={11} />
-              </div>
-              <div className="mini-cards">
-                <div>
-                  <span />
-                  <i />
-                  <i />
-                </div>
-                <div>
-                  <span />
-                  <i />
-                  <i />
-                </div>
-                <div>
-                  <span />
-                  <i />
-                  <i />
-                </div>
-              </div>
-            </div>
-            <div className="floating-proof">
-              <ShieldCheck size={17} />
-              <span>Facts first. Better copy follows.</span>
-            </div>
           </div>
           <div className="outline-card">
             <div className="outline-title">
@@ -365,18 +355,19 @@ export function DraftPanel({
               </div>
             </div>
           )}
-          <div className="strategy-card">
-            <div className="strategy-title">
-              <Sparkles size={16} />
-              <span className="eyebrow">THE STRATEGY</span>
-            </div>
+          <details className="strategy-card">
+            <summary className="strategy-summary">
+              <span className="strategy-title"><Sparkles size={16} /><span>Page strategy</span></span>
+              <span className="strategy-summary-meta">{result.draft.strategy.framework?.name || 'Earlier draft'}<span className="strategy-summary-hint">View the reasoning</span><ChevronDown size={15} /></span>
+            </summary>
+            <div className="strategy-content">
+            {result.draft.strategy.framework && <p className="field-hint"><strong>{result.draft.strategy.framework.name}</strong>{result.draft.strategy.framework.recommended ? ' · Recommended for this page' : ' · Selected framework'}</p>}
+            {!result.draft.strategy.framework && <p className="field-hint">This earlier draft has no recorded framework. Generate a new draft to apply the current framework plan.</p>}
             <h3>{result.draft.strategy.angle}</h3>
             <p>{result.draft.strategy.promise}</p>
-            <details>
-              <summary>
-                View the reasoning <ChevronDown size={14} />
-              </summary>
               <dl>
+                {result.draft.strategy.framework && <><dt>Why this framework</dt><dd>{result.draft.strategy.framework.reason}</dd></>}
+                {result.draft.strategy.frameworkPlan?.map(step => <div key={step.stage}><dt>{step.stage}</dt><dd>{step.application} <small>Sections: {step.sectionIds.map(id => template.sections.find(section => section.id === id)?.name || id).join(', ')}</small></dd></div>)}
                 <dt>Hesitation to address</dt>
                 <dd>{result.draft.strategy.objection || 'No specific objection supplied.'}</dd>
                 <dt>The action</dt>
@@ -388,8 +379,8 @@ export function DraftPanel({
                   </>
                 )}
               </dl>
-            </details>
-          </div>
+            </div>
+          </details>
           <div className="draft-actions">
             <div className="segmented" aria-label="Draft views">
               <button
@@ -464,6 +455,8 @@ export function DraftPanel({
                   name={template.sections.find((s) => s.id === section.id)?.name || section.id}
                   issues={result.issues.filter((v) => v.sectionId === section.id)}
                   disabled={busy || stale}
+                  writingRole={sectionWritingRole({ ...project, template: draftTemplate,
+                    formula: result.draft.strategy.framework?.id || project.formula }, section.id)}
                   onCopy={onCopy}
                   onEdit={onEdit}
                   onRevise={onRevise}
@@ -477,7 +470,7 @@ export function DraftPanel({
                 .map((section) => (
                   <div className={`preview-section preview-${section.id}`} key={section.id}>
                     <h3>{section.headline}</h3>
-                    <p>{section.body}</p>
+                    {section.id === 'proof' ? <ProofBody body={section.body} /> : <p>{section.body}</p>}
                     {section.bullets.length > 0 && (
                       <ul>
                         {section.bullets.map((b, i) => (
