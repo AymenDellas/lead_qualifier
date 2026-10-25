@@ -1,18 +1,21 @@
 'use strict';
 // Only actual unique profile navigations consume the account's daily limit.
 const ready=new WeakMap();
+const PROFILE_INTERVAL_MS=60000;
 const SCHEMA=`ALTER TABLE compel_worker_config ADD COLUMN IF NOT EXISTS daily_timezone TEXT NOT NULL DEFAULT 'UTC';
+ ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS next_profile_at TIMESTAMPTZ;
+ ALTER TABLE compel_linkedin_accounts ALTER COLUMN daily_limit SET DEFAULT 300;
  CREATE TABLE IF NOT EXISTS compel_worker_account_profiles (
  account_id TEXT NOT NULL,day DATE NOT NULL,profile_key TEXT NOT NULL,job_id TEXT NOT NULL,
  first_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),attempts INTEGER NOT NULL DEFAULT 1,
  PRIMARY KEY(account_id,day,profile_key));
  CREATE OR REPLACE FUNCTION compel_worker_day() RETURNS date LANGUAGE sql STABLE AS $$
  SELECT (NOW() AT TIME ZONE COALESCE((SELECT daily_timezone FROM compel_worker_config WHERE id=1),'UTC'))::date $$;`;
-function defaultLimit(env=process.env){const n=Number(env.DEFAULT_DAILY_SCRAPE_LIMIT||400);if(!Number.isInteger(n)||n<1||n>400)throw Error('DEFAULT_DAILY_SCRAPE_LIMIT must be 1–400, matching the existing database field.');return n;}
+function defaultLimit(env=process.env){const n=Number(env.DEFAULT_DAILY_SCRAPE_LIMIT||300);if(!Number.isInteger(n)||n<1||n>400)throw Error('DEFAULT_DAILY_SCRAPE_LIMIT must be 1–400, matching the existing database field.');return n;}
 function timezone(env=process.env){const zone=env.DAILY_LIMIT_TIMEZONE||Intl.DateTimeFormat().resolvedOptions().timeZone;try{new Intl.DateTimeFormat('en',{timeZone:zone}).format();}catch{throw Error('DAILY_LIMIT_TIMEZONE must be a valid IANA time zone.');}return zone;}
 async function ensure(pool){
  if(!ready.has(pool))ready.set(pool,(async()=>{
-  const exists=(await pool.query("SELECT to_regclass('compel_worker_account_profiles') IS NOT NULL AND to_regprocedure('compel_worker_day()') IS NOT NULL AS ready")).rows[0]?.ready;if(exists)return;
+  const exists=(await pool.query("SELECT to_regclass('compel_worker_account_profiles') IS NOT NULL AND to_regprocedure('compel_worker_day()') IS NOT NULL AND EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('compel_linkedin_accounts') AND attname='next_profile_at' AND NOT attisdropped) AS ready")).rows[0]?.ready;if(exists)return;
   const client=await pool.connect();try{await client.query('BEGIN');await client.query("SELECT pg_advisory_xact_lock(hashtext('compel/daily-profile-policy/v1'))");await client.query(SCHEMA);await client.query('COMMIT');}
   catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
  })().catch(error=>{ready.delete(pool);throw error;}));return ready.get(pool);
@@ -31,7 +34,8 @@ async function usage(pool,id){
   FROM compel_linkedin_accounts a CROSS JOIN compel_worker_config c LEFT JOIN compel_worker_account_profiles p ON p.account_id=a.id AND p.day=compel_worker_day()
   WHERE a.id=$1 AND c.id=1 GROUP BY a.id,c.daily_timezone`,[id])).rows[0]||null;
 }
-async function reserve(pool,{accountId,owner,profileUrl,jobId,version=null}){
+async function reserve(pool,{accountId,owner,profileUrl,jobId,version=null,intervalMs=PROFILE_INTERVAL_MS}){
+ if(!Number.isInteger(intervalMs)||intervalMs<0)throw Error('Invalid profile interval.');
  if(!/^https:\/\/www\.linkedin\.com\/in\/[^/]+\/$/.test(profileUrl||''))throw Error('A canonical LinkedIn profile is required.');
  await ensure(pool);const client=await pool.connect();try{
   await client.query('BEGIN');
@@ -45,6 +49,9 @@ async function reserve(pool,{accountId,owner,profileUrl,jobId,version=null}){
   const used=Number((await client.query('SELECT count(*)::int AS n FROM compel_worker_account_profiles WHERE account_id=$1 AND day=$2',[accountId,a.day])).rows[0].n);
   const seen=(await client.query('SELECT 1 FROM compel_worker_account_profiles WHERE account_id=$1 AND day=$2 AND profile_key=$3',[accountId,a.day,profileUrl])).rowCount>0;
   if(!seen&&used>=a.daily_limit){await client.query('COMMIT');return {limited:true,used,limit:a.daily_limit,resumeAt:a.resume_at,timezone:a.timezone};}
+  const slot=await client.query(`UPDATE compel_linkedin_accounts SET next_profile_at=clock_timestamp()+($2*interval '1 millisecond')
+   WHERE id=$1 AND (next_profile_at IS NULL OR next_profile_at<=clock_timestamp()) RETURNING next_profile_at`,[accountId,intervalMs]);
+  if(!slot.rowCount){const next=(await client.query('SELECT next_profile_at FROM compel_linkedin_accounts WHERE id=$1',[accountId])).rows[0].next_profile_at;await client.query('COMMIT');return {paced:true,resumeAt:next,intervalMs};}
   await client.query(`INSERT INTO compel_worker_account_profiles(account_id,day,profile_key,job_id) VALUES($1,$2,$3,$4)
    ON CONFLICT(account_id,day,profile_key) DO UPDATE SET last_read_at=NOW(),attempts=compel_worker_account_profiles.attempts+1`,[accountId,a.day,profileUrl,jobId]);
   const count=used+(seen?0:1);await client.query(`INSERT INTO compel_worker_usage(account_id,day,count) VALUES($1,$2,$3)
@@ -52,4 +59,4 @@ async function reserve(pool,{accountId,owner,profileUrl,jobId,version=null}){
   await client.query('COMMIT');return {used:count,limit:a.daily_limit,charged:!seen,resumeAt:a.resume_at,timezone:a.timezone};
  }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
 }
-module.exports={SCHEMA,ensure,configure,usage,reserve,defaultLimit,timezone};
+module.exports={SCHEMA,ensure,configure,usage,reserve,defaultLimit,timezone,PROFILE_INTERVAL_MS};

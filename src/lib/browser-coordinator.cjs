@@ -24,12 +24,12 @@ function createBrowserCoordinator({max=1,owner,log=()=>{}}){
   async function close(){
    await inner.close();surface=null;reserved.delete(id);try{write(true);}catch(error){log('Browser owner record: '+error.message);}
   }
-  async function open(){
-   if(inner.isOpen())return inner.open();
+  async function open(options){
+   if(inner.isOpen())return inner.open(options);
    if(!reserved.has(id)&&reserved.size>=max)throw problem('BROWSER_CAPACITY','Another account owns the available LinkedIn browser. Waiting for that account to become idle; you can also pause it.');
    reserved.add(id);
    try{
-    await recoverSingletons(inner.profileDirectory);surface=await inner.open();
+    await recoverSingletons(inner.profileDirectory);surface=await inner.open(options);
     const chromePid=surface.browser.process?.()?.pid;
     if(Number.isInteger(chromePid)){metadata={chromePid,agentPid:process.pid,agentOwner:owner,agentScript:path.resolve(process.argv[1]),heartbeatAt:Date.now()};write();}
     return surface;

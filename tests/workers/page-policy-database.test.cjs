@@ -9,10 +9,10 @@ test('old page budgets and schedules are inert; concurrent counters and partial 
   const counts=await Promise.all(Array.from({length:6},()=>core.recordLinkedInAction(pool,id,'owner','profile_page')));assert.equal(counts.length,6);assert.ok(counts.every(r=>!r.waitMs&&!r.stopped));assert.equal((await core.settings(pool)).accounts[0].dailyRequests,6);
   const url='https://www.linkedin.com/in/partial-fixture/';await core.enqueue(pool,[url]);const claimed=await core.claim(pool,id,'owner');
   const saved={url,profileIdentityConfirmed:true,firstName:'Fixture',emails:['fixture@example.test'],linkedinAccountId:id,linkedinCapture:{version:2,stage:'contact',complete:false},status:'PENDING'};
-  await core.reserveProfile(pool,{accountId:id,owner:'owner',profileUrl:url,jobId:claimed.job.jobId});await core.checkpoint(pool,claimed.job.jobId,'owner',saved);
+  await core.reserveProfile(pool,{intervalMs:0,accountId:id,owner:'owner',profileUrl:url,jobId:claimed.job.jobId});await core.checkpoint(pool,claimed.job.jobId,'owner',saved);
   await core.defer(pool,claimed.job.jobId,'owner',{...saved,status:'ERROR',failure:{stage:'linkedin',code:'BROWSER_CRASH',reason:'Fixture crash',retryable:true}},new Date().toISOString());
   const resumed=await core.claim(pool,id,'owner');assert.equal(resumed.job.resumeCapture,true);assert.deepEqual(resumed.job.resumeResult.emails,saved.emails);assert.equal(resumed.dailyCount,1);
-  assert.equal((await core.reserveProfile(pool,{accountId:id,owner:'owner',profileUrl:url,jobId:resumed.job.jobId})).charged,false);
+  assert.equal((await core.reserveProfile(pool,{intervalMs:0,accountId:id,owner:'owner',profileUrl:url,jobId:resumed.job.jobId})).charged,false);
   await core.pauseProcessing(pool,id,'Security review',true,'owner');assert.equal(await core.processingAllowed(pool,id,'owner'),false);await assert.rejects(core.startProcessing(pool,id),/needs review/);
  }finally{await db.close();}
 });

@@ -81,13 +81,16 @@ function createAgent(options){
   if(worked){entry.lastWorkAt=now();entry.jobs+=(state.jobsStarted||0)-before;}
   const manual=['awaiting_login','SESSION_REVIEW'].includes(state.status)||state.startupStage==='SESSION_REVIEW'||state.manualResumeRequired;
   const needsManual=[...entries.values()].some(other=>other!==entry&&(other.account.login_token||other.account.logout_token));
-  if(entry.browser.isOpen()&&!manual&&(entry.jobs>=maxJobs||memory(entry)>memoryLimit||needsManual||!worked&&now()-entry.lastWorkAt>=idleMs)){
+  if(entry.browser.isOpen()&&state.manualResumeRequired&&entry.browser.isHeadless?.()){
+   await entry.runtime.recycle('Account review required. Use Open session for visible manual review.');
+  }else if(entry.browser.isOpen()&&!manual&&(entry.jobs>=maxJobs||memory(entry)>memoryLimit||needsManual||!worked&&state.reasonCode!=='PROFILE_INTERVAL'&&now()-entry.lastWorkAt>=idleMs)){
    await entry.runtime.recycle(entry.jobs>=maxJobs?'automatic job-count recycle':memory(entry)>memoryLimit?'Chrome process-tree memory threshold':needsManual?'another account requested manual review':'idle timeout');
    entries.delete(entry.account.id);entries.set(entry.account.id,entry);
    entry.jobs=0;for(const other of entries.values())if(other.runtime.snapshot().status==='waiting_browser')other.due=0;
   }else if(!entry.browser.isOpen()&&coordinator.reserved.has(entry.account.id))await entry.browser.close();
   entry.backoff=worked||state.status==='recovering'?2000:Math.min(30000,entry.backoff*2);
   entry.due=worked||state.status==='recovering'?now():now()+entry.backoff;
+  if(state.reasonCode==='PROFILE_INTERVAL'&&state.nextEligibleAt)entry.due=Math.max(now(),Date.parse(state.nextEligibleAt));
  }
  function runAccount(entry){
   const before=entry.runtime.snapshot().jobsStarted||0;

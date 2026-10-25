@@ -15,10 +15,11 @@ function deferred() {
 
 function fixture() {
     const root = path.resolve('isolated-account-browser-' + ++fixtureId);
-    const existing = new Set(), directories = [], launches = [], browsers = [], notices = [];
+    const bundled=path.resolve('chrome-for-testing.exe');
+    const existing = new Set([bundled]), directories = [], launches = [], browsers = [], notices = [];
     const fs = { existsSync: name => existing.has(name), mkdirSync: (name, options) => { directories.push({ name, options }); existing.add(name); } };
     let launchGate = null, launchError = null, pageError = null, hangClose = false, killWorks = true;
-    const puppeteer = { configuration: {}, launch: async options => {
+    const puppeteer = { configuration: {}, executablePath:()=>bundled, launch: async options => {
         launches.push(options);
         if (launchGate) await launchGate.promise;
         if (launchError) throw launchError;
@@ -71,8 +72,8 @@ test('creation is inert; repeated and concurrent opens reuse one visible saved b
     assert.equal(f.launches.length, 1); assert.equal(first.browser.newPageCalls, 1);
     const options = f.launches[0];
     assert.equal(options.userDataDir, path.join(f.root, '.browser-profiles', 'account-0'));
-    assert.equal(options.headless, false); assert.equal(options.channel, 'chrome');
-    assert.equal(options.defaultViewport, null); assert.deepEqual(options.args, ['--window-size=1366,768']);
+    assert.equal(options.headless, true); assert.equal(options.channel, undefined); assert.equal(options.executablePath,path.resolve('chrome-for-testing.exe'));
+    assert.deepEqual(options.defaultViewport,{width:1366,height:768}); assert.deepEqual(options.args, ['--window-size=1366,768']);
     assert.equal(options.handleSIGINT, false); assert.equal(options.handleSIGTERM, false);
     assert.equal(options.waitForInitialPage, false);
     assert.deepEqual(first.browser.commands, [
@@ -85,7 +86,7 @@ test('creation is inert; repeated and concurrent opens reuse one visible saved b
     await owner.close();
 });
 test('background and reveal preserve the owned window geometry and keep Chrome rendering without minimizing',async()=>{
- const f=fixture(),owner=createAccountBrowser(f.options),{browser}=await owner.open();
+ const f=fixture(),owner=createAccountBrowser(f.options),{browser}=await owner.open({headless:false});
  browser.windowState='maximized';await owner.background();assert.equal(browser.windowState,'normal');assert.equal(browser.rectangle.left,-30000);
  await owner.background();await owner.reveal();assert.equal(browser.windowState,'maximized');assert.equal(browser.fronts,1);assert.equal(browser.rectangle.left,100);assert.equal(browser.rectangle.top,80);
  assert.equal(f.launches.length,1);assert.equal(f.launches[0].headless,false);assert.equal(browser.newPageCalls,1);assert.equal(browser.closeCalls,0);
@@ -93,7 +94,7 @@ test('background and reveal preserve the owned window geometry and keep Chrome r
  await owner.close();assert.equal(await owner.minimize(),false);
 });
 test('an unavailable window command does not close or relaunch its account browser',async()=>{
- const f=fixture(),owner=createAccountBrowser(f.options),{browser,page}=await owner.open();
+ const f=fixture(),owner=createAccountBrowser(f.options),{browser,page}=await owner.open({headless:false});
  page.target=()=>({createCDPSession:async()=>{throw Error('Window controls unavailable');}});
  await assert.rejects(owner.minimize(),/Window controls unavailable/);assert.equal(owner.isOpen(),true);assert.equal(f.launches.length,1);await owner.close();
 });
@@ -107,16 +108,16 @@ test('preserves existing legacy cookie paths even with a separate profile root',
     await next.open(); assert.equal(f.launches[1].userDataDir, path.resolve('separate-local-state', 'new-account')); await next.close();
 });
 
-test('honors Puppeteer configured installed executable without changing account identity', async () => {
+test('uses bundled Chrome for Testing instead of a configured system Chrome override', async () => {
     const f = fixture(); f.puppeteer.configuration.executablePath = path.resolve('installed-chrome.exe');
     const owner = createAccountBrowser(f.options); await owner.open();
-    assert.equal(f.launches[0].executablePath, f.puppeteer.configuration.executablePath);
+    assert.equal(f.launches[0].executablePath,path.resolve('chrome-for-testing.exe'));
     assert.equal(f.launches[0].channel, undefined); await owner.close();
 });
 
 test('honors the CommonJS Puppeteer namespace default configuration', async () => {
-    const f = fixture(), executablePath = path.resolve('configured-system-chrome.exe');
-    const puppeteer = { launch: f.puppeteer.launch, default: { configuration: { executablePath } } };
+    const f = fixture(), executablePath = path.resolve('chrome-for-testing.exe');
+    const puppeteer = { default:f.puppeteer };
     const owner = createAccountBrowser({ ...f.options, puppeteer }); await owner.open();
     assert.equal(f.launches[0].executablePath, executablePath);
     assert.equal(f.launches[0].channel, undefined); await owner.close();
@@ -194,4 +195,8 @@ test('invalid profile keys fail before filesystem changes or browser launch', ()
         assert.throws(() => createAccountBrowser({ ...f.options, account: { profile_key } }), { code: 'BROWSER_PROFILE_INVALID' });
     }
     assert.equal(f.launches.length, 0); assert.equal(f.directories.length, 0);
+});
+test('missing pinned Chrome for Testing fails before launch with a useful recovery action',async()=>{
+ const f=fixture();f.existing.delete(path.resolve('chrome-for-testing.exe'));const owner=createAccountBrowser(f.options);
+ await assert.rejects(owner.open(),error=>error.code==='CHROME_FOR_TESTING_MISSING'&&/puppeteer browsers install chrome/.test(error.message));assert.equal(f.launches.length,0);
 });

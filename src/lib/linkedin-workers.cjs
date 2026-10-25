@@ -19,7 +19,7 @@ INSERT INTO compel_worker_config(id) VALUES(1) ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS compel_linkedin_accounts (
  id TEXT PRIMARY KEY, label TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL DEFAULT '',
  profile_key TEXT UNIQUE NOT NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE, archived BOOLEAN NOT NULL DEFAULT FALSE,
- daily_limit INTEGER NOT NULL DEFAULT 400 CHECK(daily_limit BETWEEN 1 AND 400), position INTEGER NOT NULL,
+ daily_limit INTEGER NOT NULL DEFAULT 300 CHECK(daily_limit BETWEEN 1 AND 400), position INTEGER NOT NULL,
  login_requested_at TIMESTAMPTZ, changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 CREATE UNIQUE INDEX IF NOT EXISTS compel_linkedin_active_email ON compel_linkedin_accounts(lower(email)) WHERE archived IS FALSE;
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS logout_requested_at TIMESTAMPTZ;
@@ -516,7 +516,7 @@ async function claim(pool,id,owner) {
  const client=await pool.connect();
  try {
   await client.query('BEGIN');
-  const account=(await client.query(`SELECT a.daily_limit FROM compel_linkedin_accounts a WHERE a.id=$1 AND a.enabled AND NOT a.archived
+  const account=(await client.query(`SELECT a.daily_limit,a.next_profile_at,a.next_profile_at>clock_timestamp() AS profile_wait FROM compel_linkedin_accounts a WHERE a.id=$1 AND a.enabled AND NOT a.archived
    AND a.logout_requested_at IS NULL AND a.login_requested_at IS NULL AND a.signed_out_at IS NULL AND a.processing_enabled
    AND a.connected_at IS NOT NULL AND a.attention_reason='' AND (SELECT active_count FROM compel_worker_config WHERE id=1)>0 FOR SHARE`,[id])).rows[0];
   if(!account){await client.query('COMMIT');return {disabled:true};}
@@ -535,6 +535,9 @@ async function claim(pool,id,owner) {
   const allowance={dailyCount:usage.used,dailyLimit:usage.limit,resumeAt:usage.resume_at,timezone:usage.timezone};
   if(!job){await client.query('COMMIT');return limited?{limited:true,...allowance}:null;}
   if(!job.checkpoint&&job.payload.explicitRetry!==true)job.checkpoint=await cachedLinkedInProfile(client,job.profile_key,id);
+  if(account.profile_wait&&!require('./worker-research-queue.cjs').fullCapture(job.checkpoint)){
+   await client.query('COMMIT');return {paced:true,resumeAt:account.next_profile_at};
+  }
   await client.query(`UPDATE compel_worker_jobs SET status='processing',account_id=$2,owner=$3,lease_until=NOW()+interval '15 minutes',checkpoint=$4::jsonb WHERE id=$1`,[job.id,id,owner,job.checkpoint?json(job.checkpoint):null]);
   await client.query('COMMIT');return {job:{...job.payload,jobId:job.id,engineCreatedAt:job.created_at,enginePickedAt:new Date().toISOString(),
    ...(job.checkpoint?{resumeResult:{...job.checkpoint,...(job.result?.failure?{failure:job.result.failure}:{})},resumeCapture:job.checkpoint.linkedinCapture?.version===2&&job.checkpoint.linkedinCapture.complete===false}:{}),retryCount:job.retry_count},...allowance};

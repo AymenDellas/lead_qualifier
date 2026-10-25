@@ -44,7 +44,8 @@ function profilePath(root, account, fs, profileRoot) {
 }
 
 /**
- * Owns one visible saved account browser. Persisted intent/manual requests authorize opening; navigation,
+ * Owns one saved Chrome for Testing browser. Processing is headless; manual
+ * sign-in/review uses a visible launch of the same persistent profile. Navigation,
  * authentication and processing decisions belong to the account runtime.
  * The runtime owns its cross-process lease/PID lock; Chrome retains its own
  * profile lock. This map additionally prevents competing owners in one process.
@@ -110,28 +111,33 @@ function createAccountBrowser({ root, account, onDisconnect, puppeteer, fs = req
         }
     }
 
-    function open() {
+    function open({headless=true}={}) {
         if (closing) return Promise.reject(browserError('BROWSER_CLOSING', 'The account browser is closing.'));
         if (opening) return opening;
-        if (isOpen()) return Promise.resolve(entry.surface);
+        if (isOpen()) return entry.headless===headless?Promise.resolve(entry.surface):Promise.reject(browserError('BROWSER_MODE_CHANGE_REQUIRED','Close the owned browser before changing visibility mode.'));
         if (entry) return Promise.reject(browserError('BROWSER_DISCONNECTED', 'The account browser was disconnected or its page closed. Close it before explicitly reopening.'));
         if (profileOwners.has(profileKey)) return Promise.reject(browserError('BROWSER_PROFILE_IN_USE', 'This account profile already has a browser owner.'));
 
-        const value = { browser: null, child: null, surface: null, closing: false, disconnected: false };
+        const value = { browser: null, child: null, surface: null, closing: false, disconnected: false, headless };
         entry = value;
         profileOwners.set(profileKey, value);
         opening = (async () => {
             try {
                 fs.mkdirSync(directory, { recursive: true });
-                const driver = puppeteer || require('puppeteer');
-                const executablePath = driver.configuration?.executablePath || driver.default?.configuration?.executablePath;
+                const imported = puppeteer || require('puppeteer'),driver=imported.default||imported;
+                // Resolve Puppeteer's pinned full Chrome for Testing, even when
+                // an old executable override points at installed system Chrome.
+                const executablePath=driver.browserVersion&&driver.configuration?.cacheDirectory
+                    ?require('@puppeteer/browsers').computeExecutablePath({cacheDir:driver.configuration.cacheDirectory,browser:'chrome',buildId:driver.browserVersion})
+                    :driver.executablePath();
+                if(!fs.existsSync(executablePath))throw browserError('CHROME_FOR_TESTING_MISSING','Puppeteer’s Chrome for Testing is missing. Run npx puppeteer browsers install chrome on the worker computer, then retry.');
                 let pagesAllowed = false;
                 value.controller = new AbortController();
                 value.browser = await driver.launch({
-                    ...(executablePath ? { executablePath } : { channel: 'chrome' }),
-                    headless: false,
+                    executablePath,
+                    headless,
                     userDataDir: directory,
-                    defaultViewport: null,
+                    defaultViewport: headless?{width:1366,height:768}:null,
                     timeout: 30000,
                     protocolTimeout: 30000,
                     waitForInitialPage: false,
@@ -193,6 +199,7 @@ function createAccountBrowser({ root, account, onDisconnect, puppeteer, fs = req
         const task = windowTask.catch(() => {}).then(async () => {
             if (!isOpen()) return false;
             const value = entry;
+            if(value.headless)return false;
             if (state === 'background' && value.backgrounded) return true;
             const session = await value.surface.page.target().createCDPSession();
             try {
@@ -225,7 +232,7 @@ function createAccountBrowser({ root, account, onDisconnect, puppeteer, fs = req
         return task;
     }
 
-    return { open, close, isOpen, profileDirectory:directory, background: () => windowState('background'), minimize: () => windowState('background'), reveal: () => windowState('normal'), get: () => isOpen() ? entry.surface : null };
+    return { open, close, isOpen, isHeadless:()=>isOpen()?entry.headless:null,profileDirectory:directory, background: () => windowState('background'), minimize: () => windowState('background'), reveal: () => windowState('normal'), get: () => isOpen() ? entry.surface : null };
 }
 
 module.exports = { createAccountBrowser };

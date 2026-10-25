@@ -40,3 +40,14 @@ test('more than 50 jobs continue without a manual restart or new account process
  for(let i=0;i<65;i++){f.agent.wake();await f.agent.step();await f.settle();}
  assert.equal(f.acquires,1);assert.equal(f.runtimes[0].state.jobsStarted,65);await f.agent.close();
 });
+test('profile interval waits keep the saved browser alive and do not spin or hold the public lane',async()=>{
+ const state={jobsStarted:0,status:'sleeping',reasonCode:'PROFILE_INTERVAL',nextEligibleAt:new Date(160000).toISOString()};
+ let ticks=0,recycles=0,publicTicks=0;
+ const f=fixture({createBrowser:()=>({profileDirectory:path.join(os.tmpdir(),'compel-gap-fixture-unused'),isOpen:()=>true,isHeadless:()=>true,close:async()=>{}}),
+  createRuntime:()=>({tick:async()=>{ticks++;},snapshot:()=>state,recycle:async()=>{recycles++;},requestStop:()=>{},close:async()=>{}}),
+  runner:{runOnce:async()=>{publicTicks++;return null;},close:async()=>{}}});
+ f.accounts[0].authorized=true;await f.agent.step();await f.settle();assert.equal(ticks,1);
+ f.advance(40000);await f.agent.step();await f.settle();assert.equal(ticks,1,'no repeated capture claims before next_profile_at');assert.ok(publicTicks>=4,'public lanes continue during the interval');
+ f.agent.wake();await f.agent.step();await f.settle();assert.equal(recycles,0,'the 30-second idle threshold must not relaunch Chrome between every profile');
+ await f.agent.close();
+});

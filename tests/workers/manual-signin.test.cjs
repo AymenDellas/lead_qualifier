@@ -42,11 +42,12 @@ function fixture() {
             await options.beforeCheck('identity'); return state.menuIdentity || null;
         },
     };
+    const researchQueue={fullCapture:()=>false,handoff:async()=>{}};
     const runtime = createAccountRuntime({ pool: {}, core, accountId: account.id, owner: 'fixture-owner', browserOwner, reader,
-        prospecting: {}, researchQueue: {}, discoveryStore: { claimSource: async () => null, pauseAccount: async () => {} },
+        prospecting: {}, researchQueue, discoveryStore: { claimSource: async () => null, pauseAccount: async () => {} },
         now: () => time, sleep: async () => assert.fail('Manual identity confirmation must not sleep on an interaction permit.'), onStatus: status => statuses.push(status),
     });
-    return { runtime, account, calls, statuses, holds, confirmations, reads, menuReads, permits, navigations, browserOwner,
+    return { runtime, reader, account, calls, statuses, holds, confirmations, reads, menuReads, permits, navigations, browserOwner,
         set state(value) { state = value; }, set time(value) { time = value; }, set menuBlocked(value) { menuBlocked = value; },
         set limit(value){limit=value;},set navigationTimeout(value) { navigationTimeout = value; }, set open(value) { open = value; } };
 }
@@ -136,4 +137,16 @@ test('a resting menu permit never blocks later passive identity confirmation or 
 
 test('daily cap keeps intent and resume time visible after automatic idle browser closure',async()=>{
  const f=fixture();await f.runtime.tick();f.state={identity:viewer};await f.runtime.tick();f.account.authorized=true;const resumeAt='2026-10-25T23:00:00.000Z';f.limit={limited:true,used:2,limit:2,resumeAt,timezone:'Africa/Casablanca'};await f.runtime.tick();assert.equal(f.runtime.snapshot().status,'DAILY_LIMIT_REACHED');await f.runtime.recycle('idle timeout');assert.equal(f.runtime.snapshot().status,'DAILY_LIMIT_REACHED');assert.equal(f.runtime.snapshot().nextEligibleAt,resumeAt);assert.equal(f.runtime.snapshot().browserOpen,false);assert.equal(f.account.authorized,true);
+});
+
+test('manual sign-in hands off to headless processing, and a held account returns to visible manual review only on request',async()=>{
+ const f=fixture(),modes=[];let mode=null;const launch=f.browserOwner.open;f.browserOwner.isHeadless=()=>mode;f.browserOwner.open=async options=>{mode=options.headless;modes.push(mode);return launch();};
+ const read=f.reader.readSignedInIdentity;f.reader.readSignedInIdentity=async(page,options)=>options.manual?read(page,options):viewer;
+ f.reader.captureProfile=async(_page,url,options)=>{await options.beforeCheck('profile_page');return {url,profileIdentityConfirmed:true,linkedinCapture:{complete:true}};};
+ await f.runtime.tick();f.state={identity:viewer};await f.runtime.tick();assert.deepEqual(modes,[false]);
+ f.account.authorized=true;f.limit={job:{jobId:'fixture',linkedinUrl:'https://www.linkedin.com/in/fixture/'}};await f.runtime.tick();await f.runtime.drain();assert.deepEqual(modes,[false,true]);assert.equal(f.calls.closes,1);
+ await f.runtime.handleSignal(security);assert.equal(f.account.authorized,false);assert.ok(f.account.attention_reason);assert.deepEqual(modes,[false,true]);
+ await f.runtime.recycle('review');assert.equal(f.runtime.snapshot().manualResumeRequired,true);assert.equal(f.runtime.snapshot().reasonCode,'LINKEDIN_AUTH');
+ f.account.login_token='manual-2';await f.runtime.tick();assert.deepEqual(modes,[false,true,false]);assert.ok(f.account.attention_reason,'opening review alone cannot clear the hold');
+ await f.runtime.close();
 });

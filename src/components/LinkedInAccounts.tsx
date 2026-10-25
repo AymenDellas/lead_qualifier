@@ -22,7 +22,7 @@ function statusLabel(a:WorkerAccount) {
  if(a.attentionReason)return 'Needs review';
  if(!a.enabled)return 'Disabled';
  if(!a.processingEnabled)return a.connectedAt?(a.browserOpen===false?'Session saved · Browser closed':'Connected · Idle'):'Not connected';
- if (a.online) return a.status==='processing'?'Processing':a.status==='sleeping'?'Resting':a.status==='paused'?/^Daily limit/.test(a.reason)?'Daily limit reached':'Needs attention':a.status==='starting'?'Starting':'Ready';
+ if (a.online) return a.status==='processing'?'Processing':a.status==='sleeping'?'Waiting for next profile':a.status==='paused'?/^Daily limit/.test(a.reason)?'Daily limit reached':'Needs attention':a.status==='starting'?'Starting':'Ready';
  return a.status==='paused'?'Needs attention':'Offline';
 }
 async function updateAccount(id:string,action:AccountAction):Promise<WorkerSettings> {
@@ -203,8 +203,8 @@ function AccountEditor({initial,liveAccounts,workerControls,workerOnline,onClose
       {a.id&&<AccountHistory id={a.id} updatedAt={(liveAccounts.find(other=>other.id===a.id)||a).updatedAt}/>}
      </fieldset>)}
     </div>
-    <button type="button" className="btn btn-outline" disabled={saving||accounts.length>=10} onClick={()=>{setAccounts(current=>[...current,{label:`Account ${current.length+1}`,email:'',enabled:true,dailyLimit:initial.defaultDailyLimit||400,hasPassword:false,dailyCount:0,status:'offline',reason:'',online:false,loginPending:false,updatedAt:null}]);if(!accounts.length)setActiveCount(1);}}><Plus className="w-3.5 h-3.5"/> Add account</button>
-    <p className="field-hint">Sign in manually in Chrome on the worker computer. The only usage limit is unique profiles per account per day. Interaction counts are statistics. LinkedIn security notices stop the account until you review it.</p>
+    <button type="button" className="btn btn-outline" disabled={saving||accounts.length>=10} onClick={()=>{setAccounts(current=>[...current,{label:`Account ${current.length+1}`,email:'',enabled:true,dailyLimit:initial.defaultDailyLimit||300,hasPassword:false,dailyCount:0,status:'offline',reason:'',online:false,loginPending:false,updatedAt:null}]);if(!accounts.length)setActiveCount(1);}}><Plus className="w-3.5 h-3.5"/> Add account</button>
+    <p className="field-hint">Sign in manually in Chrome on the worker computer. A daily unique-profile cap and one-minute interval apply per account. Interaction counts are statistics. LinkedIn security notices stop the account until you review it.</p>
     {dirty&&<p className="field-hint">Save your account changes before signing in or starting processing.</p>}
     {!actionAccount&&notice&&<p role="status" className="text-sm text-[var(--signal)]">{notice}</p>}
     {!actionAccount&&error&&<p role="alert" className="text-sm text-[var(--bad)]">{error}</p>}

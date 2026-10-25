@@ -16,11 +16,11 @@ test('daily cap is atomic per account and unique profile; claims, cached evidenc
   const urls=[1,2,3].map(n=>`https://www.linkedin.com/in/daily-${n}/`);await core.enqueue(pool,urls);
   const claims=await Promise.all([core.claim(pool,one,'one'),core.claim(pool,one,'one'),core.claim(pool,one,'one')]);
   assert.equal(new Set(claims.map(c=>c.job.jobId)).size,3);assert.ok(claims.every(c=>c.dailyCount===0));
-  const results=await Promise.all(claims.map(c=>daily.reserve(pool,{accountId:one,owner:'one',profileUrl:c.job.linkedinUrl,jobId:c.job.jobId})));
+  const results=await Promise.all(claims.map(c=>daily.reserve(pool,{intervalMs:0,accountId:one,owner:'one',profileUrl:c.job.linkedinUrl,jobId:c.job.jobId})));
   assert.equal(results.filter(r=>r.charged).length,2);assert.equal(results.filter(r=>r.limited).length,1);assert.equal((await daily.usage(pool,one)).used,2);
   const seen=claims[results.findIndex(r=>r.charged)].job;
-  assert.equal((await daily.reserve(pool,{accountId:one,owner:'one',profileUrl:seen.linkedinUrl,jobId:seen.jobId})).charged,false);
-  assert.equal((await daily.reserve(pool,{accountId:two,owner:'two',profileUrl:seen.linkedinUrl,jobId:seen.jobId})).charged,true,'same profile counts independently for another account');
+  assert.equal((await daily.reserve(pool,{intervalMs:0,accountId:one,owner:'one',profileUrl:seen.linkedinUrl,jobId:seen.jobId})).charged,false);
+  assert.equal((await daily.reserve(pool,{intervalMs:0,accountId:two,owner:'two',profileUrl:seen.linkedinUrl,jobId:seen.jobId})).charged,true,'same profile counts independently for another account');
   await core.recordLinkedInChecks(pool,one,'one',{identity:5000,activity_page:6000});assert.equal((await daily.usage(pool,one)).used,2);
   const usage=await daily.usage(pool,one);assert.equal(usage.timezone,'Africa/Casablanca');assert.ok(new Date(usage.resume_at)>new Date());
   const dst=(await pool.query("SELECT ('2026-11-02'::timestamp AT TIME ZONE 'America/New_York')-('2026-11-01'::timestamp AT TIME ZONE 'America/New_York') AS duration")).rows[0].duration;assert.equal((dst.days||0)*24+(dst.hours||0),25);
@@ -31,7 +31,7 @@ test('daily cap is atomic per account and unique profile; claims, cached evidenc
   const fresh=(await pool.query('SELECT checkpoint,payload FROM compel_worker_jobs WHERE id=$1',[recheck.jobs[0]])).rows[0];assert.equal(fresh.checkpoint,null);assert.equal(fresh.payload.explicitRetry,true);
   assert.equal((await require('../../src/lib/follower-recheck.cjs').recheckFollowers(pool,['legacy'])).queuedCount,0);
   assert.equal((await pool.query("SELECT pipeline_status FROM leads WHERE id='legacy'")).rows[0].pipeline_status,'QUALIFIED');
-  await core.pauseProcessing(pool,one);assert.equal((await daily.reserve(pool,{accountId:one,owner:'one',profileUrl:seen.linkedinUrl,jobId:seen.jobId})).stopped,true);
+  await core.pauseProcessing(pool,one);assert.equal((await daily.reserve(pool,{intervalMs:0,accountId:one,owner:'one',profileUrl:seen.linkedinUrl,jobId:seen.jobId})).stopped,true);
  }finally{await raw.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);await raw.end();}
 });
 test('daily defaults and time zones validate without adding an interaction throttle',()=>{
