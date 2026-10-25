@@ -7,7 +7,6 @@ const {cleanIdentity}=require('./linkedin-session-identity.cjs');
 const {sameMember}=require('./linkedin-session-policy.cjs');
 const {failureOf}=require('./worker-failure.cjs');
 const {normalizeEngineResult}=require('./engine-result.cjs');
-const activityPolicy=require('./linkedin-activity-policy.cjs');
 const telemetry=require('./engine-telemetry.cjs');
 const ready = new WeakMap();
 // Browser text can contain lone UTF-16 surrogates or NULs. PostgreSQL JSONB
@@ -174,10 +173,7 @@ function validateSettings(body) {
   if (a.id && (typeof a.id !== 'string' || !/^(?:legacy-\d+|[a-f0-9-]{36})$/.test(a.id) || ids.has(a.id))) throw new Error('Invalid or repeated account ID.');
   if (a.id) ids.add(a.id);
   if (a.password !== undefined && (typeof a.password !== 'string' || a.password.length > 256)) throw new Error('Invalid password.');
-  const dailyRequestLimit=a.dailyRequestLimit??100,requestIntervalSeconds=a.requestIntervalSeconds??15;
-  if(!Number.isInteger(dailyRequestLimit)||dailyRequestLimit<10||dailyRequestLimit>2000)throw new Error('Choose a daily check budget between 10 and 2,000.');
-  if(!Number.isInteger(requestIntervalSeconds)||requestIntervalSeconds<10||requestIntervalSeconds>300)throw new Error('Allow 10–300 seconds between LinkedIn checks.');
-  return { id: a.id || randomUUID(), email, label, enabled: a.enabled, dailyLimit: a.dailyLimit, dailyRequestLimit,requestIntervalSeconds, activityLimits:activityPolicy.validateLimits(a.activityLimits),workingHours:activityPolicy.validateHours(a.workingHours),position };
+  return { id: a.id || randomUUID(), email, label, enabled: a.enabled, dailyLimit: a.dailyLimit,position };
  });
  const enabled = accounts.filter(a => a.enabled).length;
  if (!Number.isInteger(body.activeCount) || body.activeCount < 0 || body.activeCount > enabled) throw new Error('Choose a number of running accounts between 0 and the number enabled.');
@@ -192,15 +188,13 @@ async function settings(pool) {
   FROM compel_linkedin_accounts a LEFT JOIN compel_worker_sessions s ON s.account_id=a.id
   LEFT JOIN compel_worker_usage u ON u.account_id=a.id AND u.day=(NOW() AT TIME ZONE 'UTC')::date
   WHERE a.archived IS FALSE ORDER BY a.position,a.id`)).rows;
- const events=(await pool.query("SELECT account_id,data,created_at,EXTRACT(EPOCH FROM NOW())*1000 AS observed_ms FROM compel_worker_events WHERE kind='read' AND created_at>NOW()-interval '24 hours'")).rows;
  return { revision: config.revision, supervisorOnline:!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000, activeCount: Math.min(config.active_count, rows.filter(a => a.enabled).length), accounts: rows.map(a => ({
   id:a.id,label:a.label,email:a.email,enabled:a.enabled,dailyLimit:a.daily_limit,hasPassword:a.has_password,
   dailyCount:a.daily_count,status:a.status?.status || 'offline',reason:a.status?.reason || '',
   runtimeVersion:a.status?.runtimeVersion||'',sessionReady:!!a.status?.sessionReady,browserOpen:!!a.status?.browserOpen,nextEligibleAt:a.status?.nextEligibleAt||null,
   dailyRequests:a.request_count||0,dailyCachedProfiles:a.cached_profiles||0,requestKinds:a.request_kinds||{},
   processingEnabled:!!a.processing_enabled&&new Date(a.processing_until).getTime()>Date.now(),processingUntil:a.processing_until||null,
-  connectedAt:a.connected_at||null,attentionReason:a.attention_reason||'',dailyRequestLimit:a.daily_request_limit,requestIntervalSeconds:a.request_interval_seconds,
-  activityLimits:activityPolicy.validateLimits(a.activity_limits),workingHours:a.working_hours,activityUsage:activityPolicy.windowUsage(events.filter(e=>e.account_id===a.id),events.length?Number(events[0].observed_ms):Date.now()),
+  connectedAt:a.connected_at||null,attentionReason:a.attention_reason||'',
   prospectingReady:a.status?.prospectingVersion==='COACH_EVIDENCE_V1',
   online:!!a.lease_until && new Date(a.lease_until).getTime() > Date.now(),
   loginPending:!!a.login_requested_at, logoutPending:!!a.logout_requested_at, signedOut:!!a.signed_out_at, updatedAt:a.updated_at || null,
@@ -232,8 +226,8 @@ async function saveSettings(pool, body) {
     changed_at=CASE WHEN compel_linkedin_accounts.secret IS DISTINCT FROM $4 THEN NOW() ELSE compel_linkedin_accounts.changed_at END`,
     [a.id,a.label,a.email,secret,a.enabled,a.dailyLimit,a.position]);
   }
-  for(const a of value.accounts)await client.query(`UPDATE compel_linkedin_accounts SET daily_request_limit=$2,request_interval_seconds=$3,
-   processing_enabled=CASE WHEN $4 THEN processing_enabled ELSE FALSE END,activity_limits=$5::jsonb,working_hours=$6::jsonb WHERE id=$1`,[a.id,a.dailyRequestLimit,a.requestIntervalSeconds,a.enabled,json(a.activityLimits),json(a.workingHours)]);
+  for(const a of value.accounts)await client.query(`UPDATE compel_linkedin_accounts SET
+   processing_enabled=CASE WHEN $2 THEN processing_enabled ELSE FALSE END WHERE id=$1`,[a.id,a.enabled]);
   await client.query('UPDATE compel_linkedin_accounts SET archived=TRUE,enabled=FALSE,processing_enabled=FALSE,processing_until=NULL WHERE archived IS FALSE AND NOT(id=ANY($1::text[]))', [value.accounts.map(a => a.id)]);
   await client.query('UPDATE compel_worker_config SET active_count=$1,revision=revision+1 WHERE id=1', [value.activeCount]);
   await client.query('COMMIT');
@@ -295,11 +289,6 @@ async function requestLogin(pool,id) {
   }
   const session=(await client.query('SELECT status,lease_until>NOW() AS online FROM compel_worker_sessions WHERE account_id=$1',[id])).rows[0];
   if(a.login_requested_at||session?.online&&session.status?.status==='awaiting_login')return;
-  const reuseOpenSession=session?.online&&session.status?.runtimeVersion==='SESSION_V2'&&session.status?.browserOpen;
-  if(!reuseOpenSession&&(await client.query("SELECT 1 FROM compel_worker_events WHERE account_id=$1 AND kind='sign_in_requested' AND created_at>NOW()-interval '5 minutes' LIMIT 1",[id])).rowCount)
-   throw new Error('A sign-in was recently requested. Wait five minutes before opening another window.');
-  if(!reuseOpenSession&&(await client.query("SELECT count(*)::int AS n FROM compel_worker_events WHERE account_id=$1 AND kind='sign_in_requested' AND created_at>NOW()-interval '1 hour'",[id])).rows[0].n>=3)
-   throw new Error('Three sign-in windows were already requested in the last hour. Stop retrying and review the account before requesting another.');
   await client.query('UPDATE compel_linkedin_accounts SET processing_enabled=FALSE,processing_until=NULL,login_requested_at=NOW(),signed_out_at=NULL,changed_at=NOW() WHERE id=$1',[id]);
   await accountEvent(client,id,'sign_in_requested','Manual sign-in requested. Processing stays paused.');
  });
@@ -366,11 +355,6 @@ async function startProcessing(pool,id,minutes=60) {
   if(a.attention_reason)throw new Error('This account needs review. Resolve LinkedIn’s check and complete manual sign-in before starting.');
   if(!a.connected_at||a.signed_out_at||a.login_requested_at||a.logout_requested_at)throw new Error('Complete manual sign-in before starting processing.');
   if(a.processing_enabled&&new Date(a.processing_until).getTime()>Date.now())return;
-  if(!activityPolicy.hoursAllowed(a.working_hours))throw new Error('Outside this account’s working hours. Start processing during its saved schedule.');
-  const usage=(await client.query("SELECT request_count,count FROM compel_worker_usage WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date",[id])).rows[0];
-  const rolling=(await client.query("SELECT count(*)::int AS n FROM compel_worker_events WHERE account_id=$1 AND kind='read' AND created_at>NOW()-interval '24 hours'",[id])).rows[0].n;
-  if(Math.max(usage?.request_count||0,rolling)>=a.daily_request_limit)throw new Error('The daily processing budget is exhausted. Wait for checks to leave the rolling 24-hour window before starting.');
-  if((await client.query("SELECT count(*)::int AS n FROM compel_worker_events WHERE account_id=$1 AND kind='read' AND created_at>NOW()-interval '1 hour'",[id])).rows[0].n>=30)throw new Error('The hourly LinkedIn check budget is exhausted. Wait for recent checks to leave the rolling hour.');
   const existing=(await client.query('SELECT status,lease_until>NOW() AS online FROM compel_worker_sessions WHERE account_id=$1',[id])).rows[0];
   if(existing?.online&&existing.status?.runtimeVersion!=='SESSION_V2')throw new Error('The previous account window is still closing. Wait for it to finish.');
   if(existing?.online&&existing.status?.runtimeVersion==='SESSION_V2'&&(['awaiting_login','signing_out'].includes(existing.status?.status)||existing.status?.browserOpen&&!existing.status?.sessionReady))
@@ -407,29 +391,15 @@ async function processingAllowed(pool,id,owner,version=null) {
    AND ($3::timestamptz IS NULL OR a.changed_at=$3::timestamptz)`,[id,owner,version]);
  return result.rowCount===1;
 }
-async function reserveLinkedInCheck(pool,id,owner,kind,{manual=false,version=null}={}) {
+async function recordLinkedInAction(pool,id,owner,kind,{manual=false,version=null}={}) {
  if(!['contact','profile','featured','activity','identity','discovery','profile_page','activity_page','other'].includes(kind))throw new Error('Unknown LinkedIn check.');
- return accountTransaction(pool,async client=>{
-  const a=(await client.query(`SELECT a.*,s.lease_until>NOW() AS leased,s.owner AS lease_owner,
-   GREATEST(0,EXTRACT(EPOCH FROM (a.next_check_at-NOW()))*1000)::int AS wait_ms,EXTRACT(EPOCH FROM NOW())*1000 AS now_ms
-   FROM compel_linkedin_accounts a JOIN compel_worker_sessions s ON s.account_id=a.id WHERE a.id=$1 FOR UPDATE OF a`,[id])).rows[0];
-  if(!a||a.lease_owner!==owner||!a.leased)throw new Error('Account session lease lost before LinkedIn access.');
-  if(manual&&kind!=='identity')throw new Error('Manual sign-in may only verify the account identity.');
-  if(!manual&&!await processingAllowed(client,id,owner,version))return {stopped:true,reason:'Processing is paused or the session request has changed.'};
-  if(!manual&&!activityPolicy.hoursAllowed(a.working_hours))return {waitMs:60000,reason:'Outside saved working hours. Pending work is retained.'};
-  if(a.wait_ms>0)return {waitMs:a.wait_ms};
-  const events=(await client.query("SELECT data,created_at FROM compel_worker_events WHERE account_id=$1 AND kind='read' AND created_at>NOW()-interval '24 hours' ORDER BY created_at",[id])).rows;
-  const usage=activityPolicy.windowUsage(events,Number(a.now_ms));
-  const today=(await client.query("SELECT request_count FROM compel_worker_usage WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date",[id])).rows[0]?.request_count||0;
-  if(Math.max(today,usage.daily)>=a.daily_request_limit||usage.hourly>=30)return {stopped:true,reason:Math.max(today,usage.daily)>=a.daily_request_limit?'Daily LinkedIn check budget reached (rolling 24 hours).':'Hourly LinkedIn check budget reached. Wait for checks to leave the rolling hour.'};
-  const actionWait=activityPolicy.actionWait(events,kind,a.activity_limits,Number(a.now_ms));
-  if(actionWait)return {waitMs:actionWait,reason:`The ${activityPolicy.category(kind)} activity budget is resting. Pending work is retained.`};
-  await client.query("UPDATE compel_linkedin_accounts SET next_check_at=NOW()+request_interval_seconds*interval '1 second' WHERE id=$1",[id]);
-  const counted=await recordLinkedInCheck(client,id,owner,kind);
-  await accountEvent(client,id,'read','LinkedIn page interaction.',{kind,execution:'rendered_page'});
-  return counted;
- });
+ if(manual&&kind!=='identity')throw new Error('Manual sign-in may only verify the account identity.');
+ if(!manual&&!await processingAllowed(pool,id,owner,version))return {stopped:true,reason:'Processing is paused or the session request has changed.'};
+ // Counts are dashboard statistics. No hourly, rolling, per-kind, schedule,
+ // check budget, next-check time, permit or sleep can deny an owned action.
+ return recordLinkedInCheck(pool,id,owner,kind);
 }
+const reserveLinkedInCheck=recordLinkedInAction; // compatibility for older local callers; no allowance is reserved
 async function enqueue(pool, urls, options = {}) {
  await ensure(pool); const entries=[], skipped=[];
  if (!Array.isArray(urls) || urls.length > 5000) throw new Error('Submit up to 5,000 LinkedIn profiles.');
@@ -753,4 +723,4 @@ async function queueStatus(pool,{includeHistory=true}={}) {
   dailyStats:{date:new Date().toISOString().slice(0,10),count:dailyCount,limit:dailyLimit},
   ...(includeHistory?{recentResults:recent.map(row=>({jobId:row.id,result:historyPreview(row.result,row.profile_key),completedAt:row.completed_at}))}:{})};
 }
-module.exports={SCHEMA,ensure,readRuntimeAccount,expireLoginRequests,accountEvents,confirmManualSignIn,startProcessing,pauseProcessing,resetProcessing,processingAllowed,reserveLinkedInCheck,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,requestLogout,finishLogout,enqueue,queueCandidates,skipCompletedDuplicates,reusableLinkedInProfile,cachedLinkedInProfile,recordLinkedInCheck,claim,complete,checkpoint,defer,retryFailed,reserveResearch,coolResearch,jobStatus,clearQueue,queueStatus,importResult,json};
+module.exports={SCHEMA,ensure,readRuntimeAccount,expireLoginRequests,accountEvents,confirmManualSignIn,startProcessing,pauseProcessing,resetProcessing,processingAllowed,recordLinkedInAction,reserveLinkedInCheck,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,requestLogout,finishLogout,enqueue,queueCandidates,skipCompletedDuplicates,reusableLinkedInProfile,cachedLinkedInProfile,recordLinkedInCheck,claim,complete,checkpoint,defer,retryFailed,reserveResearch,coolResearch,jobStatus,clearQueue,queueStatus,importResult,json};

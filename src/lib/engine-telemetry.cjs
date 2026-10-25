@@ -66,12 +66,12 @@ async function persist(pool,result,{final=false}={}){
 // touching response bodies. The caller's real page remains the security watcher.
 function pageActions(page){
  if(!current())return page;
- const trace=current(),proxies=new Map();
+ const proxies=new Map();
  const action=(target,key,prefix)=>{
   const value=target[key];if(typeof value!=='function')return value;
   return (...args)=>span(prefix+'.'+key,()=>value.apply(target,args));
  };
- const mouse=new Proxy(page.mouse,{get:(target,key)=>action(target,key,'linkedin.pointer')});
+ const mouse=page.mouse?new Proxy(page.mouse,{get:(target,key)=>action(target,key,'linkedin.pointer')}):undefined;
  return new Proxy(page,{get(target,key){
   if(key==='mouse')return mouse;
   if(['goto','waitForFunction','waitForSelector','evaluate','content'].includes(key)){

@@ -71,3 +71,22 @@ the installed Next.js treats `lint` as a directory. No lint pass is claimed.
 The pre-existing session/research refactor was recorded separately in commit
 `5697456` as the audited working-tree base. The trace is `de2060e`. Unrelated UI,
 configuration and secret-file changes present before this task were not included.
+
+The full worker run found two telemetry compatibility failures with injected pages
+that omit a mouse. The wrapper now tolerates those pages; all 17 affected race and
+telemetry tests pass. The other 126 tests passed and one opt-in DB test was skipped.
+
+## Prerequisite: remove prohibited limits
+
+The blocked startup justifies removing the legacy check gate before further cost
+measurement. `recordLinkedInAction` checks ownership/explicit pause and records
+statistics, without consulting counts, hours or next-check timestamps. Identity,
+contact, activity, profile and discovery share this behavior. Manual Connect has
+no frequency cap. Old DB columns are retained as inert compatibility data; no data
+or constraints were deleted. The dashboard no longer offers action budgets/gaps.
+The 50-lead regression remains unchanged. The daily-profile accounting/timezone
+repair, event-based rendering waits and idle polling changes are still pending.
+
+`baseline-unthrottled` will use the same 30 still-unvisited queue records. It is
+explicitly a baseline after removal of the prohibited action limits. It must not
+be compared to the blocked run as a measured active-work speedup.

@@ -15,7 +15,7 @@ function createAccountRuntime(options) {
  const discoveryStore=options.discoveryStore||require('./coach-prospecting-store.cjs');
  const prospecting=options.prospecting||require('./coach-prospecting-worker.cjs');
  const researchQueue=options.researchQueue||require('./worker-research-queue.cjs');
- const now=options.now||Date.now,sleep=options.sleep||(ms=>new Promise(resolve=>setTimeout(resolve,ms)));
+ const now=options.now||Date.now;
  const log=options.log||(()=>{}),onStatus=options.onStatus||(()=>{});
  let stopped=false,identity=null,manual=null,signal=null,surface=null,watched=null,closing=null,browserAttempted=false;
  let status={status:'idle',reason:'Connect this account to open its saved browser.',runtimeVersion,sessionReady:false,browserOpen:false,accountId};
@@ -75,20 +75,10 @@ function createAccountRuntime(options) {
   if(!await core.processingAllowed(pool,accountId,owner,activeVersion))throw controlError('Processing paused or the batch request changed. Queued profiles and captured evidence are retained.');
  }
  async function permit(kind,{manual:manualCheck=false}={}) {
-  const currentTask={status:status.status,reason:status.reason,jobId:status.jobId,url:status.url,phase:status.phase,runId:status.runId};
-  for(;;) {
-   if(stopped)throw controlError('Worker is stopping.');
-   if(!manualCheck)await assertActive();
-   const allowance=await core.reserveLinkedInCheck(pool,accountId,owner,kind,manualCheck?{manual:true}:{manual:false,version:activeVersion});
-   if(allowance.stopped)throw controlError(allowance.reason||'Processing is paused.');
-   if(!allowance.waitMs){if(status.status==='sleeping')publish(currentTask.status,currentTask);return;}
-   const reason=allowance.reason||'Waiting for the next scheduled page interaction.';
-   publish('sleeping',{jobId:currentTask.jobId,url:currentTask.url,phase:currentTask.phase,runId:currentTask.runId,reason,reasonCode:'ACTIVITY_WAIT',nextEligibleAt:new Date(now()+allowance.waitMs).toISOString()});
-   // Manual connection observes the user's page without waiting on this permit.
-   // It never repeatedly opens account controls while a budget is resting.
-   if(manualCheck)throw controlError(reason);
-   await telemetry.span('throttle.wait',()=>sleep(Math.min(allowance.waitMs,1000)),{kind});
-  }
+  if(stopped)throw controlError('Worker is stopping.');
+  if(!manualCheck)await assertActive();
+  const action=await (core.recordLinkedInAction||core.reserveLinkedInCheck)(pool,accountId,owner,kind,manualCheck?{manual:true}:{manual:false,version:activeVersion});
+  if(action?.stopped)throw controlError(action.reason||'Processing is paused.');
  }
  async function inspect(manualMode=false) {
   return reader.inspected(surface.page,{manual:manualMode,checkResponse:(code,url)=>{
