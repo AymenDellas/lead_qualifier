@@ -90,3 +90,45 @@ repair, event-based rendering waits and idle polling changes are still pending.
 `baseline-unthrottled` will use the same 30 still-unvisited queue records. It is
 explicitly a baseline after removal of the prohibited action limits. It must not
 be compared to the blocked run as a measured active-work speedup.
+
+## Completed 30-lead baseline after limit removal
+
+`baseline-unthrottled` completed all 30 original queued records. No crawl,
+qualification, followers, activity reuse or infrastructure optimization was loaded
+in those worker processes. The new follower parser was tested separately and was
+not imported by the live worker. Pickup-to-final-save median **19.004s**, p90
+**40.332s**; 30 outcomes over **667.999s**, **161.68 outcomes/hour**. Outcomes:
+1 QUALIFIED, 2 REJECTED, 27 ERROR (26 ACTIVITY_UNCONFIRMED, 1 PROFILE_REDIRECT).
+There were zero automatic retries and zero repeated profile/crawl passes in this
+sample. The ERROR rate is 90%; that is outcomes, not successfully qualified leads.
+
+| Rank | Stage | Attributed wall time | Share | Change justified |
+| --- | --- | --- | --- | --- |
+| 1 | Other LinkedIn actions, including hydration | 186.003s | 27.65% | Followers immediately after identity; avoid scrolling/expansion for decided leads; event-based readiness |
+| 2 | LinkedIn activity | 181.914s | 27.04% | Reuse reliably dated author-matched profile preview; terminal unknown evidence goes to REVIEW |
+| 3 | Lane queue / uninstrumented gaps | 104.501s | 15.53% | Overlap durable handoff/save with next capture under bounded backpressure; eliminate inter-job idle sleep |
+| 4 | LinkedIn profile navigation/identity | 77.511s | 11.52% | One reused tab; bounded browser recycling; no repeated profile read on public failures |
+| 5 | LinkedIn contact | 66.001s | 9.81% | Skip after follower/activity decision; retain contact checkpoints |
+| 6 | Website research | 32.355s | 4.81% | Bound tail cost and stop when attributable email is established; do not claim this is the dominant bottleneck |
+| 7 | Other SQL | 18.522s | 2.75% | Fewer idle queries; retain atomic ownership; no speculative index |
+| 8 | CRM and final save | 5.890s | 0.88% | Bounded asynchronous save; batch only independent safe writes |
+| 9 | Qualification | 0.063s | <0.01% | Preserve existing logic; no interpreter/library migration |
+
+Overlapping spans are attributed once. Inclusive totals for diagnostics are
+different: DOM waits 257.968s / 166 actions, page evaluation 121.240s / 418 calls,
+29 activity reads, 30 profile navigations, 29 contact stages. Only 2 leads caused
+website HTTP/render work (20 HTTP page attempts, 5 render calls); 29 crawl function
+entries include no-site fast returns. No full-site retry domination was observed.
+
+Service-tree peak RSS **5,573 MiB**; peak sampled CPU **172.31% of one core**.
+Account-only sampler separately observed 5,319 MiB peak. Public browser remained
+resident after use. Late-run account/public idle SQL rates were 109/67 per minute;
+these exclude supervisor and dashboard queries. Startup identity verification
+succeeded after the prohibited limits were removed. No auth/restriction hold was
+cleared by this run. Median pre-pickup queue wait 768.309s includes the deliberately
+blocked original attempt and is not included in the 19.004s primary latency.
+
+The claim EXPLAIN is saved locally as `data/engine-v2/claim-explain.json`. PostgreSQL
+uses `compel_worker_research_queue` bitmap index scans plus SKIP LOCKED, estimated
+total cost 13.2. No additional index is supported by this result. Reports/manifests
+are in PostgreSQL and ignored local exports; no live lead evidence is committed.
