@@ -11,9 +11,9 @@ const {
     segmentsFromText, emptyResearch, makeFact, groundedFact, validateResearch,
 } = require('./prospect-qualification.cjs');
 
-const MAX_PAGES = 200;
+const MAX_PAGES = 8;
 const MAX_BYTES = 4 * 1024 * 1024;
-const MAX_TOTAL_MS = 90000;
+const MAX_TOTAL_MS = 20000;
 const DEFAULT_RESEARCH_MODEL = 'openai/gpt-oss-120b';
 const MAX_AI_INPUT_CHARS = 8000;
 const publicAddress = address => { try { return ipaddr.process(address).range() === 'unicast'; } catch { return false; } };
@@ -448,6 +448,12 @@ async function researchProspect(input, options = {}) {
     const previousContacts=options.previousResearch?.contacts||[];
     const linkedinEmails=input.profileIdentityConfirmed&&input.emailSource==='linkedin'?(input.emails||[]).filter(e=>!isUnsafeContact(e)&&!previousContacts.some(c=>c.address===e.toLowerCase()&&c.source!=='linkedin')):[];
     const profileContacts=[...publishedProfileEmails(input),...linkedinEmails.map(address=>({address:address.toLowerCase(),source:'linkedin',url:input.linkedinUrl||input.url,ownership:'PUBLISHED'}))];
+    if(input.decisionStage==='followers'||input.decisionStage==='activity'){
+        research.contacts=profileContacts;deriveRules(input,research,sources,[]);return validateResearch(research);
+    }
+    if(options.qualificationFirst&&input.profileIdentityConfirmed&&activityAge>30&&Number.isFinite(activityAge)){
+        research.contacts=profileContacts;deriveRules(input,research,sources,[]);return validateResearch(research);
+    }
     if(options.qualificationFirst&&!options.previousResearch&&profileContacts.length&&activityAge>=0&&activityAge<=30){
         research.contacts=profileContacts;
         const roots=candidates.filter(u=>!isPlatformWebsite(u)).flatMap(u=>{try{return [publicUrl(u).href];}catch{return [];}});
@@ -461,6 +467,8 @@ async function researchProspect(input, options = {}) {
         previousResearch: options.previousResearch,
         renderPage:options.renderPage,
         rejectedHosts,
+        enoughEvidence:crawl=>input.profileIdentityConfirmed&&activityAge>=0&&activityAge<=30&&crawl.candidates.some(c=>
+            [...crawl.matchedHosts,...crawl.contactMatchedHosts].includes(hostOf(c.url))&&attributableCandidate(c,input)),
     }));
     const pages = crawled.parsed;
     sources.push(...crawled.sources);

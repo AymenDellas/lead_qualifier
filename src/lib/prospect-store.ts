@@ -25,7 +25,7 @@ export function assessmentForLead(lead: LeadRecord): ProspectAssessment | null {
     if (!lead.prospect_assessment?.research) return null;
     try {
         return assessProspect(lead.prospect_assessment.baseResearch || lead.prospect_assessment.research, {
-            review: lead.prospect_review, email: lead.email, emailProven: hasFreshSmtpProof(lead),
+            review: lead.prospect_review, email: lead.email, emailProven: hasFreshSmtpProof(lead),legacyFollowersUnchecked:lead.prospect_assessment.version<2&&!lead.prospect_assessment.research.followers,
         });
     } catch { return null; }
 }

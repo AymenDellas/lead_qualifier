@@ -15,9 +15,9 @@ function relativeDate(text,now){
  if(minAge<=30*86400000&&maxAge>30*86400000)return null;
  return new Date(Date.parse(now)-maxAge).toISOString();
 }
-function extractActivityPage(html,{profileUrl:person,profileUrn='',pageUrl,now=new Date().toISOString()}={}){
+function extractActivityPage(html,{profileUrl:person,profileUrn='',pageUrl,now=new Date().toISOString(),allowProfile=false}={}){
  const $=cheerio.load(html),records=[],requested=profileUrl(person);
- const valid=Boolean(requested&&activityRoute(pageUrl,person));
+ const valid=Boolean(requested&&(activityRoute(pageUrl,person)||allowProfile&&profileUrl(pageUrl)===requested));
  const modern=$('h2').toArray().filter(n=>$(n).text().trim()==='Feed post').map(n=>n.parent);
  const cards=modern.length?modern:$('[data-urn*="urn:li:activity"],.feed-shared-update-v2').toArray().filter(n=>!$(n).parents('[data-urn*="urn:li:activity"],.feed-shared-update-v2').length);
  let unresolved=0;
@@ -49,7 +49,7 @@ function extractActivityPage(html,{profileUrl:person,profileUrn='',pageUrl,now=n
  records.sort((a,b)=>Date.parse(b.at)-Date.parse(a.at));
  const selected=records[0]||null,status=selected?Date.parse(now)-Date.parse(selected.at)<=30*86400000?'Active':unresolved?'Unknown':'Inactive':'Unknown';
  const empty=valid&&/nothing to see for now/i.test($('body').text())&&!cards.length;
- return {activityStatus:status,lastActivityAt:status==='Unknown'?null:selected?.at||null,latestPostText:selected?.text||'',activityEvidence:{version:1,endpoint:'profile_activity_page',profileUrn,profileUrl:person,checkedAt:now,feedElements:cards.length,unresolved,selected,records:records.slice(0,10),reason:!valid?'Activity page did not match the requested profile.':selected?'Visible author-matched activity inspected.':empty?'Activity page reports no visible posts; dated activity remains unconfirmed.':'Activity page did not provide a reliably dated, author-matched post.'}};
+ return {activityStatus:status,lastActivityAt:status==='Unknown'?null:selected?.at||null,latestPostText:selected?.text||'',activityEvidence:{version:1,endpoint:allowProfile?'profile_activity_preview':'profile_activity_page',profileUrn,profileUrl:person,checkedAt:now,feedElements:cards.length,unresolved,selected,records:records.slice(0,10),reason:!valid?'Activity page did not match the requested profile.':selected?'Visible author-matched activity inspected.':empty?'Activity page reports no visible posts; dated activity remains unconfirmed.':'Activity page did not provide a reliably dated, author-matched post.'}};
 }
 async function checkActivityPage(browser,person,options={}) {
  // Prefer the account's existing page. Only legacy callers need a temporary tab.

@@ -7,6 +7,7 @@ const {profileUrl} = require('./linkedin-workers.cjs');
 const {cleanIdentity} = require('./linkedin-session-identity.cjs');
 const {pageSignal, failure} = require('./linkedin-session-policy.cjs');
 const telemetry=require('./engine-telemetry.cjs');
+const followerPolicy=require('./follower-policy.cjs');
 const text = value => String(value || '').replace(/\s+/g, ' ').trim();
 function problem(code, reason) {
  return Object.assign(new Error(reason), {failure: {stage:'linkedin', code, reason, retryable:false}});
@@ -49,6 +50,12 @@ async function inspected(page, options={}, response) {
  if(signal) throw Object.assign(new Error(signal.reason),{failure:failure(signal)});
  return state;
 }
+async function inspectNotice(page,options={}){
+ options.checkResponse?.(0,page.url());
+ const state=await page.evaluate(()=>({url:location.href,title:document.title,notice:[...document.querySelectorAll('[role="alert"],dialog,[role="dialog"]')].filter(n=>n.getClientRects().length).map(n=>n.innerText).join('\n').slice(0,12000)}));
+ const signal=pageSignal({url:state.url,text:state.title+'\n'+state.notice,manual:options.manual===true});
+ if(signal)throw Object.assign(new Error(signal.reason),{failure:failure(signal)});return state;
+}
 async function firstControl(page, selector, match=()=>true) {
  const elements=await page.$$(selector);
  let selected=null;
@@ -81,7 +88,7 @@ async function clickControl(page, selector, match, kind, options={}) {
  const probe=await firstControl(page,selector,match);
  if(!probe)return false;
  await probe.dispose();
- await inspected(page,options);
+ await inspectNotice(page,options);
  await options.beforeCheck?.(kind);
  // The activity permit can wait while LinkedIn hydrates its navigation. Never
  // retain a DOM handle across that wait; reacquire the visible control instead.
@@ -99,7 +106,7 @@ async function openProfile(page, person, options={}) {
  if(!expected) throw problem('PROFILE_IDENTITY','The requested LinkedIn profile URL is invalid.');
  await options.beforeCheck?.('profile_page');
  const response=await page.goto(expected,{waitUntil:'domcontentloaded',timeout:45000});
- await inspected(page,options,response);
+ let firstState=await inspected(page,options,response);
  if([404,410].includes(response?.status?.()))throw problem('PROFILE_UNAVAILABLE','The queued profile is no longer available. No profile facts were assigned.');
  // Navigation's DOMContentLoaded can precede the rendered member card. Use
  // the SAME identity check for readiness and extraction, including visibility,
@@ -107,11 +114,27 @@ async function openProfile(page, person, options={}) {
  // This only observes the current page: no navigation retry or extra request.
  const deadline=Date.now()+12000;
  do {
-  const state=await inspected(page,options);
+  const state=firstState||await inspected(page,options);firstState=null;
   if(profileUrl(state.url)!==expected)throw problem('PROFILE_REDIRECT','The queued URL redirected to another profile. No facts were assigned to the requested person.');
-  try{parseProfile(state,person,options.accountId);return state;}
+  try{return {...state,profile:parseProfile(state,person,options.accountId)};}
   catch(error){if(error.failure?.code!=='PROFILE_IDENTITY')throw error;}
-  await new Promise(resolve=>setTimeout(resolve,250));
+  try{await page.waitForFunction(person=>{
+   const visible=n=>n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden';
+   const canonical=value=>{try{const u=new URL(value,location.href);return u.origin==='https://www.linkedin.com'&&/^\/in\/[^/]+\/?$/.test(u.pathname)?u.origin+u.pathname.toLowerCase().replace(/\/?$/,'/'):null;}catch{return null;}};
+   const roots=[...document.querySelectorAll('main,[role="main"]')],headings=roots.flatMap(n=>[...n.querySelectorAll('h1')]).filter(visible);
+   if(headings.length===1&&headings[0].textContent.trim()){
+    const top=headings[0].closest('section')||headings[0].parentElement?.parentElement;
+    if(top?.querySelector('.text-body-medium,[data-view-name="profile-card-headline"],a[href*="/overlay/contact-info"],.dist-value,.pv-text-details__left-panel'))return true;
+   }
+   const cards=new Set();
+   for(const link of roots.flatMap(n=>[...n.querySelectorAll('a[href*="/overlay/contact-info"]')]).filter(visible)){
+    if(canonical(link.href.replace(/\/overlay\/contact-info\/?$/,''))!==person)continue;
+    const top=link.closest('section');if(!top)continue;
+    const names=[...top.querySelectorAll('h2,[role="heading"][aria-level="1"]')].filter(n=>visible(n)&&n.closest('section')===top&&n.textContent.trim());
+    if(names.length===1&&[...top.querySelectorAll('a[href]')].some(a=>visible(a)&&canonical(a.href)===person))cards.add(top);
+   }
+   return cards.size===1;
+  },{timeout:Math.max(1,deadline-Date.now()),polling:'mutation'},expected);}catch{break;}
  }while(Date.now()<deadline);
  throw problem('PAGE_CHANGED','The LinkedIn profile heading did not load in the supported layout. Processing paused; queued profiles are retained.');
 }
@@ -159,12 +182,11 @@ async function readSignedInIdentity(page,options={}) {
  if(!opened)return null;
  // Account menus can render in a portal with generated classes. Observe the
  // opened menu for a bounded time without clicking again or navigating.
- const deadline=Date.now()+6000;
- do {
+ identity=signedInIdentity(await inspected(page,options))||await readAccountMenuIdentity(page);
+ if(!identity){
+  await page.waitForFunction(()=>[...document.querySelectorAll('a[href*="/in/"]')].some(a=>a.getClientRects().length&&/view (?:my )?profile|voir (?:le |mon )?profil|ver (?:mi )?perfil/i.test(a.textContent)),{timeout:6000,polling:'mutation'}).catch(()=>{});
   identity=signedInIdentity(await inspected(page,options))||await readAccountMenuIdentity(page);
-  if(identity)break;
-  await new Promise(resolve=>setTimeout(resolve,200));
- }while(Date.now()<deadline);
+ }
  // A manual window stays on the revealed identity for the user to review.
  if(!options.leaveMenuOpen) {
   const control=await firstControl(page,meSelector,meControl);
@@ -263,12 +285,27 @@ function parseProfile(state,person,accountId='',now=new Date().toISOString()) {
  const nameBlock=heading.parentsUntil(top).toArray().map(n=>$(n)).find(n=>n.children('p').length);
  const headline=text(top.find('.text-body-medium.break-words,.text-body-medium,[data-view-name="profile-card-headline"]').first().text()||nameBlock?.children('p').first().text());
  const location=text(top.find('.pv-text-details__left-panel.mt2 .text-body-small,.text-body-small.inline.t-black--light.break-words,[data-view-name="profile-card-location"]').first().text()||nameBlock?.find('p').filter((_i,n)=>!$(n).find('a').length&&$(n).parent()[0]!==nameBlock[0]&&text($(n).text())!=='·').first().text());
- return {url:expected,firstName:parts[0],lastName:parts.slice(1).join(' '),headline,
+ const audience=profileAudience($,top,expected,now);
+ return {url:expected,firstName:parts[0],lastName:parts.slice(1).join(' '),headline,...audience,
   about:summary,profileLocation:location,
   profileIdentityConfirmed:true,websites,website:websites[0]||'',websiteSource:websites.length?'visible_profile':'',emails:[],emailSource:'',primaryEmail:'',
   linkedinContact:{accountId,connection,openProfile:'UNKNOWN',checkedAt:now,source:'WORKER',note:'Connection status read from the matching rendered profile. Free messaging is not inferred from a Message button or Premium badge.'},
   activityStatus:'Unknown',lastActivityAt:null,latestPostText:'',status:'PENDING',logs:['Profile identity confirmed from the rendered page.'],
   linkedinAccountId:accountId,linkedinCapture:{version:2,stage:'profile',complete:false,checkedAt:now}};
+}
+function profileAudience($,top,person,now){
+ const activity=section($,'Activity'),areas=[top];
+ if(activity?.find('a[href*="/recent-activity/"]').toArray().some(a=>{try{return new URL($(a).attr('href'),person).pathname.startsWith(new URL(person).pathname+'recent-activity/');}catch{return false;}}))areas.push(activity);
+ const pick=kind=>{
+  const values=new Map();let unparseable='';
+  for(const area of areas)area.find('p,li,span,a').each((_i,node)=>{
+   const raw=text($(node).text());if(raw.length>100||!new RegExp('(?:'+followerPolicy.LABELS[kind]+')$','iu').test(raw))return;
+   const record=followerPolicy.audienceRecord(raw,kind);if(record.count!==null)values.set(record.count,record);else if(!unparseable)unparseable=raw;
+  });
+  const records=[...values.values()],chosen=records.length===1?records[0]:{count:null,rawText:records.map(r=>r.rawText).join(' | ')||unparseable};
+  return {...chosen,checkedAt:now,...(kind==='followers'?{threshold:followerPolicy.minFollowers()}:{})};
+ };
+ return {followers:pick('followers'),connections:pick('connections')};
 }
 function parseContact(state,person) {
  const $=cheerio.load(state.html), modal=$('dialog,[role="dialog"]');
@@ -294,9 +331,9 @@ async function readActivityInner(page,person,options={}) {
  const routes=$('main a[href]').toArray().map(n=>activityRoute(new URL($(n).attr('href'),state.url).href,person)).filter(Boolean);
  if(!routes.length)return null;
  if(!await clickControl(page,'main a[href*="/recent-activity/"]',n=>routes.includes(n.href),'activity_page',options))return null;
- await page.waitForFunction(()=>/\/recent-activity\//.test(location.pathname),{timeout:12000,polling:250});
- await inspected(page,options);
- await page.waitForFunction(()=>document.querySelector('main [data-urn*="urn:li:activity"],main .feed-shared-update-v2')||[...document.querySelectorAll('main h2')].some(n=>n.textContent.trim()==='Feed post')||/nothing to see for now/i.test(document.querySelector('main')?.innerText||''),{timeout:10000,polling:250}).catch(()=>{});
+ await page.waitForFunction(()=>/\/recent-activity\//.test(location.pathname),{timeout:12000,polling:'mutation'});
+ await inspectNotice(page,options);
+ await page.waitForFunction(()=>document.querySelector('main [data-urn*="urn:li:activity"],main .feed-shared-update-v2')||[...document.querySelectorAll('main h2')].some(n=>n.textContent.trim()==='Feed post')||/nothing to see for now/i.test(document.querySelector('main')?.innerText||''),{timeout:10000,polling:'mutation'}).catch(()=>{});
  const activity=await inspected(page,options);
  return {...extractActivityPage(activity.html,{profileUrl:person,pageUrl:activity.url,now:options.now}),activityCheck:{httpStatus:200,retryable:false}};
 }
@@ -304,30 +341,69 @@ async function captureProfile(page,person,options={}) {
  const unwatch=telemetry.observePage(page);
  try {
  let state=await telemetry.span('linkedin.profile',()=>openProfile(page,person,options));
- parseProfile(state,person,options.accountId);
+ let initial=state.profile||parseProfile(state,person,options.accountId);
+ if(initial.followers.count===null&&!initial.followers.rawText){
+  await page.waitForFunction(()=>[...document.querySelectorAll('main p,main li,main span')].some(n=>n.getClientRects().length&&/^\s*[\d.,\s]+[kKmM]?\s+(followers?|abonnés|seguidores)\s*$/i.test(n.textContent)),{timeout:1500,polling:'mutation'}).catch(()=>{});
+  state=await inspected(page,options);initial=parseProfile(state,person,options.accountId);
+ }
+ const saved=options.resume,capturedAt=Date.parse(saved?.linkedinCapture?.checkedAt);
+ const resumeValid=saved?.linkedinCapture?.version===2&&saved.profileIdentityConfirmed&&profileUrl(saved.url)===profileUrl(person)&&saved.linkedinAccountId===options.accountId&&Number.isFinite(capturedAt)&&Date.now()-capturedAt>=0&&Date.now()-capturedAt<86400000;
+ const finish=async(value,stage='complete')=>{
+  value.linkedinCapture={...value.linkedinCapture,stage,complete:true};value.linkedinCapturedAt=new Date().toISOString();
+  await options.onCheckpoint?.(value);return value;
+ };
+ const followerGate=followerPolicy.followersDecision(initial.followers,followerPolicy.minFollowers());
+ if(followerGate.status!=='CONTINUE')return finish({...initial,status:followerGate.status,decisionStage:'followers',reasonCode:followerGate.reason,
+  ...(followerGate.status==='REVIEW'?{failure:{stage:'qualification',code:followerGate.reason,reason:'Follower count is not confirmed on the rendered profile. Review the saved evidence.',retryable:false}}:{})},'followers_decided');
+ if(!resumeValid)await options.onCheckpoint?.(initial);
  // Some LinkedIn layouts hydrate About/Activity only when their section is
  // approached. Limit scrolling to this profile and count every attempt.
  for(let pass=0;pass<3;pass++) {
   const $=cheerio.load(state.html);
-  if(section($,'About')&&$('main a[href*="/recent-activity/"]').length)break;
+  if($('main a[href*="/recent-activity/"]').length)break;
   await options.beforeCheck?.('profile');
   // A minimized Chrome window may never acknowledge wheel input. Scroll the
   // rendered document directly; this still runs its ordinary scroll/lazy-load
   // handlers, without a compositor-dependent pointer command or navigation.
   await page.evaluate(()=>window.scrollBy({top:650,behavior:'instant'}));
   await page.waitForFunction(()=>{
-   const about=document.querySelector('main #about')?.closest('section'),activity=document.querySelector('main a[href*="/recent-activity/"]');
-   return about?.getClientRects().length&&activity?.getClientRects().length;
-  },{timeout:2000,polling:250}).catch(()=>{});
+   return document.querySelector('main a[href*="/recent-activity/"]')?.getClientRects().length;
+  },{timeout:2000,polling:'mutation'}).catch(()=>{});
   state=await inspected(page,options);
   if(profileUrl(state.url)!==profileUrl(person))throw problem('PROFILE_IDENTITY','The page changed while loading profile sections. Processing stopped.');
+ }
+ const capturedProfile=parseProfile(state,person,options.accountId);
+ if(resumeValid){capturedProfile.about||=saved.about||'';capturedProfile.websites=[...new Set([...(saved.websites||[]),...capturedProfile.websites])];}
+ // A dated matching-author preview already proves recent activity. Older or
+ // undated preview cards do not establish inactivity and use the observed feed.
+ let activity=resumeValid&&saved.lastActivityAt&&['activity','contact'].includes(saved.linkedinCapture.stage)
+  ?{activityStatus:saved.activityStatus,lastActivityAt:saved.lastActivityAt,latestPostText:saved.latestPostText,activityEvidence:saved.activityEvidence}:null;
+ if(!activity){
+  const preview=require('./linkedin-activity-page.cjs').extractActivityPage(state.html,{profileUrl:person,pageUrl:state.url,allowProfile:true,now:options.now});
+  activity=preview.activityStatus==='Active'&&preview.lastActivityAt?preview:await readActivity(page,person,options);
+ }
+ const activityResult={...capturedProfile,...activity,followers:initial.followers,connections:initial.connections};
+ if(!activityResult.lastActivityAt||activityResult.activityStatus!=='Active'){
+  const inactive=activityResult.activityStatus==='Inactive'&&!!activityResult.lastActivityAt;
+  return finish({...activityResult,status:inactive?'REJECTED':'REVIEW',decisionStage:'activity',reasonCode:inactive?'ACTIVITY_INACTIVE':'ACTIVITY_UNCONFIRMED',
+   ...(!inactive?{failure:{stage:'qualification',code:'ACTIVITY_UNCONFIRMED',reason:activityResult.activityEvidence?.reason||'No reliably dated matching-author activity. Review the saved evidence.',retryable:false}}:{})},'activity_decided');
+ }
+ activityResult.linkedinCapture.stage='activity';if(!(resumeValid&&saved.linkedinCapture.stage==='contact'))await options.onCheckpoint?.(activityResult);
+ if(profileUrl(page.url())!==profileUrl(person))state=await telemetry.span('linkedin.profile_return',()=>openProfile(page,person,options));
+ for(let pass=0;pass<2&&!capturedProfile.about&&!section(cheerio.load(state.html),'About');pass++){
+  await options.beforeCheck?.('profile');await page.evaluate(()=>window.scrollBy({top:650,behavior:'instant'}));
+  await page.waitForFunction(()=>document.querySelector('main #about')?.closest('section')?.getClientRects().length,{timeout:2000,polling:'mutation'}).catch(()=>{});
+  state=await inspected(page,options);
  }
  // Expand only the requested profile's About text. Never click messaging,
  // invitation, or other account-changing controls while qualifying a lead.
  if(await clickControl(page,'main section:has(#about) button.inline-show-more-text__button,main section:has(#about) button[aria-label*="see more"]',()=>true,'profile',options))state=await inspected(page,options);
- const result=parseProfile(state,person,options.accountId);
- const saved=options.resume, capturedAt=Date.parse(saved?.linkedinCapture?.checkedAt);
- const resumeContact=saved?.linkedinCapture?.version===2&&saved.linkedinCapture.stage==='contact'&&saved.profileIdentityConfirmed&&profileUrl(saved.url)===profileUrl(person)&&saved.linkedinAccountId===options.accountId&&Number.isFinite(capturedAt)&&Date.now()-capturedAt>=0&&Date.now()-capturedAt<86400000;
+ const result={...parseProfile(state,person,options.accountId),...activity,followers:initial.followers,connections:initial.connections};
+ result.about||=capturedProfile.about;
+ result.websites=[...new Set([...capturedProfile.websites,...result.websites])];result.website=result.websites[0]||'';
+ result.websiteSource||=capturedProfile.websiteSource;
+ result.linkedinCapture.stage='activity';
+ const resumeContact=resumeValid&&saved.linkedinCapture.stage==='contact';
  if(resumeContact){
   result.emails=saved.emails||[];result.emailSource=saved.emailSource||'';
   result.websites=[...new Set([...(saved.websites||[]),...result.websites])];result.website=result.websites[0]||'';result.websiteSource=saved.websiteSource||result.websiteSource;
@@ -335,13 +411,12 @@ async function captureProfile(page,person,options={}) {
  }
  // Do not overwrite a later saved stage with an earlier checkpoint.
  if(resumeContact)result.linkedinCapture.stage='contact';
- await options.onCheckpoint?.(result);
  await telemetry.span('linkedin.contact',async()=>{
  const contactOpened=!resumeContact&&await clickControl(page,'main a[href*="/overlay/contact-info"]',n=>{
   try{const u=new URL(n.href);return profileUrl(u.origin+u.pathname.replace(/\/overlay\/contact-info\/?$/,''))===profileUrl(person);}catch{return false;}
  },'contact',options);
  if(contactOpened) {
-  await page.waitForFunction(()=>[...document.querySelectorAll('dialog,[role="dialog"]')].some(n=>n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden'),{timeout:8000,polling:250});
+  await page.waitForFunction(()=>[...document.querySelectorAll('dialog,[role="dialog"]')].some(n=>n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden'),{timeout:8000,polling:'mutation'});
   const contact=parseContact(await inspected(page,options),person);
   if(!contact)throw problem('PAGE_CHANGED','The contact panel could not be associated with the requested profile. Saved profile facts are retained.');
   result.emails=contact.emails;result.emailSource=contact.emails.length?'linkedin':'';
@@ -349,16 +424,11 @@ async function captureProfile(page,person,options={}) {
   if(contact.websites.length)result.websiteSource='contact_modal';
   const closed=await clickControl(page,':is(dialog,[role="dialog"]) button[aria-label*="Dismiss"],:is(dialog,[role="dialog"]) button[aria-label*="Close"],:is(dialog,[role="dialog"]) button.artdeco-modal__dismiss',()=>true,'contact',options);
   if(!closed)throw problem('PAGE_CHANGED','The contact panel could not be closed. Processing stopped before another action.');
-  await page.waitForFunction(()=>![...document.querySelectorAll('dialog,[role="dialog"]')].some(n=>n.getClientRects().length),{timeout:8000,polling:250});
+  await page.waitForFunction(()=>![...document.querySelectorAll('dialog,[role="dialog"]')].some(n=>n.getClientRects().length),{timeout:8000,polling:'mutation'});
  }else if(!resumeContact)result.logs.push('No rendered contact-info control was available. No contact details were guessed.');
  });
  result.linkedinCapture.stage='contact';await options.onCheckpoint?.(result);
- const activity=await readActivity(page,person,options);
- if(activity)Object.assign(result,activity);
- else result.logs.push('No observed activity link was available; recent activity remains unconfirmed.');
- result.linkedinCapture={...result.linkedinCapture,stage:'complete',complete:true};result.linkedinCapturedAt=new Date().toISOString();
- await options.onCheckpoint?.(result);
- return result;
+ return finish(result);
  }finally{unwatch();}
 }
 module.exports={snapshot,inspected,firstControl,controlPoint,pressControl,clickControl,signedInIdentity,readSignedInIdentity,signInDiagnostics,profileDiagnostics,parseProfile,parseContact,openProfile,readActivity,captureProfile,externalUrl};

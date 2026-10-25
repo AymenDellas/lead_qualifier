@@ -544,20 +544,9 @@ async function claim(pool,id,owner,options={}) {
 }
 async function complete(pool,id,owner,result) {
  result=telemetry.attach(result);
- const crawl=result?.prospectQualification?.research?.crawl;
- // Qualification is saved immediately. Large/temporarily blocked sites finish
- // crawling in a separate cached-profile job, without a new LinkedIn visit.
- const update=await telemetry.span('db.final_save',()=>pool.query(`WITH finished AS (
-  UPDATE compel_worker_jobs SET status='done',result=$3::jsonb,completed_at=NOW(),lease_until=NULL
-   WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW() RETURNING *
- ), continuation AS (
-  INSERT INTO compel_worker_jobs(id,profile_key,payload,checkpoint,retry_at,retry_count,lane)
-  SELECT $4,profile_key,payload || jsonb_build_object('jobId',$4::text,'websiteContinuation',true),$3::jsonb,NOW()+interval '30 seconds',
-   retry_count+1,'research' FROM finished
-  WHERE $5 AND retry_count<3 ON CONFLICT DO NOTHING RETURNING id
- ) SELECT id,(SELECT id FROM continuation) AS continuation_id FROM finished`,
- [id,owner,json(result),'job_'+randomUUID(),Boolean(result.status==='QUALIFIED'&&crawl&&!crawl.complete&&crawl.retryable!==false&&!/storage limit/i.test(crawl.stoppedReason))]));
- if (!update.rowCount) throw new Error('Job lease lost; result was not overwritten.');
+ const update=await telemetry.span('db.final_save',()=>pool.query(`UPDATE compel_worker_jobs SET status='done',result=$3::jsonb,completed_at=NOW(),lease_until=NULL
+  WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW() RETURNING id`,[id,owner,json(result)]));
+ if(!update.rowCount)throw new Error('Job lease lost; result was not overwritten.');
  await telemetry.persist(pool,result,{final:true}).catch(error=>console.warn('[Engine metrics]',error.message));
 }
 async function checkpoint(pool,id,owner,result) {
@@ -627,8 +616,9 @@ function normalizeResult(result) {
  try {
   const q=require('./prospect-qualification.cjs');
   const email=result.primaryEmail || result.emails?.[0] || '';
-  const assessment=q.assessProspect(result.prospectQualification.baseResearch || result.prospectQualification.research,{email});
-  return {...result,prospectQualification:assessment,status:q.pipelineForAssessment(assessment)==='QUALIFIED'?'QUALIFIED':'REJECTED'};
+  const research=result.prospectQualification.baseResearch || result.prospectQualification.research;
+  const assessment=q.assessProspect(research,{email,legacyFollowersUnchecked:result.prospectQualification.version<2&&!research.followers});
+  return {...result,prospectQualification:assessment,status:q.pipelineForAssessment(assessment)==='QUALIFIED'?'QUALIFIED':q.pipelineForAssessment(assessment)==='REVIEW'?'REVIEW':result.status==='REVIEW'?'REVIEW':'REJECTED'};
  }catch{return {...result,status:'REJECTED'};}
 }
 async function importResult(pool,id,wrapper) {

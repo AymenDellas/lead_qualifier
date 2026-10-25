@@ -132,3 +132,47 @@ The claim EXPLAIN is saved locally as `data/engine-v2/claim-explain.json`. Postg
 uses `compel_worker_research_queue` bitmap index scans plus SKIP LOCKED, estimated
 total cost 13.2. No additional index is supported by this result. Reports/manifests
 are in PostgreSQL and ignored local exports; no live lead evidence is committed.
+
+## Phase 2: cut work per lead
+
+Followers are checked immediately after rendered identity, before hydration,
+activity navigation, contact or websites. This brings the Phase 5 parser/version
+work forward because Phase 2 explicitly depends on that first disqualifier. Counts
+and raw text for followers and connections are separate. A count <=1,000 rejects;
+missing/unparseable evidence reviews. A matching-author recent profile preview
+avoids activity navigation entirely. Otherwise activity is read before contact and
+website work; unknown/inactive activity ends the lead. For the remaining active
+leads, returning to the profile for contact can add one profile navigation; this
+trades that small minority's extra load against skipping contact/hydration for the
+26/30 baseline activity-unknown leads. Existing contact/activity checkpoints resume.
+
+Profile/card/menu readiness uses DOM mutation predicates. Repeated account-notice
+checks no longer clone and parse the entire page. Full visible evidence snapshots
+remain at actual reading boundaries. This targets the measured 27.65% hydration
+and page-action share (121.24s inclusive page evaluation), without changing the
+identity check or using private endpoints.
+
+Websites default to 8 distinct pages, 20 seconds accumulated across automatic
+resumes, 5s per request and 12 total page attempts. Home/contact/About are prioritized.
+The existing attribution rules decide whether an email is sufficient to stop.
+Remaining routes and failures stay in saved evidence. Terminal failures and exhausted
+budgets go to REVIEW; no automatic public failure returns to LinkedIn. Readable
+HTML without an email no longer launches Chrome. Anonymous HTML cache entries are
+bounded to 8 slots/domain, 256KiB/slot in PostgreSQL, re-evaluating attribution for
+each person. A final qualification no longer creates a background crawl continuation.
+The measured website share was only 4.81%; these are tail/resource bounds, not a
+claim that website optimization is the principal gain.
+
+The offline regression report `data/engine-v2/phase-2-regression.json` enumerates
+every changed record. All 50 lack stored follower evidence and therefore replay
+REVIEW under v2 (`FOLLOWERS_NOT_SHOWN`). A diagnostic pass holding only the new
+follower gate satisfied reproduces **all 50 original pipeline decisions, email/
+activity flags and blocker reasons**. No non-follower regression was found. The
+diagnostic count is never stored as lead evidence. Existing pre-v2 CRM outcomes
+are displayed as follower-unchecked and are not automatically requeued or rewritten.
+
+42 parser, qualification, real-browser fixture, research/recovery and website-budget
+tests pass; typecheck passes. Browser fixtures now include explicit passing follower
+evidence, and separate tests prove low/absent counts end after one page and that
+an inline recent post avoids activity navigation. Daily timezone/account-scope
+repair, selected recheck UI, browser recycling and the single agent are next.

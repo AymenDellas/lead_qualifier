@@ -6,6 +6,7 @@ export type ProspectEvidence = { url: string; excerpt: string; source: 'WEBSITE'
 export type ProspectFact = { state: FactState; value: string; reason: string; evidence: ProspectEvidence[] };
 export type ProspectReview = { facts: Partial<Record<FactKey, { state: FactState; note: string; url?: string }>>; segment?: string; contactOwnership?: string; contactEmail?: string; note?: string; reviewedAt?: string };
 export type ProspectResearch = {
+    followers?:AudienceEvidence|null;connections?:AudienceEvidence|null;
     version: number; researchedAt: string; engine: 'rules' | 'ai' | 'manual'; profileIdentityConfirmed: boolean;
     headline: string; about: string; profileLocation: string; latestPostText: string; lastActivityAt: string | null; activityStatus: 'Active' | 'Inactive' | 'Unknown'; linkedinUrl: string;
     activityEvidence?: {version:1; endpoint:string; profileUrn:string; profileUrl:string; checkedAt:string; feedElements:number; unresolved:number; selected:ActivityRecord|null; records:ActivityRecord[]; reason:string}|null;
@@ -20,11 +21,17 @@ export type ActivityRecord={postUrn:string;authorUrn:string;at:string;method:str
 export type ProspectAssessment = {
     version: number; researchedAt: string; tier: ProspectTier; segment: ProspectSegment; segments: ProspectSegment[]; score: number;
     businessFit: 'MATCH' | 'POTENTIAL' | 'OUTSIDE_ICP' | 'UNKNOWN'; readiness: 'READY_TO_APPROACH' | 'EARLY' | 'NEEDS_REVIEW'; engagementReady: boolean;
-    qualification: {policy: 'EMAIL_ACTIVITY_V1'; qualified: boolean; activity: 'RECENT' | 'INACTIVE' | 'UNKNOWN'; activityAgeDays: number | null; attributableEmail: boolean; needsRetry: boolean; needsAttention?: boolean};
+    qualification: {policy: 'EMAIL_ACTIVITY_V1'|'EMAIL_ACTIVITY_FOLLOWERS_V2'; qualified: boolean; activity: 'RECENT' | 'INACTIVE' | 'UNKNOWN'; activityAgeDays: number | null; attributableEmail: boolean; needsRetry: boolean; needsAttention?: boolean;followers?:string;followersReason?:string|null;followersThreshold?:number};
     contact: { channel: 'EMAIL_READY' | 'EMAIL_NEEDS_VERIFICATION' | 'LINKEDIN_ONLY' | 'UNAVAILABLE' | 'OWNERSHIP_UNCLEAR'; ownership: string; email: string };
     blockers: string[]; unknowns: string[]; cautions: string[]; nextAction: string; research: ProspectResearch; baseResearch: ProspectResearch;
 };
+/** Evidence required by CRM contact gates; full research is unnecessary for lists. */
+export type ProspectContactAssessment = Pick<ProspectAssessment, 'version' | 'score' | 'contact'> & {
+    research: Pick<ProspectResearch, 'profileIdentityConfirmed' | 'lastActivityAt' | 'followers' | 'connections'>;
+};
 export const VERSION: number;
+export const QUALIFICATION_VERSION:number;
+export type AudienceEvidence={rawText:string;count:number|null;checkedAt:string;threshold?:number};
 export const RESEARCH_MAX_AGE_DAYS: number;
 export const SEGMENTS: ProspectSegment[];
 export const SEGMENT_LABELS: Record<ProspectSegment, string>;
@@ -39,11 +46,11 @@ export function emptyResearch(input?: Record<string, unknown>, now?: string): Pr
 export function validateResearch(value: unknown): ProspectResearch;
 export function validateReview(value: unknown): ProspectReview;
 export function applyReview(research: ProspectResearch, review?: ProspectReview | null): ProspectResearch;
-export function assessProspect(research: ProspectResearch, context?: { review?: ProspectReview | null; email?: string; emailProven?: boolean; now?: string }): ProspectAssessment;
-export function isContactNow(assessment?: ProspectAssessment | null): boolean;
-export function hasAttributableEmail(assessment?: ProspectAssessment | null): boolean;
-export function isQualifiedRecord(lead: { pipeline_status: string; email?: string; prospect_assessment?: ProspectAssessment | null }): boolean;
-export function hasQualifiedEmail(lead: { pipeline_status: string; email?: string; prospect_assessment?: ProspectAssessment | null }): boolean;
+export function assessProspect(research: ProspectResearch, context?: { review?: ProspectReview | null; email?: string; emailProven?: boolean; now?: string;minFollowers?:number;legacyFollowersUnchecked?:boolean }): ProspectAssessment;
+export function isContactNow(assessment?: ProspectContactAssessment | null): boolean;
+export function hasAttributableEmail(assessment?: ProspectContactAssessment | null): boolean;
+export function isQualifiedRecord(lead: { pipeline_status: string; email?: string; prospect_assessment?: ProspectContactAssessment | null }): boolean;
+export function hasQualifiedEmail(lead: { pipeline_status: string; email?: string; prospect_assessment?: ProspectContactAssessment | null }): boolean;
 export function pipelineForAssessment(assessment: ProspectAssessment): string;
 export function isUnsafeContact(address: string): boolean;
 export function isPlatformWebsite(url: string): boolean;

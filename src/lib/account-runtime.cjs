@@ -169,7 +169,7 @@ function createAccountRuntime(options) {
  }
  async function recoverJob(job,error,capture) {
   const failure=error.failure||{stage:'linkedin',code:'PAGE_CHANGED',reason:'The LinkedIn page could not be read. Review the open browser before resuming.',retryable:false};
-  const result={...(capture||job.resumeResult||{}),url:job.linkedinUrl,status:'ERROR',failure,
+  const result={...(capture||job.resumeResult||{}),url:job.linkedinUrl,status:failure.retryable===false?'REVIEW':'ERROR',failure,
    logs:[...(capture?.logs||[]),'Profile reading stopped: '+error.message]};
   if(['PROFILE_REDIRECT','PROFILE_UNAVAILABLE'].includes(failure.code)) {
    await core.complete(pool,job.jobId,owner,result);

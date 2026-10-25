@@ -54,7 +54,8 @@ function createResearchRunner(options){
  const saveWorkerResearch=options.saveWorkerResearch||require('./worker-research-store.cjs').saveWorkerResearch;
  const finishProspecting=options.finishProspecting||require('./coach-prospecting-worker.cjs').finish;
  const createPageRenderer=options.createPageRenderer||require('./public-page-browser.cjs').createPageRenderer;
- const fetchPage=createPublicFetcher(options.fetchResource||researchModule.fetchPublicPage);
+ const publicFetcher=createPublicFetcher(options.fetchResource||researchModule.fetchPublicPage);
+ const fetchPage=require('./website-cache.cjs').createWebsiteCache(pool,publicFetcher);
  const launch=options.launch||((settings)=>require('puppeteer').launch(settings));
  const now=options.now||Date.now,log=options.log||(()=>{});
  let browserTask=null,closed=false;
@@ -71,7 +72,7 @@ function createResearchRunner(options){
   let renderTask;
   return async(value,settings)=>{
    researchUrl(value);
-   if(!renderTask)renderTask=browser().then(b=>createPageRenderer(b,{fetchResource:fetchPage,maxPages:3}));
+   if(!renderTask)renderTask=browser().then(b=>createPageRenderer(b,{fetchResource:publicFetcher,maxPages:3}));
    const render=await renderTask;
    return render(value,settings);
   };
@@ -79,7 +80,7 @@ function createResearchRunner(options){
  async function nativeSave(job,result){
   const research=result.prospectQualification?.research;
   if(!job.nativePostProcess||!research)return;
-  const unresolved=result.status==='ERROR';
+  const unresolved=result.status==='ERROR',reviewRequired=result.status==='REVIEW';
   if(unresolved){
    if(!research.profileIdentityConfirmed)return;
    const slug=result.url?.match(/\/in\/([^/?#]+)/i)?.[1]?.toLowerCase();
@@ -88,11 +89,11 @@ function createResearchRunner(options){
   }
   const saved=await saveWorkerResearch(pool,{linkedinUrl:result.url,firstName:result.firstName,lastName:result.lastName,
    email:result.primaryEmail||'',emailSource:result.emailSource||'',websiteSource:result.websiteSource||'',
-   research,jobId:job.jobId,owner});
+   research,jobId:job.jobId,owner,reviewRequired:result.status==='REVIEW'});
   result.crmSaved=true;result.crmLeadId=saved.id;result.prospectQualification=saved.assessment;
   result.primaryEmail=saved.assessment.contact.email;
   if(result.primaryEmail&&!result.emails.includes(result.primaryEmail))result.emails.unshift(result.primaryEmail);
-  result.status=unresolved?'ERROR':saved.pipelineStatus==='QUALIFIED'?'QUALIFIED':'REJECTED';
+  result.status=unresolved?'ERROR':reviewRequired?'REVIEW':saved.pipelineStatus==='QUALIFIED'?'QUALIFIED':saved.pipelineStatus==='REVIEW'?'REVIEW':'REJECTED';
  }
  function processJob(job){return telemetry.withLead(job,()=>processJobInner(job));}
  async function processJobInner(job){
@@ -138,12 +139,15 @@ function createResearchRunner(options){
     result.emailSource=chosen?.source==='website'?'website_scraped':chosen?.source||'';
     result.prospectQualification=telemetry.spanSync('qualification',()=>assessProspect(research,{email:result.primaryEmail}));
     const q=result.prospectQualification.qualification;
-    result.status=pipelineForAssessment(result.prospectQualification)==='QUALIFIED'?'QUALIFIED':q.needsRetry||q.needsAttention?'ERROR':'REJECTED';
+    const pipeline=pipelineForAssessment(result.prospectQualification);
+    result.status=pipeline==='QUALIFIED'?'QUALIFIED':pipeline==='REVIEW'||q.activity==='UNKNOWN'||!research.profileIdentityConfirmed||q.needsAttention?'REVIEW':q.needsRetry?'ERROR':'REJECTED';
+    if(result.status==='REVIEW')result.failure={stage:'qualification',code:q.followersReason||(!research.profileIdentityConfirmed?'PROFILE_IDENTITY':q.activity==='UNKNOWN'?'ACTIVITY_UNCONFIRMED':'CRAWL_INCOMPLETE'),reason:result.prospectQualification.nextAction,retryable:false};
     if(result.status==='ERROR'){
      result.failure=q.activity==='UNKNOWN'||!research.profileIdentityConfirmed
       ?{stage:'linkedin',code:research.profileIdentityConfirmed?'ACTIVITY_UNCONFIRMED':'PROFILE_IDENTITY',reason:research.activityEvidence?.reason||result.prospectQualification.blockers?.[0]||'Captured profile evidence needs manual review.',retryable:false}
       :{stage:'research',code:'CRAWL_INCOMPLETE',reason:research.crawl?.stoppedReason||'Website research is incomplete.',retryable:research.crawl?.retryable!==false};
     }
+    if(result.status==='ERROR'&&result.failure?.retryable===false)result.status='REVIEW';
     stage='crm';await telemetry.span('crm.save',()=>nativeSave(job,result));
    }
   }catch(error){
@@ -166,6 +170,7 @@ function createResearchRunner(options){
    failure.retryable=false;delete failure.retryAt;
    if(retryCount>=3&&['research','crm'].includes(failure.stage))failure.reason='Automatic retries exhausted. '+failure.reason;
   }
+  if(result.status==='ERROR'&&failure?.retryable===false)result.status='REVIEW';
   await core.complete(pool,job.jobId,owner,result);
   if(options.onComplete)await options.onComplete(job,result);
   return {jobId:job.jobId,result,deferred:false};
