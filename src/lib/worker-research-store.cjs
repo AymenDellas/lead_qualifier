@@ -2,13 +2,13 @@
 const { randomUUID } = require('node:crypto');
 const { validateResearch, assessProspect, pipelineForAssessment, isUnsafeContact, hostOf } = require('./prospect-qualification.cjs');
 const {json}=require('./linkedin-workers.cjs');
-let schemaReady;
+const schemaReady=new WeakMap();
 async function saveWorkerResearch(pool, input) {
- if (!schemaReady) schemaReady=pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS prospect_assessment JSONB;
+ if (!schemaReady.has(pool)) schemaReady.set(pool,pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS prospect_assessment JSONB;
   ALTER TABLE leads ADD COLUMN IF NOT EXISTS prospect_review JSONB;
   ALTER TABLE leads ADD COLUMN IF NOT EXISTS prospect_researched_at TIMESTAMPTZ;
-  ALTER TABLE leads ADD COLUMN IF NOT EXISTS followers_check_status TEXT NOT NULL DEFAULT 'UNCHECKED';`).catch(error=>{schemaReady=undefined;throw error;});
- await schemaReady;
+  ALTER TABLE leads ADD COLUMN IF NOT EXISTS followers_check_status TEXT NOT NULL DEFAULT 'UNCHECKED';`).catch(error=>{schemaReady.delete(pool);throw error;}));
+ await schemaReady.get(pool);
  const research=validateResearch(input.research);
  const {profileUrl}=require('./linkedin-workers.cjs');
  const url=profileUrl(input.linkedinUrl);

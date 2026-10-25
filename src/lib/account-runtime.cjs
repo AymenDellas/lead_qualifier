@@ -19,7 +19,32 @@ function createAccountRuntime(options) {
  const log=options.log||(()=>{}),onStatus=options.onStatus||(()=>{});
  let stopped=false,identity=null,manual=null,signal=null,surface=null,watched=null,closing=null,browserAttempted=false;
  let status={status:'idle',reason:'Connect this account to open its saved browser.',runtimeVersion,sessionReady:false,browserOpen:false,accountId};
- let handledStart=null,handledLogin=null,handledLogout=null,handlingSignal=null,activeVersion=null,signalGeneration=0,pageGeneration=0;
+ let handledStart=null,handledLogin=null,handledLogout=null,handlingSignal=null,activeVersion=null,signalGeneration=0,pageGeneration=0,prefetched=null,jobsStarted=0,pendingKinds={};
+ const saves=require('./bounded-work.cjs').createBoundedQueue({capacity:options.saveQueueCapacity||6,onError:(error,metadata)=>{
+  const reason='PostgreSQL save failed: '+error.message;
+  publish('paused',{reason,reasonCode:'DB_SAVE_FAILED',startupStage:'FAILED',failedStage:'DB_SAVE',jobId:metadata?.jobId});
+  log(reason);void core.pauseProcessing(pool,accountId,reason,false,owner,metadata?.version).catch(()=>{});
+ }});
+ async function save(task,jobId){
+  const trace=telemetry.current(),version=activeVersion;
+  return saves.submit(()=>trace?telemetry.withTrace(trace,task):task(),{jobId,version});
+ }
+ async function flushStatistics(jobId){
+  if(!Object.keys(pendingKinds).length)return;const batch=pendingKinds;pendingKinds={};
+  await save(()=>core.recordLinkedInChecks(pool,accountId,owner,batch),jobId);
+ }
+ async function releasePrefetch(){
+  const pending=prefetched;prefetched=null;const result=pending?await pending:null;
+  if(result?.value?.job&&core.releaseClaim)await core.releaseClaim(pool,result.value.job.jobId,owner);
+  if(saves.error||result?.error){await saves.idle();await core.releaseCaptureClaims?.(pool,accountId,owner);}
+ }
+ async function takeClaim(){
+  if(!prefetched)return core.claim(pool,accountId,owner);
+  const pending=prefetched;prefetched=null;const result=await pending;if(result.error)throw result.error;return result.value;
+ }
+ function prefetchNext(){
+  if(options.prefetch!==false&&!prefetched&&!stopped)prefetched=Promise.resolve().then(()=>core.claim(pool,accountId,owner)).then(value=>({value}),error=>({error}));
+ }
  function publish(state,extra={}) {
   status={...status,status:state,reason:'',reasonCode:null,manualResumeRequired:false,url:'',jobId:null,phase:null,runId:null,nextEligibleAt:null,...extra,runtimeVersion,
    browserOpen:browserOwner.isOpen(),sessionReady:!!identity&&browserOwner.isOpen(),signedIn:identity,updatedAt:new Date(now()).toISOString()};
@@ -71,14 +96,23 @@ function createAccountRuntime(options) {
  }
  async function assertActive() {
   if(stopped)throw controlError('Worker is stopping. Pending work is retained.');
+  if(saves.error)throw controlError('PostgreSQL save failed: '+saves.error.message);
   if(signal)throw Object.assign(new Error(signal.reason),{failure:signal});
   if(!await core.processingAllowed(pool,accountId,owner,activeVersion))throw controlError('Processing paused or the batch request changed. Queued profiles and captured evidence are retained.');
  }
  async function permit(kind,{manual:manualCheck=false}={}) {
   if(stopped)throw controlError('Worker is stopping.');
   if(!manualCheck)await assertActive();
-  const action=await (core.recordLinkedInAction||core.reserveLinkedInCheck)(pool,accountId,owner,kind,manualCheck?{manual:true}:{manual:false,version:activeVersion});
-  if(action?.stopped)throw controlError(action.reason||'Processing is paused.');
+  if(manualCheck&&kind!=='identity')throw controlError('Manual sign-in can only confirm identity.');
+  if(core.recordLinkedInChecks){
+   if(manualCheck&&!await core.sessionOwned(pool,accountId,owner))throw controlError('Account session ownership changed.');
+   pendingKinds[kind]=(pendingKinds[kind]||0)+1;if(manualCheck)await flushStatistics(status.jobId);
+  }
+  else if(core.recordLinkedInCheck)await save(()=>core.recordLinkedInCheck(pool,accountId,owner,kind),status.jobId);
+  else {
+   const action=await (core.recordLinkedInAction||core.reserveLinkedInCheck)(pool,accountId,owner,kind,manualCheck?{manual:true}:{manual:false,version:activeVersion});
+   if(action?.stopped)throw controlError(action.reason||'Processing is paused.');
+  }
  }
  async function inspect(manualMode=false) {
   return reader.inspected(surface.page,{manual:manualMode,checkResponse:(code,url)=>{
@@ -195,6 +229,7 @@ function createAccountRuntime(options) {
   return telemetry.withLead({...job,accountId},()=>processJobInner(job));
  }
  async function processJobInner(job) {
+  jobsStarted++;
   let captured=job.resumeResult;
   publish('processing',{jobId:job.jobId,url:job.linkedinUrl,reason:'Reading the queued profile.'});
   try {
@@ -208,13 +243,15 @@ function createAccountRuntime(options) {
       if(job.prospecting&&!await discoveryStore.runIsActive(pool,job.prospecting.runId))throw controlError('The prospecting run was stopped. Captured evidence is retained.');
      },resume:captured,
      checkResponse:(code,url)=>{const found=pageSignal({url,status:code});if(found)throw Object.assign(Error(found.reason),{failure:sessionFailure(found)});},
-     onCheckpoint:async value=>{captured=value;await core.checkpoint(pool,job.jobId,owner,value);},
+     onCheckpoint:async value=>{const checkpoint=structuredClone(value);captured=checkpoint;if(value.linkedinCapture?.complete||value.linkedinCapture?.stage==='contact')prefetchNext();await save(()=>core.checkpoint(pool,job.jobId,owner,checkpoint),job.jobId);},
     });
    }
-   await researchQueue.handoff(pool,job.jobId,owner,{...captured,linkedinAccountId:accountId});
-   publish('ready',{reason:'Profile saved. Public website research continues separately.'});
-   log('Captured profile handed to public research: '+job.jobId);
-  }catch(error){await recoverJob(job,error,captured);}
+   const completeCapture=structuredClone({...captured,linkedinAccountId:accountId});
+   prefetchNext();
+   await flushStatistics(job.jobId);
+   await save(async()=>{await researchQueue.handoff(pool,job.jobId,owner,completeCapture);options.wakeResearch?.();log('Captured profile handed to public research: '+job.jobId);},job.jobId);
+   publish('ready',{reason:'Profile captured. Saving and public research continue separately.'});
+  }catch(error){const checkpoint=captured;await flushStatistics(job.jobId);await save(()=>recoverJob(job,error,checkpoint),job.jobId);}
  }
  async function tick() {
   if(stopped)return;
@@ -234,13 +271,16 @@ function createAccountRuntime(options) {
   if(manual){await observeManual(a);return;}
   if(!a.enabled){await close();return;}
   if(a.attention_reason) {
+   await releasePrefetch();
    publish('paused',{reason:a.attention_reason,manualResumeRequired:true,reasonCode:'ACCOUNT_REVIEW'});return;
   }
   if(!a.authorized) {
+   await releasePrefetch();
    if(status.status==='paused'&&status.reasonCode)return; // retain actionable failures until an explicit recovery
    publish('idle',{reason:browserOwner.isOpen()?'Connected. The batch is paused; your browser stays open.':'The saved session is closed. Start the batch to reopen it, or use Open session.'});return;
   }
   try {
+   if(a.control_version!==activeVersion&&saves.error){await saves.idle();saves.clearError();}
    activeVersion=a.control_version||null;
    if(!await prepareProcessing(a))return;
    await assertActive();
@@ -255,15 +295,18 @@ function createAccountRuntime(options) {
      if(!await discoveryStore.runIsActive(pool,run.id))throw controlError('The prospecting run was stopped.');
     }});
     if(result?.paused)await handleSignal(sessionFailure({code:'LINKEDIN_AUTH',reason:result.paused}));
+    await flushStatistics(null);
     return;
    }
-   const reservation=await core.claim(pool,accountId,owner);
+   const reservation=await takeClaim();
    if(reservation?.disabled)return;
    if(reservation?.limited) {
     const reason='The configured profile budget is reached. Queued profiles are retained.';
     await core.pauseProcessing(pool,accountId,reason,false,owner,activeVersion);publish('paused',{reason,reasonCode:'PROFILE_BUDGET'});return;
    }
-   if(reservation?.job)await processJob(reservation.job);
+   if(reservation?.job){
+    await processJob(reservation.job);
+   }
    else publish('ready',{reason:'No profiles waiting for LinkedIn capture. Website research may still be running.'});
   }catch(error){
    if(error.failure?.stage==='linkedin')await handleSignal(error.failure);
@@ -275,10 +318,11 @@ function createAccountRuntime(options) {
    }
   }
  }
- function close() {
+ function close({preserveIntent=false}={}) {
   if(closing)return closing;stopped=true;
   closing=(async()=>{
-   await core.pauseProcessing(pool,accountId,'The local account session stopped. Queued work is retained.',false,owner).catch(()=>{});
+   await flushStatistics(status.jobId);await saves.close();await releasePrefetch();
+   if(!preserveIntent)await core.pauseProcessing(pool,accountId,'The local account session stopped. Queued work is retained.',false,owner).catch(()=>{});
    await browserOwner.close();identity=null;
    publish('offline',{reason:'Local session stopped. Queued work and saved sign-in are retained.'});
   })();
@@ -289,7 +333,7 @@ function createAccountRuntime(options) {
   publish('paused',{reason:error?.message||'The account browser closed. Reopen it explicitly to continue.',reasonCode:'BROWSER_CLOSED'});
   void core.pauseProcessing(pool,accountId,status.reason,false,owner).catch(e=>log('Could not save browser stop: '+e.message));
  }
- return {tick,permit,handleSignal,close,disconnected,snapshot:()=>({...status})};
+ return {tick,permit,handleSignal,close,disconnected,flush:()=>flushStatistics(status.jobId),drain:()=>saves.idle(),snapshot:()=>({...status,jobsStarted,pendingSaves:saves.size})};
 }
 
 module.exports={createAccountRuntime,runtimeVersion};

@@ -19,12 +19,13 @@ async function ensure(pool){
 const iso=value=>new Date(value).toISOString();
 function createTrace(job={},now=Date.now()){
  const previous=job.resumeResult?.engineMetrics||job.engineMetrics;
- const trace=previous?.version===1?structuredClone(previous):{
+ const trace=previous?.version===1&&previous.jobId===job.jobId?structuredClone(previous):{
   version:1,jobId:job.jobId,accountId:job.accountId||null,batchId:job.engineBatchId||null,
   pickedAt:job.enginePickedAt||iso(now),createdAt:job.engineCreatedAt||job.createdAt||iso(now),
   spans:[],totals:{},requests:{linkedin:0,website:0},attempts:0,retries:0,droppedSpans:0,
  };
  trace.jobId=job.jobId||trace.jobId;trace.accountId=job.accountId||trace.accountId;
+ delete trace.decidedAt;delete trace.outcome;delete trace.errorCode;
  trace.attempts++;trace.retries=Math.max(trace.retries||0,job.retryCount||0);
  trace.queueWaitMs=Math.max(0,Date.parse(trace.pickedAt)-Date.parse(trace.createdAt));
  return trace;
@@ -50,6 +51,7 @@ function withLead(job,fn){
  if(current()?.jobId===job.jobId)return fn(current());
  const trace=createTrace(job);return context.run({trace},()=>fn(trace));
 }
+function withTrace(trace,fn){return context.run({trace},fn);}
 function attach(value){const trace=current();return trace?{...value,engineMetrics:structuredClone(trace)}:value;}
 function countRequest(kind){const trace=current();if(trace)trace.requests[kind]=(trace.requests[kind]||0)+1;}
 async function persist(pool,result,{final=false}={}){
@@ -179,5 +181,5 @@ async function readMetrics(pool,{batchId=null}={}){
  }catch(error){if(error.code==='42P01')return {available:false,reason:'Start an instrumented local worker to collect measurements.'};throw error;}
  return {available:true,...summarize(rows.rows.map(row=>row.trace)),resources:resources.rows.map(row=>({...row.data,seenAt:row.seen_at})),sampleLimit:200};
 }
-module.exports={SCHEMA,ensure,createTrace,current,withLead,span,spanSync,attach,persist,pageActions,observePage,countRequest,
+module.exports={SCHEMA,ensure,createTrace,current,withLead,withTrace,span,spanSync,attach,persist,pageActions,observePage,countRequest,
  observePool,queryRates,attributedTime,percentile,summarize,readMetrics,MAX_SPANS};

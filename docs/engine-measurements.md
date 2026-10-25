@@ -176,3 +176,33 @@ tests pass; typecheck passes. Browser fixtures now include explicit passing foll
 evidence, and separate tests prove low/absent counts end after one page and that
 an inline recent post avoids activity navigation. Daily timezone/account-scope
 repair, selected recheck UI, browser recycling and the single agent are next.
+
+## Phase 3: pipeline flow
+
+A sequential save queue accepts at most six pending/active operations. It clones
+checkpoints at admission, preserves write order and owner/lease fences, surfaces
+failures, and applies backpressure before memory can grow. Profile capture can
+move ahead while the prior durable handoff commits; public research is awakened
+after that commit. Shutdown drains admitted saves before releasing ownership.
+Per-kind statistics batch safely into one counter update; they cannot gate work.
+Account intent/session ownership reads and the authoritative daily reservation
+still need PostgreSQL responses to preserve their guarantees.
+
+The next job is claimed near the final capture checkpoint, not at the beginning
+of a long browser visit. Prefetched lock time is included in the primary latency;
+claiming too early would inflate pickup-to-decision while improving throughput.
+Pause/review releases the unused prefetched claim without incrementing retry counts.
+
+Website requests share three HTTP slots, including rendering subrequests. Public
+rendering remains a separate headless Puppeteer process, opens only for insufficient
+static HTML and closes after 15s idle. Launch time counts toward the render deadline;
+fresh contexts close on deadline. Public CRM schema readiness is scoped per pool.
+The optional discovery reader now waits for rendered readiness instead of sleeping
+1.4s, and ends at its requested profile target or the actual end/stall of the list,
+without the old 50-page/12-pass interaction budgets.
+
+The existing claim index remains unchanged based on EXPLAIN and the 2.75% SQL share.
+No library or queue migration was made. Bounded saves/HTTP slots, overlapping claims,
+public idle close, and recovery tests pass (16 focused tests; 21 including telemetry).
+Typecheck passes. Phase 3 regression: 50 intentional missing-follower REVIEW results,
+zero changes to the original evaluator with only that new gate isolated.

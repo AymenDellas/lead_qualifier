@@ -496,6 +496,16 @@ async function recordLinkedInCheck(pool,id,owner,kind) {
  if(!result.rowCount)throw new Error('Account session lease lost before LinkedIn access.');
  return result.rows[0];
 }
+async function recordLinkedInChecks(pool,id,owner,kinds){
+ const count=Object.values(kinds).reduce((sum,n)=>sum+n,0);if(!count)return;
+ const result=await pool.query(`INSERT INTO compel_worker_usage(account_id,day,request_count,request_kinds)
+  SELECT $1,(NOW() AT TIME ZONE 'UTC')::date,$4,$3::jsonb FROM compel_worker_sessions WHERE account_id=$1 AND owner=$2 AND lease_until>NOW()
+  ON CONFLICT(account_id,day) DO UPDATE SET request_count=compel_worker_usage.request_count+$4,
+  request_kinds=compel_worker_usage.request_kinds || (SELECT jsonb_object_agg(key,to_jsonb(COALESCE((compel_worker_usage.request_kinds->>key)::int,0)+value::int)) FROM jsonb_each_text($3::jsonb))
+  RETURNING account_id`,[id,owner,json(kinds),count]);
+ if(!result.rowCount)throw Error('Account session lease lost while saving action statistics.');
+}
+async function sessionOwned(pool,id,owner){return (await pool.query('SELECT 1 FROM compel_worker_sessions WHERE account_id=$1 AND owner=$2 AND lease_until>NOW()',[id,owner])).rowCount===1;}
 async function claim(pool,id,owner,options={}) {
  await ensure(pool);
  const client=await pool.connect();
@@ -553,6 +563,15 @@ async function checkpoint(pool,id,owner,result) {
  result=telemetry.attach(result);
  const update=await pool.query(`UPDATE compel_worker_jobs SET checkpoint=$3::jsonb WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW()`,[id,owner,json(result)]);
  if(!update.rowCount)throw new Error('Job lease lost before saving the scraped profile.');
+}
+async function releaseClaim(pool,id,owner){
+ const update=await pool.query(`UPDATE compel_worker_jobs SET status='pending',owner=NULL,account_id=NULL,lease_until=NULL
+  WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW() RETURNING id`,[id,owner]);
+ return update.rowCount===1;
+}
+async function releaseCaptureClaims(pool,id,owner){
+ await pool.query(`UPDATE compel_worker_jobs SET status='pending',owner=NULL,account_id=NULL,lease_until=NULL
+  WHERE account_id=$1 AND owner=$2 AND lane='capture' AND status='processing'`,[id,owner]);
 }
 async function defer(pool,id,owner,result,retryAt) {
  result=telemetry.attach(result);
@@ -713,4 +732,4 @@ async function queueStatus(pool,{includeHistory=true}={}) {
   dailyStats:{date:new Date().toISOString().slice(0,10),count:dailyCount,limit:dailyLimit},
   ...(includeHistory?{recentResults:recent.map(row=>({jobId:row.id,result:historyPreview(row.result,row.profile_key),completedAt:row.completed_at}))}:{})};
 }
-module.exports={SCHEMA,ensure,readRuntimeAccount,expireLoginRequests,accountEvents,confirmManualSignIn,startProcessing,pauseProcessing,resetProcessing,processingAllowed,recordLinkedInAction,reserveLinkedInCheck,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,requestLogout,finishLogout,enqueue,queueCandidates,skipCompletedDuplicates,reusableLinkedInProfile,cachedLinkedInProfile,recordLinkedInCheck,claim,complete,checkpoint,defer,retryFailed,reserveResearch,coolResearch,jobStatus,clearQueue,queueStatus,importResult,json};
+module.exports={sessionOwned,recordLinkedInChecks,releaseCaptureClaims,releaseClaim,SCHEMA,ensure,readRuntimeAccount,expireLoginRequests,accountEvents,confirmManualSignIn,startProcessing,pauseProcessing,resetProcessing,processingAllowed,recordLinkedInAction,reserveLinkedInCheck,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,requestLogout,finishLogout,enqueue,queueCandidates,skipCompletedDuplicates,reusableLinkedInProfile,cachedLinkedInProfile,recordLinkedInCheck,claim,complete,checkpoint,defer,retryFailed,reserveResearch,coolResearch,jobStatus,clearQueue,queueStatus,importResult,json};

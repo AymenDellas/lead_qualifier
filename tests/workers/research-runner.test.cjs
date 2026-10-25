@@ -48,6 +48,7 @@ test('rendering uses a separate temporary public browser and retains the guarded
  assert.equal(typeof f.calls.render[0].settings.fetchResource,'function');
 });
 test('website retries retain snapshots and stay in the public research lane',async()=>{
+ 
  const f=fixture({researchProspect:async()=>{throw Error('Website unavailable');}});
  const first=await f.runner.process(f.job);
  assert.equal(first.deferred,true);assert.equal(first.result.failure.stage,'research');
@@ -55,6 +56,17 @@ test('website retries retain snapshots and stay in the public research lane',asy
  assert.equal(f.calls.defer[0][4],'2026-10-24T10:01:00.000Z');assert.equal(f.calls.complete.length,0);
  const final=await f.runner.process({...f.job,retryCount:3});
  assert.equal(final.deferred,false);assert.equal(final.result.failure.retryable,false);assert.equal(f.calls.complete.length,1);
+});
+
+test('the separate public browser closes after idle and relaunches only on a new render need',async()=>{
+ const f=fixture();f.options.publicBrowserIdleMs=5;
+ f.options.researchProspect=async(_input,settings)=>{await settings.renderPage('https://fixture.example.test/');return research();};
+ const runner=createResearchRunner(f.options);
+ try{
+  await runner.process(f.job);await new Promise(resolve=>setTimeout(resolve,20));assert.equal(f.calls.close,1);
+  await runner.process({...f.job,jobId:'next-job'});assert.equal(f.calls.launch.length,2);
+ }finally{await runner.close();}
+ assert.equal(f.calls.close,2);
 });
 test('unconfirmed captured activity is retained for review and never schedules LinkedIn work',async()=>{
  const f=fixture({assessProspect:r=>({research:r,qualification:{activity:'UNKNOWN',needsAttention:true},blockers:['Recent activity needs review.']}),pipelineForAssessment:()=> 'ERROR'});

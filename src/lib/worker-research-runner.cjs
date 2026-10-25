@@ -5,6 +5,8 @@ const qualification=require('./prospect-qualification.cjs');
 const defaultCore=require('./linkedin-workers.cjs');
 const defaultQueue=require('./worker-research-queue.cjs');
 const telemetry=require('./engine-telemetry.cjs');
+const publicHttpLane=require('./bounded-work.cjs').createLimiter(3,96);
+async function within(task,ms){let timer;try{return await Promise.race([task,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Website rendering deadline reached.')),Math.max(1,ms));})]);}finally{clearTimeout(timer);}}
 
 function researchUrl(value){
  const url=researchModule.publicUrl(value);
@@ -54,27 +56,46 @@ function createResearchRunner(options){
  const saveWorkerResearch=options.saveWorkerResearch||require('./worker-research-store.cjs').saveWorkerResearch;
  const finishProspecting=options.finishProspecting||require('./coach-prospecting-worker.cjs').finish;
  const createPageRenderer=options.createPageRenderer||require('./public-page-browser.cjs').createPageRenderer;
- const publicFetcher=createPublicFetcher(options.fetchResource||researchModule.fetchPublicPage);
+ const httpLane=options.httpLane||publicHttpLane;
+ const publicFetcher=createPublicFetcher((value,settings)=>httpLane(()=>{
+  settings.signal?.throwIfAborted();return (options.fetchResource||researchModule.fetchPublicPage)(value,settings);
+ }));
  const fetchPage=require('./website-cache.cjs').createWebsiteCache(pool,publicFetcher);
  const launch=options.launch||((settings)=>require('puppeteer').launch(settings));
  const now=options.now||Date.now,log=options.log||(()=>{});
- let browserTask=null,closed=false;
- async function browser(){
+ let browserTask=null,closed=false,idleTimer=null,closingBrowser=null,renderUsers=0;
+ const idleMs=options.publicBrowserIdleMs??Math.max(0,Number(process.env.PUBLIC_BROWSER_IDLE_MS)||15000);
+ async function browser(timeoutMs=10000){
   if(closed)throw new Error('Public research is stopping.');
+  if(closingBrowser)await closingBrowser;
   if(browserTask){const current=await browserTask;if(current.isConnected?.()===false)browserTask=null;}
-  if(!browserTask)browserTask=Promise.resolve().then(()=>launch({headless:true,timeout:30000,protocolTimeout:30000,
-   handleSIGINT:false,handleSIGTERM:false,handleSIGHUP:false,
-   args:process.platform==='linux'&&process.getuid?.()===0?['--no-sandbox','--disable-setuid-sandbox']:[],
-  })).catch(error=>{browserTask=null;throw error;});
+  if(!browserTask)browserTask=Promise.resolve().then(async()=>{
+   const timeout=Math.max(1,Math.floor(Math.min(10000,timeoutMs))),controller=new AbortController();
+   const timer=setTimeout(()=>controller.abort(),timeout);
+   try{return await launch({headless:true,timeout,protocolTimeout:10000,signal:controller.signal,
+    handleSIGINT:false,handleSIGTERM:false,handleSIGHUP:false,
+    args:process.platform==='linux'&&process.getuid?.()===0?['--no-sandbox','--disable-setuid-sandbox']:[],
+   });}finally{clearTimeout(timer);}
+  }).catch(error=>{browserTask=null;throw error;});
   return browserTask;
  }
+ function armIdleClose(){
+  clearTimeout(idleTimer);if(!closed&&!renderUsers&&browserTask){idleTimer=setTimeout(()=>{if(!renderUsers)void closeBrowser();},idleMs);idleTimer.unref?.();}
+ }
  function renderer(){
-  let renderTask;
+  let render,driver;const values=new Map();
   return async(value,settings)=>{
    researchUrl(value);
-   if(!renderTask)renderTask=browser().then(b=>createPageRenderer(b,{fetchResource:publicFetcher,maxPages:3}));
-   const render=await renderTask;
-   return render(value,settings);
+   if(values.has(value))return values.get(value);
+   if(values.size>=3)throw Error('Public browser fallback budget reached.');
+   const task=(async()=>{
+    const deadline=Date.now()+Math.min(10000,settings?.timeoutMs||10000);renderUsers++;clearTimeout(idleTimer);
+    try{
+     const b=await within(browser(deadline-Date.now()),deadline-Date.now());const remaining=deadline-Date.now();if(remaining<=0)throw Error('Website rendering exhausted the site deadline.');
+     if(driver!==b){driver=b;render=createPageRenderer(b,{fetchResource:publicFetcher,maxPages:3});}
+     return await within(render(value,{...settings,timeoutMs:remaining}),remaining);
+    }finally{renderUsers--;armIdleClose();}
+   })();values.set(value,task);return task;
   };
  }
  async function nativeSave(job,result){
@@ -180,10 +201,11 @@ function createResearchRunner(options){
   const claimed=await queue.claim(pool,owner);
   return claimed?processJob(claimed.job):null;
  }
- async function close(){
-  closed=true;
-  if(browserTask){
-   const b=await browserTask.catch(()=>null);browserTask=null;
+ function closeBrowser(){
+  if(closingBrowser)return closingBrowser;
+  const pending=browserTask;browserTask=null;
+  closingBrowser=(async()=>{
+   const b=await pending?.catch(()=>null);
    if(b){
     let timer;
     try{await Promise.race([Promise.resolve().then(()=>b.close()).catch(()=>{}),new Promise(resolve=>{timer=setTimeout(resolve,2500);})]);}
@@ -196,8 +218,9 @@ function createResearchRunner(options){
      }catch{/* only this public browser's process can be targeted */}
     }
    }
-  }
+  })().finally(()=>{closingBrowser=null;});return closingBrowser;
  }
+ async function close(){closed=true;clearTimeout(idleTimer);await closeBrowser();}
  return {runOnce,process:processJob,close};
 }
 module.exports={createResearchRunner,createPublicFetcher,prioritizeEmails,researchUrl};

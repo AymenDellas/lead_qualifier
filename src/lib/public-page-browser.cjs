@@ -10,11 +10,12 @@ function createPageRenderer(browser,{maxPages=3,fetchResource=fetchPublicPage}={
   const url=publicUrl(value).href;
   const run=tail.then(async()=>{
    const deadline=Date.now()+Math.min(10000,options.timeoutMs||10000);
-   const context=await browser.createBrowserContext(),controller=new AbortController();let timer;
+   let context;const controller=new AbortController();
+   const timer=setTimeout(()=>{controller.abort();context?.close().catch(()=>{});},Math.max(1,deadline-Date.now()));
    try{
+    context=await browser.createBrowserContext();controller.signal.throwIfAborted();
     const page=await context.newPage();let requests=0,bytes=0,documentFailure=null;
     const userAgent=await browser.userAgent();
-    timer=setTimeout(()=>{controller.abort();context.close().catch(()=>{});},Math.max(1,deadline-Date.now()));
     await page.setRequestInterception(true);
     page.on('request',async request=>{
      try{
@@ -49,7 +50,7 @@ function createPageRenderer(browser,{maxPages=3,fetchResource=fetchPublicPage}={
     });
     if(Buffer.byteLength(html)>4*1024*1024)throw new Error('Rendered page exceeded the research size limit.');
     return {url:page.url(),html,rendered:true};
-   }finally{clearTimeout(timer);controller.abort();await context.close().catch(()=>{});}
+   }finally{clearTimeout(timer);controller.abort();await context?.close().catch(()=>{});}
   });
   tail=run.catch(()=>{});cache.set(key,run);return run;
  };
