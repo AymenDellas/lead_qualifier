@@ -2,6 +2,7 @@
 
 // Public research owns jobs, never account sessions or browser profiles.
 const {json,profileUrl}=require('./linkedin-workers.cjs');
+const telemetry=require('./engine-telemetry.cjs');
 const ready=new WeakMap();
 const SCHEMA=`
 ALTER TABLE compel_worker_jobs ADD COLUMN IF NOT EXISTS lane TEXT NOT NULL DEFAULT 'capture';
@@ -31,12 +32,14 @@ async function ensure(pool){
  await ready.get(pool);
 }
 async function handoff(pool,id,owner,capture){
+ capture=telemetry.attach(capture);
  if(!fullCapture(capture))throw new Error('Only a complete, identity-confirmed profile can enter public research.');
  await ensure(pool);
  const update=await pool.query(`UPDATE compel_worker_jobs SET lane='research',status='pending',checkpoint=$3::jsonb,
   owner=NULL,account_id=NULL,lease_until=NULL,retry_at=NULL WHERE id=$1 AND owner=$2 AND lane='capture'
   AND status='processing' AND lease_until>NOW() AND profile_key=$4 RETURNING id`,[id,owner,json(capture),profileUrl(capture.url||capture.linkedinUrl)]);
  if(!update.rowCount)throw new Error('Job lease lost before public research handoff.');
+ await telemetry.persist(pool,capture).catch(error=>console.warn('[Engine metrics]',error.message));
 }
 async function claim(pool,owner){
  await ensure(pool);await migrate(pool);

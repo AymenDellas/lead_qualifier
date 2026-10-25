@@ -8,6 +8,7 @@ const core=require('./src/lib/linkedin-workers.cjs');
 const {createAccountRuntime}=require('./src/lib/account-runtime.cjs');
 const {createAccountBrowser}=require('./src/lib/account-browser.cjs');
 const {acquireProcessLock}=require('./src/lib/worker-process-lock.cjs');
+const telemetry=require('./src/lib/engine-telemetry.cjs');
 
 async function main() {
  const root=__dirname;
@@ -20,14 +21,17 @@ async function main() {
  const unlock=acquireProcessLock(lock);
  const pool=new Pool({connectionString:process.env.DATABASE_URL,max:3,connectionTimeoutMillis:10000,query_timeout:15000,
   ssl:process.env.DATABASE_CA_CERT?{ca:process.env.DATABASE_CA_CERT.replace(/\\n/g,'\n'),rejectUnauthorized:true}:{rejectUnauthorized:false}});
- let runtime,browserOwner,timer,stopping=false,active=null,wake=null,leased=false;
+ let runtime,browserOwner,timer,stopMetrics,stopping=false,active=null,wake=null,leased=false;
  const log=message=>console.log(`[Account ${id.slice(0,8)}] ${new Date().toISOString()} ${message}`);
+ const queryStats=telemetry.observePool(pool);
  const stop=()=>{stopping=true;wake?.();void runtime?.close().catch(error=>log('Session close: '+error.message));};
  process.once('SIGINT',stop);process.once('SIGTERM',stop);
  const onMessage=message=>{if(message?.type==='stop')stop();};process.on('message',onMessage);
  process.once('exit',unlock);
  try {
   await core.ensure(pool);
+  await telemetry.ensure(pool);
+  stopMetrics=require('./src/lib/engine-process-metrics.cjs').startResourceMonitor({pool,owner,queryStats,log});
   const account=await core.readRuntimeAccount(pool,id);
   if(!account)throw Error('This saved account no longer exists.');
   if(!await core.acquireSession(pool,id,owner))throw Error('Another worker already owns this account.');
@@ -62,7 +66,7 @@ async function main() {
   else if(browserOwner)await browserOwner.close().catch(()=>{});
   if(active)await active.catch(()=>{});
   if(leased)await core.releaseSession(pool,id,owner,runtime?.snapshot()||{status:'offline',runtimeVersion:'SESSION_V2'}).catch(()=>{});
-  await pool.end();unlock();
+  await stopMetrics?.();await pool.end();unlock();
   process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);
   process.removeListener('message',onMessage);if(process.connected)process.disconnect();
  }

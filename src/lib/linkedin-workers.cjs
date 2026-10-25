@@ -8,6 +8,7 @@ const {sameMember}=require('./linkedin-session-policy.cjs');
 const {failureOf}=require('./worker-failure.cjs');
 const {normalizeEngineResult}=require('./engine-result.cjs');
 const activityPolicy=require('./linkedin-activity-policy.cjs');
+const telemetry=require('./engine-telemetry.cjs');
 const ready = new WeakMap();
 // Browser text can contain lone UTF-16 surrogates or NULs. PostgreSQL JSONB
 // rejects those even though JSON.stringify accepts them. Keep normal emoji.
@@ -437,7 +438,7 @@ async function enqueue(pool, urls, options = {}) {
   const url = typeof value === 'string' ? profileUrl(value) : null;
   if (!url) { skipped.push({url:value,reason:'Invalid LinkedIn person profile'}); continue; }
   const id = options.jobId || `job_${randomUUID()}`;
-  const payload={jobId:id,linkedinUrl:url,nativePostProcess:options.nativePostProcess!==false,targetRegion:options.targetRegion||'na',createdAt:new Date().toISOString()};
+  const payload={jobId:id,linkedinUrl:url,nativePostProcess:options.nativePostProcess!==false,targetRegion:options.targetRegion||'na',createdAt:new Date().toISOString(),...(options.engineBatchId?{engineBatchId:options.engineBatchId}:{})};
   entries.push({id,profile_key:url,payload,position:entries.length});
  }
  if(!entries.length)return{jobs:[],queuedCount:0,skipped,queued:[]};
@@ -551,6 +552,7 @@ async function claim(pool,id,owner,options={}) {
     SELECT 1 FROM compel_prospect_runs r WHERE r.id::text=payload->'prospecting'->>'runId' AND r.status IN ('PENDING','RUNNING','QUEUED'))))
    ORDER BY (COALESCE(payload->>'websiteContinuation','false')<>'true') DESC,(checkpoint IS NOT NULL) DESC,created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1`,['groq/research/'+(process.env.PROSPECT_RESEARCH_MODEL?.trim()||'openai/gpt-oss-120b'),options.requiresAI===true,usage.count>=account.daily_limit,id,new Date(Date.now()-86400000).toISOString(),new Date().toISOString()])).rows[0];
   if (!job) { await client.query('COMMIT'); return usage.count>=account.daily_limit?{limited:true,dailyCount:usage.count,dailyLimit:account.daily_limit}:null; }
+  const enginePickedAt=new Date().toISOString();
   if(!job.checkpoint&&job.payload.explicitRetry!==true)job.checkpoint=await cachedLinkedInProfile(client,job.profile_key,id);
   if(!job.checkpoint&&usage.count>=account.daily_limit&&!(await client.query(`SELECT 1 FROM compel_worker_profile_usage WHERE day=(NOW() AT TIME ZONE 'UTC')::date AND profile_key=$1`,[job.profile_key])).rowCount){
    await client.query('COMMIT');return {limited:true,dailyCount:usage.count,dailyLimit:account.daily_limit};
@@ -567,14 +569,15 @@ async function claim(pool,id,owner,options={}) {
     WHERE day=(NOW() AT TIME ZONE 'UTC')::date AND profile_key=$1`,[job.profile_key]);
   }
   await client.query(`UPDATE compel_worker_jobs SET status='processing',account_id=$2,owner=$3,lease_until=NOW()+interval '15 minutes',checkpoint=$4::jsonb WHERE id=$1`,[job.id,id,owner,job.checkpoint?json(job.checkpoint):null]);
-  await client.query('COMMIT'); return {job:{...job.payload,...(job.checkpoint?{resumeResult:{...job.checkpoint,...(job.result?.failure?{failure:job.result.failure}:{})},resumeCapture:job.checkpoint.linkedinCapture?.version===2&&job.checkpoint.linkedinCapture.complete===false}:{}),retryCount:job.retry_count},dailyCount:usage.count+(charged?1:0),dailyLimit:account.daily_limit};
+  await client.query('COMMIT'); return {job:{...job.payload,engineCreatedAt:job.created_at,enginePickedAt,...(job.checkpoint?{resumeResult:{...job.checkpoint,...(job.result?.failure?{failure:job.result.failure}:{})},resumeCapture:job.checkpoint.linkedinCapture?.version===2&&job.checkpoint.linkedinCapture.complete===false}:{}),retryCount:job.retry_count},dailyCount:usage.count+(charged?1:0),dailyLimit:account.daily_limit};
  } catch(error) { await client.query('ROLLBACK'); throw error; } finally {client.release();}
 }
 async function complete(pool,id,owner,result) {
+ result=telemetry.attach(result);
  const crawl=result?.prospectQualification?.research?.crawl;
  // Qualification is saved immediately. Large/temporarily blocked sites finish
  // crawling in a separate cached-profile job, without a new LinkedIn visit.
- const update=await pool.query(`WITH finished AS (
+ const update=await telemetry.span('db.final_save',()=>pool.query(`WITH finished AS (
   UPDATE compel_worker_jobs SET status='done',result=$3::jsonb,completed_at=NOW(),lease_until=NULL
    WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW() RETURNING *
  ), continuation AS (
@@ -583,18 +586,22 @@ async function complete(pool,id,owner,result) {
    retry_count+1,'research' FROM finished
   WHERE $5 AND retry_count<3 ON CONFLICT DO NOTHING RETURNING id
  ) SELECT id,(SELECT id FROM continuation) AS continuation_id FROM finished`,
- [id,owner,json(result),'job_'+randomUUID(),Boolean(result.status==='QUALIFIED'&&crawl&&!crawl.complete&&crawl.retryable!==false&&!/storage limit/i.test(crawl.stoppedReason))]);
+ [id,owner,json(result),'job_'+randomUUID(),Boolean(result.status==='QUALIFIED'&&crawl&&!crawl.complete&&crawl.retryable!==false&&!/storage limit/i.test(crawl.stoppedReason))]));
  if (!update.rowCount) throw new Error('Job lease lost; result was not overwritten.');
+ await telemetry.persist(pool,result,{final:true}).catch(error=>console.warn('[Engine metrics]',error.message));
 }
 async function checkpoint(pool,id,owner,result) {
+ result=telemetry.attach(result);
  const update=await pool.query(`UPDATE compel_worker_jobs SET checkpoint=$3::jsonb WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW()`,[id,owner,json(result)]);
  if(!update.rowCount)throw new Error('Job lease lost before saving the scraped profile.');
 }
 async function defer(pool,id,owner,result,retryAt) {
+ result=telemetry.attach(result);
  const update=await pool.query(`UPDATE compel_worker_jobs SET status='pending',owner=NULL,account_id=NULL,lease_until=NULL,result=$3::jsonb,retry_at=$4,retry_count=retry_count+1,
   checkpoint=CASE WHEN $3::jsonb->'failure'->>'stage'='linkedin' AND checkpoint->'linkedinCapture'->>'version' IS DISTINCT FROM '2' THEN NULL ELSE checkpoint END
   WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW()`,[id,owner,json(result),retryAt]);
  if(!update.rowCount)throw new Error('Job lease lost before scheduling recovery.');
+ await telemetry.persist(pool,result).catch(error=>console.warn('[Engine metrics]',error.message));
 }
 async function retryFailed(pool) {
  await ensure(pool);const client=await pool.connect();let count=0,researchOnly=0;

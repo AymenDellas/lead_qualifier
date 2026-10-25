@@ -1,5 +1,6 @@
 'use strict';
 const { hostOf, isPlatformWebsite } = require('./prospect-qualification.cjs');
+const telemetry=require('./engine-telemetry.cjs');
 
 // Only supplied URLs, redirects and links actually present in HTML are read.
 function routeUrl(value, publicUrl) {
@@ -115,16 +116,16 @@ async function crawlWebsiteRoutes(input, options) {
         const results = await Promise.allSettled(eligible.map(async item => {
             let fetched,page;
             try{
-                fetched = await fetchPage(item.url, { timeoutMs: Math.max(1, Math.min(10000, deadline - Date.now())) });
+                fetched = await telemetry.span('website.page_http',()=>fetchPage(item.url, { timeoutMs: Math.max(1, Math.min(10000, deadline - Date.now())) }),{url:item.url});
                 page=parsePage(fetched.html,routeUrl(fetched.url||item.url,publicUrl));
             }catch(error){
                 if(!options.renderPage||!item.root&&routePriority(item)>1||[404,410].includes(error.httpStatus)||/private|unsupported|CERT_|certificate|size limit|NON_HTML/i.test(error.code+' '+error.message))throw error;
-                try{fetched=await options.renderPage(item.url,{timeoutMs:Math.max(1,Math.min(10000,deadline-Date.now()))});}
+                try{fetched=await telemetry.span('website.page_render',()=>options.renderPage(item.url,{timeoutMs:Math.max(1,Math.min(10000,deadline-Date.now()))}),{url:item.url});}
                 catch(renderError){error.message+=' Browser fallback: '+renderError.message;throw error;}
                 page=parsePage(fetched.html,routeUrl(fetched.url||item.url,publicUrl));
             }
             if(options.renderPage&&(!page.readable||!page.contacts.length&&(item.root||routePriority(item)===0))&&deadline-Date.now()>1000){
-                try{const rendered=await options.renderPage(page.url,{timeoutMs:Math.max(1,Math.min(10000,deadline-Date.now()))});const richer=parsePage(rendered.html,routeUrl(rendered.url||page.url,publicUrl));if(richer.readable&&(richer.contacts.length>page.contacts.length||!page.readable))page=richer;}catch{/* normal bounded failure stays in crawl evidence */}
+                try{const rendered=await telemetry.span('website.page_render',()=>options.renderPage(page.url,{timeoutMs:Math.max(1,Math.min(10000,deadline-Date.now()))}),{url:page.url});const richer=parsePage(rendered.html,routeUrl(rendered.url||page.url,publicUrl));if(richer.readable&&(richer.contacts.length>page.contacts.length||!page.readable))page=richer;}catch{/* normal bounded failure stays in crawl evidence */}
             }
             return { page };
         }));

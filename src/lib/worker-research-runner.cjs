@@ -4,6 +4,7 @@ const researchModule=require('./prospect-research.cjs');
 const qualification=require('./prospect-qualification.cjs');
 const defaultCore=require('./linkedin-workers.cjs');
 const defaultQueue=require('./worker-research-queue.cjs');
+const telemetry=require('./engine-telemetry.cjs');
 
 function researchUrl(value){
  const url=researchModule.publicUrl(value);
@@ -93,7 +94,8 @@ function createResearchRunner(options){
   if(result.primaryEmail&&!result.emails.includes(result.primaryEmail))result.emails.unshift(result.primaryEmail);
   result.status=unresolved?'ERROR':saved.pipelineStatus==='QUALIFIED'?'QUALIFIED':'REJECTED';
  }
- async function processJob(job){
+ function processJob(job){return telemetry.withLead(job,()=>processJobInner(job));}
+ async function processJobInner(job){
   if(!queue.fullCapture(job.resumeResult))throw new Error('Public research requires a complete captured profile.');
   if(job.prospecting&&!await (options.discoveryStore||require('./coach-prospecting-store.cjs')).runIsActive(pool,job.prospecting.runId)) {
    const result={...job.resumeResult,status:'CANCELLED',logs:[...(job.resumeResult.logs||[]),'Prospecting was stopped; no website research was started.']};
@@ -134,7 +136,7 @@ function createResearchRunner(options){
     result.primaryEmail=result.emails[0]||'';
     const chosen=research.contacts.find(c=>c.address===result.primaryEmail);
     result.emailSource=chosen?.source==='website'?'website_scraped':chosen?.source||'';
-    result.prospectQualification=assessProspect(research,{email:result.primaryEmail});
+    result.prospectQualification=telemetry.spanSync('qualification',()=>assessProspect(research,{email:result.primaryEmail}));
     const q=result.prospectQualification.qualification;
     result.status=pipelineForAssessment(result.prospectQualification)==='QUALIFIED'?'QUALIFIED':q.needsRetry||q.needsAttention?'ERROR':'REJECTED';
     if(result.status==='ERROR'){
@@ -142,7 +144,7 @@ function createResearchRunner(options){
       ?{stage:'linkedin',code:research.profileIdentityConfirmed?'ACTIVITY_UNCONFIRMED':'PROFILE_IDENTITY',reason:research.activityEvidence?.reason||result.prospectQualification.blockers?.[0]||'Captured profile evidence needs manual review.',retryable:false}
       :{stage:'research',code:'CRAWL_INCOMPLETE',reason:research.crawl?.stoppedReason||'Website research is incomplete.',retryable:research.crawl?.retryable!==false};
     }
-    stage='crm';await nativeSave(job,result);
+    stage='crm';await telemetry.span('crm.save',()=>nativeSave(job,result));
    }
   }catch(error){
    result.status='ERROR';

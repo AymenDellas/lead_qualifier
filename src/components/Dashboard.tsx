@@ -38,6 +38,7 @@ import {
 import { cn } from "@/lib/utils";
 import { failureOf } from "@/lib/worker-failure.cjs";
 import CrmDatabase from "./CrmDatabase";
+import EngineMetricsPanel from './EngineMetricsPanel';
 import BusinessWorkspace from "./business/BusinessWorkspace";
 import CaseStudyHunter from "./business/CaseStudyHunter";
 import DiscoveryCallsWorkspace from "./business/DiscoveryCallsWorkspace";
@@ -1413,6 +1414,7 @@ export default function Dashboard() {
                             {/* ── Worker, and what it is doing ───────────────────── */}
                             <div className="space-y-4">
                                 <LinkedInAccounts />
+                                <EngineMetricsPanel />
                                 <section className={cn("panel", workerState === 'running' && "rail-live")}>
                                 <div className="panel-head">
                                     <Server className="w-3.5 h-3.5 text-[var(--text-faint)]" />

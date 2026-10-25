@@ -6,6 +6,7 @@ const cheerio = require('cheerio');
 const {profileUrl} = require('./linkedin-workers.cjs');
 const {cleanIdentity} = require('./linkedin-session-identity.cjs');
 const {pageSignal, failure} = require('./linkedin-session-policy.cjs');
+const telemetry=require('./engine-telemetry.cjs');
 const text = value => String(value || '').replace(/\s+/g, ' ').trim();
 function problem(code, reason) {
  return Object.assign(new Error(reason), {failure: {stage:'linkedin', code, reason, retryable:false}});
@@ -284,6 +285,9 @@ function parseContact(state,person) {
  return {emails,websites};
 }
 async function readActivity(page,person,options={}) {
+ return telemetry.span('linkedin.activity',()=>readActivityInner(page,person,options));
+}
+async function readActivityInner(page,person,options={}) {
  const {activityRoute,extractActivityPage}=require('./linkedin-activity-page.cjs');
  if(profileUrl(page.url())!==profileUrl(person))await openProfile(page,person,options);
  const state=await inspected(page,options),$=cheerio.load(state.html);
@@ -297,7 +301,9 @@ async function readActivity(page,person,options={}) {
  return {...extractActivityPage(activity.html,{profileUrl:person,pageUrl:activity.url,now:options.now}),activityCheck:{httpStatus:200,retryable:false}};
 }
 async function captureProfile(page,person,options={}) {
- let state=await openProfile(page,person,options);
+ const unwatch=telemetry.observePage(page);
+ try {
+ let state=await telemetry.span('linkedin.profile',()=>openProfile(page,person,options));
  parseProfile(state,person,options.accountId);
  // Some LinkedIn layouts hydrate About/Activity only when their section is
  // approached. Limit scrolling to this profile and count every attempt.
@@ -330,6 +336,7 @@ async function captureProfile(page,person,options={}) {
  // Do not overwrite a later saved stage with an earlier checkpoint.
  if(resumeContact)result.linkedinCapture.stage='contact';
  await options.onCheckpoint?.(result);
+ await telemetry.span('linkedin.contact',async()=>{
  const contactOpened=!resumeContact&&await clickControl(page,'main a[href*="/overlay/contact-info"]',n=>{
   try{const u=new URL(n.href);return profileUrl(u.origin+u.pathname.replace(/\/overlay\/contact-info\/?$/,''))===profileUrl(person);}catch{return false;}
  },'contact',options);
@@ -344,6 +351,7 @@ async function captureProfile(page,person,options={}) {
   if(!closed)throw problem('PAGE_CHANGED','The contact panel could not be closed. Processing stopped before another action.');
   await page.waitForFunction(()=>![...document.querySelectorAll('dialog,[role="dialog"]')].some(n=>n.getClientRects().length),{timeout:8000,polling:250});
  }else if(!resumeContact)result.logs.push('No rendered contact-info control was available. No contact details were guessed.');
+ });
  result.linkedinCapture.stage='contact';await options.onCheckpoint?.(result);
  const activity=await readActivity(page,person,options);
  if(activity)Object.assign(result,activity);
@@ -351,5 +359,6 @@ async function captureProfile(page,person,options={}) {
  result.linkedinCapture={...result.linkedinCapture,stage:'complete',complete:true};result.linkedinCapturedAt=new Date().toISOString();
  await options.onCheckpoint?.(result);
  return result;
+ }finally{unwatch();}
 }
 module.exports={snapshot,inspected,firstControl,controlPoint,pressControl,clickControl,signedInIdentity,readSignedInIdentity,signInDiagnostics,profileDiagnostics,parseProfile,parseContact,openProfile,readActivity,captureProfile,externalUrl};

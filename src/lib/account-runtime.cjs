@@ -1,6 +1,7 @@
 'use strict';
 
 const {pageSignal,failure:sessionFailure,isFeed,sameMember}=require('./linkedin-session-policy.cjs');
+const telemetry=require('./engine-telemetry.cjs');
 const runtimeVersion='SESSION_V2';
 const controlError=reason=>Object.assign(new Error(reason),{failure:{stage:'control',code:'WORKER_PAUSED',reason,retryable:false}});
 const transient=error=>/detached|execution context|context was destroyed|cannot find context|navigat/i.test(error?.message||'');
@@ -86,7 +87,7 @@ function createAccountRuntime(options) {
    // Manual connection observes the user's page without waiting on this permit.
    // It never repeatedly opens account controls while a budget is resting.
    if(manualCheck)throw controlError(reason);
-   await sleep(Math.min(allowance.waitMs,1000));
+   await telemetry.span('throttle.wait',()=>sleep(Math.min(allowance.waitMs,1000)),{kind});
   }
  }
  async function inspect(manualMode=false) {
@@ -200,14 +201,17 @@ function createAccountRuntime(options) {
    await setWindowVisibility(true);
   }
  }
- async function processJob(job) {
+ function processJob(job) {
+  return telemetry.withLead({...job,accountId},()=>processJobInner(job));
+ }
+ async function processJobInner(job) {
   let captured=job.resumeResult;
   publish('processing',{jobId:job.jobId,url:job.linkedinUrl,reason:'Reading the queued profile.'});
   try {
    // A cached complete capture belongs to public research, not another browser
    // visit. Partial captures always resume the matching account page first.
    if(!researchQueue.fullCapture(captured)) {
-    captured=await reader.captureProfile(surface.page,job.linkedinUrl,{
+    captured=await reader.captureProfile(telemetry.pageActions(surface.page),job.linkedinUrl,{
      accountId,beforeCheck:async kind=>{
       if(job.prospecting&&!await discoveryStore.runIsActive(pool,job.prospecting.runId))throw controlError('The prospecting run was stopped. Captured evidence is retained.');
       await permit(kind);
