@@ -3,6 +3,7 @@ import { requireWorkerAdmin as requireAdmin } from "@/lib/worker-admin";
 import { pool } from "@/lib/pg_setup";
 import * as store from "@/lib/coach-prospecting-store.cjs";
 import { settings } from "@/lib/linkedin-workers.cjs";
+import {followersDecision,minFollowers} from '@/lib/follower-policy.cjs';
 import {
   assessCoach,
   shortlist,
@@ -268,6 +269,7 @@ export async function saveCoachReviewAction(
     };
     let next = { ...d, prospecting: { ...previous } };
     if (edit.kind === "FIT") {
+        if(edit.status==='MATCH'&&followersDecision(previous.followers,minFollowers()).status!=='CONTINUE')throw Error('Recheck followers before marking this prospect a match. The count must exceed the configured minimum.');
       next.prospecting.assessment = {
         ...previous.assessment,
         status: edit.status,

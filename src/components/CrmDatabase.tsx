@@ -13,6 +13,7 @@ import { syncBouncesAction } from "@/app/actions/bounce-actions";
 import { isExportableUnverifiable, wasRefusedByHost } from "@/lib/send-tiers";
 import { startVerificationRun, addVerificationBatch, getUnknownLabel, UNKNOWN_CAUSE_LABELS, type VerificationRun, type UnknownCause } from '@/lib/crm-email-verification';
 import { importCrmLeadsToHunterAction, markCrmLeadLinkedinDmSentAction } from "@/app/actions/linkedin-outreach-actions";
+import FollowerEvidence from './FollowerEvidence';
 import { isQualifiedRecord, hasQualifiedEmail, type ProspectAssessment } from '@/lib/prospect-qualification.cjs';
 import './acquisition-workspace.css';
 
@@ -131,6 +132,13 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState<string>('ALL');
     const [leadSearch, setLeadSearch] = useState('');
+    const [recheckingFollowers,setRecheckingFollowers]=useState(false);
+    const [followerNotice,setFollowerNotice]=useState('');
+    async function recheckSelectedFollowers(){
+        setRecheckingFollowers(true);setFollowerNotice('');
+        try{const response=await fetch('/api/crm/follower-recheck',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:[...selectedIds]})});const value=await response.json();if(!response.ok)throw Error(value.error);setFollowerNotice(`${value.queuedCount} follower rechecks queued. ${value.skipped.length} already queued or unavailable. Each fresh profile counts toward its account’s daily limit.`);}
+        catch(error){setFollowerNotice(error instanceof Error?error.message:'Could not queue follower rechecks.');}finally{setRecheckingFollowers(false);}
+    }
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [hunterImporting, setHunterImporting] = useState(false);
     const [dmPendingId, setDmPendingId] = useState<string | null>(null);
@@ -1073,6 +1081,8 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                     {selectedIds.size > 0 ? (
                         <div className="crm-commands crm-selection-actions" aria-label="Selected lead actions">
                             <span className="num text-[13px] text-[var(--signal)] mr-1">{selectedIds.size} selected</span>
+                            <button type="button" className="btn btn-outline" disabled={recheckingFollowers||selectedIds.size>500} onClick={recheckSelectedFollowers}> {recheckingFollowers?'Queueing…':'Recheck followers'}</button>
+                            {followerNotice&&<p role="status" className="text-xs text-[var(--text-dim)]">{followerNotice}</p>}
                             <button
                                 onClick={handleVerifySelected}
                                 disabled={verifying}

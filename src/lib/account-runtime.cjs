@@ -206,6 +206,7 @@ function createAccountRuntime(options) {
  }
  async function recoverJob(job,error,capture) {
   if(stopped){await core.releaseClaim?.(pool,job.jobId,owner);return;}
+  if(error.dailyLimit){await core.releaseClaim(pool,job.jobId,owner);dailyStatus(error.dailyLimit);return;}
   const crashed=!error.failure&&/target closed|session closed|page crashed|connection closed|protocol error|navigation timeout|browser.*(?:closed|disconnect)/i.test(error.message);
   const failure=error.failure||(crashed?{stage:'linkedin',code:'BROWSER_CRASH',reason:'Chrome failed during profile reading; saved checkpoint retained.',retryable:true}:{stage:'linkedin',code:'PAGE_CHANGED',reason:'The LinkedIn page could not be read. Review the saved evidence.',retryable:false});
   const result={...(capture||job.resumeResult||{}),url:job.linkedinUrl,status:failure.retryable===false?'REVIEW':'ERROR',failure,
@@ -249,6 +250,12 @@ function createAccountRuntime(options) {
      accountId,beforeCheck:async kind=>{
       if(job.prospecting&&!await discoveryStore.runIsActive(pool,job.prospecting.runId))throw controlError('The prospecting run was stopped. Captured evidence is retained.');
       await permit(kind);
+      if(kind==='profile_page'&&core.reserveProfile){
+       const limit=await core.reserveProfile(pool,{accountId,owner,profileUrl:job.linkedinUrl,jobId:job.jobId,version:activeVersion});
+       if(limit.stopped)throw controlError(limit.reason);
+       if(limit.limited)throw Object.assign(Error('Daily profile limit reached.'),{dailyLimit:limit});
+       await assertActive();
+      }
       if(job.prospecting&&!await discoveryStore.runIsActive(pool,job.prospecting.runId))throw controlError('The prospecting run was stopped. Captured evidence is retained.');
      },resume:captured,
      checkResponse:(code,url)=>{const found=pageSignal({url,status:code});if(found)throw Object.assign(Error(found.reason),{failure:sessionFailure(found)});},
@@ -309,10 +316,7 @@ function createAccountRuntime(options) {
    }
    const reservation=await takeClaim();
    if(reservation?.disabled)return;
-   if(reservation?.limited) {
-    const reason='The configured profile budget is reached. Queued profiles are retained.';
-    await core.pauseProcessing(pool,accountId,reason,false,owner,activeVersion);publish('paused',{reason,reasonCode:'PROFILE_BUDGET'});return;
-   }
+   if(reservation?.limited) {dailyStatus(reservation);return;}
    if(reservation?.job){
     claimedJob=reservation.job;
     if(!researchQueue.fullCapture(reservation.job.resumeResult)){if(!await prepareProcessing(a)){await core.releaseClaim?.(pool,reservation.job.jobId,owner);return;}await setWindowVisibility(false);}
@@ -338,6 +342,7 @@ function createAccountRuntime(options) {
    }
   }
  }
+ function dailyStatus(limit){publish('DAILY_LIMIT_REACHED',{startupStage:'DAILY_LIMIT_REACHED',reason:`Daily unique profiles: ${limit.used??limit.dailyCount}/${limit.limit??limit.dailyLimit}. Website research continues. Resumes at ${new Date(limit.resumeAt).toLocaleString()} (${limit.timezone}).`,reasonCode:'DAILY_LIMIT_REACHED',nextEligibleAt:limit.resumeAt});}
  function close({preserveIntent=false}={}) {
   if(closing)return closing;stopped=true;
   closing=(async()=>{

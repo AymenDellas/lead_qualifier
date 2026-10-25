@@ -35,6 +35,7 @@ async function recover(pool,currentOwner,{processOwner=isProcessOwner}={}){
   const c=await pool.connect();try{await c.query('BEGIN');
    await c.query(`UPDATE compel_worker_jobs SET status='pending',owner=NULL,account_id=NULL,lease_until=NULL WHERE status='processing' AND owner LIKE $1`,[row.owner+'/%']);
    await c.query(`UPDATE compel_worker_sessions SET lease_until=NOW(),status=status || '{"status":"offline","reason":"Recovered confirmed-dead agent; checkpoints retained."}'::jsonb WHERE owner LIKE $1`,[row.owner+'/%']);
+   await c.query("UPDATE compel_prospect_runs SET status='PENDING',owner=NULL,lease_until=NULL WHERE status='RUNNING' AND owner LIKE $1",[row.owner+'/%']);
    await c.query('UPDATE compel_engine_agents SET recovered_at=NOW() WHERE owner=$1',[row.owner]);await c.query('COMMIT');
   }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
  }

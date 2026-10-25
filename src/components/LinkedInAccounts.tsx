@@ -203,7 +203,7 @@ function AccountEditor({initial,liveAccounts,workerControls,workerOnline,onClose
       {a.id&&<AccountHistory id={a.id} updatedAt={(liveAccounts.find(other=>other.id===a.id)||a).updatedAt}/>}
      </fieldset>)}
     </div>
-    <button type="button" className="btn btn-outline" disabled={saving||accounts.length>=10} onClick={()=>{setAccounts(current=>[...current,{label:`Account ${current.length+1}`,email:'',enabled:true,dailyLimit:400,hasPassword:false,dailyCount:0,status:'offline',reason:'',online:false,loginPending:false,updatedAt:null}]);if(!accounts.length)setActiveCount(1);}}><Plus className="w-3.5 h-3.5"/> Add account</button>
+    <button type="button" className="btn btn-outline" disabled={saving||accounts.length>=10} onClick={()=>{setAccounts(current=>[...current,{label:`Account ${current.length+1}`,email:'',enabled:true,dailyLimit:initial.defaultDailyLimit||400,hasPassword:false,dailyCount:0,status:'offline',reason:'',online:false,loginPending:false,updatedAt:null}]);if(!accounts.length)setActiveCount(1);}}><Plus className="w-3.5 h-3.5"/> Add account</button>
     <p className="field-hint">Sign in manually in Chrome on the worker computer. The only usage limit is unique profiles per account per day. Interaction counts are statistics. LinkedIn security notices stop the account until you review it.</p>
     {dirty&&<p className="field-hint">Save your account changes before signing in or starting processing.</p>}
     {!actionAccount&&notice&&<p role="status" className="text-sm text-[var(--signal)]">{notice}</p>}

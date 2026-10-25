@@ -17,6 +17,7 @@ export type CoachAssessment = {
   assessedAt: string;
 };
 export type CoachProspecting = {
+  followers?:import('./prospect-qualification.cjs').AudienceEvidence|null;connections?:import('./prospect-qualification.cjs').AudienceEvidence|null;
   assessment: CoachAssessment;
   automatedAssessment?: CoachAssessment;
   contact: CoachContact | null;

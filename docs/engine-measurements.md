@@ -216,3 +216,11 @@ Removed after repository-wide reader checks: `account-supervisor.cjs` (child spa
 
 Validation: 21 agent/coordinator/process/launcher/resource tests and 21 manual-sign-in/race/pipeline tests passed; TypeScript passed. Regression phase 4 replayed all 50 frozen records: each changes to REVIEW solely because stored followers are missing; the full per-lead delta is in ignored `data/engine-v2/regression-phase-4.json`. The diagnostic replay with the follower gate satisfied has zero other changes. Existing stored qualified leads are grandfathered until explicitly selected for recheck.
 
+# Phase 5: daily profiles and follower rechecks
+
+The existing account field is named `daily_limit`; it remains the single daily profile limit. A new additive ledger keys account + configured local date + canonical profile URL. An account-row transaction makes reservations atomic. Claims, cached captures, session verification and same-account same-day retries do not increment it. Another account reading that person consumes its own slot. Midnight is computed in PostgreSQL using the worker machine's IANA time zone by default; `DAILY_LIMIT_TIMEZONE` overrides it. The existing 1–400 database field constraint is retained. Interaction counters are statistics only.
+
+At the cap, account intent remains enabled and the dashboard shows DAILY_LIMIT_REACHED with the next local midnight. The website lane continues. First navigation charges immediately before opening the profile; source lists are no longer charged as profiles. Selected CRM rows can explicitly request a fresh follower recheck, retaining active-profile duplicate protection. Existing QUALIFIED rows receive the additive `followers_check_status='UNCHECKED'` default without requeue or decision changes. Followers and connections retain separate raw/parsed evidence in the CRM and prospect evidence views.
+
+Validation: 11 daily/parser/qualification/single-limit tests passed, plus an expanded daily database test covering explicit rechecks, duplicate suppression and preserving the old CRM decision while queued. TypeScript passed. Phase 5 frozen replay: 50 intended follower-missing REVIEW changes, zero changes outside the follower rule, zero replay errors. Full per-lead changes: ignored `data/engine-v2/phase-5-regression.json`.
+

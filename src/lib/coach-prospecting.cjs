@@ -1,6 +1,7 @@
 "use strict";
 // The same evidence rules run in the worker, dashboard and regression suite.
-const POLICY = "COACH_EVIDENCE_V1";
+const POLICY = "COACH_EVIDENCE_V2";
+const {followersDecision,minFollowers}=require('./follower-policy.cjs');
 const clean = (v) =>
   String(v || "")
     .normalize("NFKC")
@@ -24,6 +25,9 @@ const audience =
   /\b(?:i|we) (?:help|coach|support|guide|work with)\b|\bcoaching for\b/i;
 const escape = (v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function assessCoach(input = {}, research = {}, criteria = {}) {
+  const follower=followersDecision(research.followers||input.followers,minFollowers());
+  if(input.profileIdentityConfirmed&&follower.status!=='CONTINUE')return {policy:POLICY,status:follower.status==='REJECTED'?'OUTSIDE':'POTENTIAL',score:0,reason:follower.reason,
+    reasonCode:follower.reason,evidence:[{source:'LinkedIn followers',url:input.url||'',quote:(research.followers||input.followers)?.rawText||'Follower count not shown'}],gaps:follower.status==='REVIEW'?['Confirm the LinkedIn follower count.']:[],assessedAt:new Date().toISOString()};
   const fields = [
     ["Headline", input.headline],
     ["About", input.about],

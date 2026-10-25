@@ -1,0 +1,1 @@
+export function recheckFollowers(pool:unknown,ids:string[],options?:{engineBatchId?:string}):Promise<{selected:number;queuedCount:number;jobs:string[];skipped:{url:unknown;reason:string}[];queued:{id:string;url:string}[]}>;

@@ -17,6 +17,7 @@ import {
 import { contactRoute, csvCell } from "@/lib/coach-prospecting.cjs";
 import { saveCaseStudyProspectAction } from "@/app/actions/case-study-actions";
 import type { CaseStudyProspect } from "@/lib/case-study";
+import FollowerEvidence from '../FollowerEvidence';
 import { Field, LinkOut } from "./BusinessUi";
 import "./coach-prospecting.css";
 type Snapshot = Awaited<ReturnType<typeof loadCoachProspectingAction>>;
@@ -998,6 +999,7 @@ function CoachReview({
               ? `${label(a.status)} · ${a.score}/100 · ${date(a.assessedAt)}`
               : "No current evidence assessment"}
           </p>
+          <FollowerEvidence followers={d.prospecting?.followers} connections={d.prospecting?.connections}/>
           {a?.evidence.map((e, i) => (
             <blockquote key={i}>
               <p>“{e.quote}”</p>

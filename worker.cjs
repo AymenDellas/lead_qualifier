@@ -34,6 +34,8 @@ async function main(){
   }
   process.once('exit',unlock);stage('AGENT_ACK','Process acknowledged; connecting to PostgreSQL.');
   await core.ensure(pool);await pool.query(registry.SCHEMA);await telemetry.ensure(pool);
+  await require('./src/lib/engine-daily-policy.cjs').configure(pool);
+  await require('./src/lib/worker-research-store.cjs').ensure(pool);
   for(;;){const result=await registry.claim(pool,owner);if(!result.waitMs){leased=true;break;}stage('AGENT_ACK',result.reason,'Waiting for the dead database owner heartbeat.');await new Promise(resolve=>setTimeout(resolve,Math.min(result.waitMs,2000)));if(stopping)return;}
   await registry.recover(pool,owner);await require('./src/lib/worker-research-queue.cjs').ensure(pool);
   agent=require('./src/lib/compel-agent.cjs').createAgent({root,pool,owner,log});
