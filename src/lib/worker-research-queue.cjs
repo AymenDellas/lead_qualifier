@@ -61,4 +61,9 @@ async function release(pool,owner){
  return pool.query(`UPDATE compel_worker_jobs SET status='pending',owner=NULL,account_id=NULL,lease_until=NULL
   WHERE owner=$1 AND lane='research' AND status='processing'`,[owner]);
 }
-module.exports={SCHEMA,ensure,handoff,claim,heartbeat,release,fullCapture};
+async function releaseJob(pool,id,owner,capture){
+ return pool.query(`UPDATE compel_worker_jobs SET status='pending',owner=NULL,account_id=NULL,lease_until=NULL,
+  checkpoint=COALESCE($3::jsonb,checkpoint),retry_count=retry_count+1,retry_at=NULL
+  WHERE id=$1 AND owner=$2 AND lane='research' AND status='processing' AND lease_until>NOW() RETURNING id`,[id,owner,capture?json(capture):null]);
+}
+module.exports={SCHEMA,ensure,handoff,claim,heartbeat,release,releaseJob,fullCapture};

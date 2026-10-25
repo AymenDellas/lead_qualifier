@@ -35,10 +35,12 @@ async function report(pool,batch,samples=[],stopReason=null){
  const jobs=(await pool.query(`SELECT id,status,lane,retry_count,result->>'status' AS outcome,
   result->'failure' AS failure FROM compel_worker_jobs WHERE id=ANY($1::text[]) ORDER BY queue_order`,[batch.job_ids])).rows;
  const metrics=await telemetry.readMetrics(pool,{batchId:batch.id});
+ let cpuSeconds=0,cpuIntervalMs=0;
+ for(let i=1;i<samples.length;i++){const interval=Date.parse(samples[i].at)-Date.parse(samples[i-1].at);if(interval>0&&samples[i].cpuPercent!=null){cpuSeconds+=samples[i].cpuPercent/100*interval/1000;cpuIntervalMs+=interval;}}
  return {batchId:batch.id,requested:30,prepared:batch.profiles.length,jobCount:jobs.length,jobs,metrics,stopReason,
   resources:{samples,peakTreeRssMB:samples.length?Math.max(...samples.map(s=>s.treeRssMB)):null,
    peakCpuPercent:samples.some(s=>s.cpuPercent!=null)?Math.max(...samples.map(s=>s.cpuPercent||0)):null,
-   sampleOverheadMs:samples.reduce((sum,s)=>sum+s.sampleMs,0)},
+   sampleOverheadMs:samples.reduce((sum,s)=>sum+s.sampleMs,0),sampledCpuSeconds:cpuIntervalMs?cpuSeconds:null,meanCpuPercent:cpuIntervalMs?cpuSeconds*100000/cpuIntervalMs:null,cpuSecondsPerOutcome:cpuIntervalMs&&metrics.decided?cpuSeconds/metrics.decided:null},
   comparable:jobs.length===30&&jobs.every(job=>job.status==='done')&&metrics.decided===30,
   generatedAt:new Date().toISOString()};
 }

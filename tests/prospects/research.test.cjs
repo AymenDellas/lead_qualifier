@@ -208,12 +208,12 @@ test('invented findings and interpretation errors fall back to conservative evid
     const unsupported = await researchProspect(input, { now: NOW, fetchPage: fakeFetch, extract: async () => ({ facts: { clientProof: { state: 'OBSERVED', value: 'Invented', evidence: [{ sourceIndex: 1, excerpt: 'A million paid clients with perfect conversion.' }] } } }) });
     assert.equal(unsupported.facts.clientProof.state, 'INDICATED');
 });
-test('website research follows every discovered route once, without guessing contact or about paths', async () => {
+test('website research stops at its persistent page budget without guessing routes', async () => {
     const calls = [];
     const r = await researchProspect(input, { ai: false, now: NOW, fetchPage: async url => { calls.push(url); return { url, html: html + Array.from({ length: 30 }, (_, i) => `<a href="/coaching-${i}">Coaching</a>`).join('') }; } });
-    assert.equal(calls.length, 32); assert.equal(new Set(calls).size, 32);
+    assert.equal(calls.length, 8); assert.equal(new Set(calls).size, 8);
     assert.ok(!calls.some(url => /\/(contact|about)/.test(url)));
-    assert.equal(r.crawl.complete, true); assert.equal(r.crawl.inspected, 32);
+    assert.equal(r.crawl.complete, false); assert.equal(r.crawl.inspected, 8);assert.equal(r.crawl.retryable,false);
 });
 
 test('undated and stale promotional posts cannot establish current demand', async () => {

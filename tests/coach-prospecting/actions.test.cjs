@@ -100,7 +100,7 @@ function reset() {
     "CLIENT",
   );
   data.name = "Fixture coach";
-  data.scanStatus = "COMPLETE";
+  data.scanStatus = "COMPLETE";data.prospecting={followers:{rawText:"2,000 followers",count:2000},assessment:{policy:q.POLICY,status:"POTENTIAL",score:10,reason:"Fixture",evidence:[],gaps:[],assessedAt:new Date().toISOString()},contact:null,accountId:"account-a",about:"",researchStatus:"COMPLETE"};
   row = {
     id: "11111111-1111-4111-8111-111111111111",
     revision: 1,
@@ -137,7 +137,7 @@ test("source and status filters combine before pagination, counts and exports", 
         headline: "Career coach",
         about:
           "I am a career coach. I help professionals. Work with me through my coaching program.",
-        profileIdentityConfirmed: true,
+        profileIdentityConfirmed: true,followers:{rawText:"2,000 followers",count:2000},
       }),
       contact: {
         accountId: "account-a",

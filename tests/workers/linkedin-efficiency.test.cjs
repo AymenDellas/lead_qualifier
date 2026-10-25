@@ -1,8 +1,8 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const fs=require('node:fs'),vm=require('node:vm');
 const core=require('../../src/lib/linkedin-workers.cjs');
-const source=fs.readFileSync(require.resolve('../../worker.cjs'),'utf8');
+const {createAccountRuntime}=require('../../src/lib/account-runtime.cjs');
+const {pageSignal,failure:sessionFailure}=require('../../src/lib/linkedin-session-policy.cjs');
 const person='https://www.linkedin.com/in/fixture-coach/';
 const now=Date.parse('2026-10-20T10:00:00.000Z');
 function capture(extra={}){return {url:person,profileIdentityConfirmed:true,linkedinCapturedAt:new Date(now-3600000).toISOString(),linkedinAccountId:'one',firstName:'Fixture',status:'PENDING',emails:[],linkedinContact:{accountId:'one',connection:'CONNECTED'},...extra};}
@@ -22,19 +22,28 @@ test('reuse is based on capture age, identity and source account; recently compl
  assert.equal(core.reusableLinkedInProfile({checkpoint:noTime},person,'one',now),null);
 });
 
-function readFixture(statuses){
- const counted=[],calls=[];
- const context=vm.createContext({isShuttingDown:false,MANUAL_LOGIN_MODE:false,CHECK_LOGIN_MODE:false,prospectingContext:false,prospectingFailure:null,linkedinStop:null,checkDay:'',linkedinChecks:{},sessionChecks:{},ACCOUNT_ID:'one',
-  dbWorker:{pool:{},owner:'owner',core:{reserveLinkedInCheck:async(_pool,id,owner,kind)=>{assert.equal(id,'one');assert.equal(owner,'owner');counted.push(kind);return {};}}}});
- const start=source.indexOf('async function recordLinkedInCheck('),end=source.indexOf('async function scrapeProfile(',start);
- const guard=vm.runInContext(source.slice(start,end)+';({reserve:recordLinkedInCheck,inspect:checkLinkedInAccess})',context);
- return {counted,calls,read:async kind=>{await guard.reserve(kind);calls.push(kind);guard.inspect(statuses.shift(),'https://www.linkedin.com/in/fixture/');}};
+function readFixture(statuses,allowance={}){
+ const counted=[],calls=[],holds=[],sleeps=[];
+ const runtime=createAccountRuntime({pool:{},accountId:'one',owner:'owner',now:()=>now,
+  browserOwner:{isOpen:()=>false},reader:{},prospecting:{},researchQueue:{},
+  discoveryStore:{pauseAccount:async()=>{}},sleep:async ms=>{sleeps.push(ms);},
+  core:{processingAllowed:async()=>true,
+   reserveLinkedInCheck:async(_pool,id,owner,kind,options)=>{assert.equal(id,'one');assert.equal(owner,'owner');counted.push({kind,...options});return allowance;},
+   pauseProcessing:async(_pool,id,reason,attention,owner)=>{assert.equal(id,'one');assert.equal(owner,'owner');holds.push({reason,attention});},
+  },
+ });
+ return {counted,calls,holds,sleeps,runtime,read:async kind=>{
+  await runtime.permit(kind);calls.push(kind);
+  const found=pageSignal({status:statuses.shift(),url:person});
+  if(found){const failure=sessionFailure(found);await runtime.handleSignal(failure);throw Object.assign(Error(failure.reason),{failure});}
+ }};
 }
 
 test('explicit page interactions are reserved and counted even when the resulting page is unavailable',async()=>{
  const f=readFixture([404,200,200,503]);
  for(const kind of ['contact','contact','profile_page','activity_page'])await f.read(kind);
- assert.deepEqual(f.counted,['contact','contact','profile_page','activity_page']);assert.equal(f.calls.length,4);
+ assert.deepEqual(f.counted.map(value=>value.kind),['contact','contact','profile_page','activity_page']);assert.equal(f.calls.length,4);
+ assert.ok(f.counted.every(value=>value.manual===false));assert.deepEqual(f.holds,[]);
 });
 
 test('ordinary qualification stops after a restriction and cannot reserve the next page interaction',async()=>{
@@ -42,6 +51,16 @@ test('ordinary qualification stops after a restriction and cannot reserve the ne
   const f=readFixture([status,200]);
   await assert.rejects(f.read('contact'),error=>error.failure.retryable===false);
   await assert.rejects(f.read('profile_page'),error=>error.failure.retryable===false);
-  assert.deepEqual(f.counted,['contact']);assert.equal(f.calls.length,1);
+  assert.deepEqual(f.counted.map(value=>value.kind),['contact']);assert.equal(f.calls.length,1);
+  assert.equal(f.holds.length,1);assert.equal(f.holds[0].attention,true);
+ }
+});
+
+test('a manual menu check can decline a rest without sleeping or blocking later passive confirmation',async()=>{
+ for(const permit of [{waitMs:60000},{stopped:true,reason:'Daily LinkedIn check budget reached.'}]) {
+  const f=readFixture([],permit);
+  if(permit.stopped)await assert.rejects(f.runtime.permit('identity',{manual:true}),error=>error.failure.code==='WORKER_PAUSED');else await f.runtime.permit('identity',{manual:true});
+  assert.deepEqual(f.holds,[],'an unavailable menu interaction must not create an account restriction');
+  assert.deepEqual(f.counted,[{kind:'identity',manual:true}]);assert.deepEqual(f.calls,[]);assert.deepEqual(f.sleeps,[]);
  }
 });

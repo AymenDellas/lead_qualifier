@@ -7,7 +7,7 @@ type Draft = Omit<WorkerAccount, 'id'> & {id?:string;password?:string};
 type AccountAction = 'login'|'logout'|'start'|'pause';
 async function readSettings(): Promise<WorkerSettings> {
  const response = await fetch('/api/linkedin-accounts',{cache:'no-store'});
- if (!response.ok) throw new Error('Could not load LinkedIn accounts.');
+ if (!response.ok) throw new Error(response.status===403?'LinkedIn worker controls are available on the local worker computer.':'Could not load LinkedIn accounts.');
  return response.json();
 }
 function statusLabel(a:WorkerAccount) {
@@ -120,7 +120,7 @@ export default function LinkedInAccounts() {
         <p className="text-xs leading-relaxed text-[var(--text-faint)]"><span className="num">{a.dailyCount}/{a.dailyLimit}</span> profiles today · <span className="num">{(a.dailyRequests||0).toLocaleString()}</span> interactions · <span className="num">{(a.dailyCachedProfiles||0).toLocaleString()}</span> reused</p>
        </div>)}
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-3"><span className="text-xs text-[var(--text-faint)]">{config.activeCount} processing {config.activeCount===1?'slot':'slots'}</span><button className="btn btn-ghost !text-xs" disabled={!!pendingAction} onClick={()=>setEditing(true)}>Manage accounts</button></div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-3"><span className="text-xs text-[var(--text-faint)]">Processing {config.activeCount>0?'available':'paused for all accounts'}</span><button className="btn btn-ghost !text-xs" disabled={!!pendingAction} onClick={()=>setEditing(true)}>Manage accounts</button></div>
      </>}
     </>}
    </div>
@@ -177,9 +177,9 @@ function AccountEditor({initial,liveAccounts,workerControls,workerOnline,onClose
    <div className="p-5 min-h-0 overflow-y-auto space-y-5">
     {workerControls}
     <div className="flex flex-wrap items-center gap-3">
-     <label htmlFor="active-accounts" className="field-label">Maximum accounts processing at once</label>
-     <select id="active-accounts" className="field !w-auto min-w-20" value={Math.min(activeCount,enabled)} onChange={e=>setActiveCount(Number(e.target.value))} disabled={saving}>
-      {Array.from({length:enabled+1},(_,n)=><option key={n} value={n}>{n===0?'0 — Pause all':n}</option>)}
+     <label htmlFor="active-accounts" className="field-label">Allow account processing</label>
+     <select id="active-accounts" className="field !w-auto min-w-20" value={activeCount>0?Math.max(1,Math.min(activeCount,enabled)):0} onChange={e=>setActiveCount(Number(e.target.value))} disabled={saving}>
+      <option value={0}>Pause all</option><option value={Math.max(1,Math.min(activeCount,enabled))}>Enabled · one browser by default</option>
      </select>
     </div>
     <p className="field-hint">Connect and Start batch are also available in the main panel. Changing settings does not start processing.</p>
@@ -227,7 +227,7 @@ function AccountActions({account:a,disabled,pauseDisabled=disabled,busy,pendingA
   </div>
   {openingSignIn&&<p role="status" className="text-xs leading-relaxed text-[var(--text-dim)]">Opening Chrome on the worker computer…</p>}
   {signingIn&&<p role="status" className="text-xs leading-relaxed text-[var(--text-dim)]">Complete sign-in in Chrome on the worker computer, then start a batch here.</p>}
-  {workerOnline&&!hasCapacity&&!a.processingEnabled&&<p className="text-xs text-[var(--text-dim)]">Set a processing slot in Manage accounts to start a batch.</p>}
+  {workerOnline&&!hasCapacity&&!a.processingEnabled&&<p className="text-xs text-[var(--text-dim)]">Enable processing in Manage accounts to start a batch.</p>}
   {workerOnline&&!a.enabled&&<p className="text-xs text-[var(--text-dim)]">Enable this account in Manage accounts to start a batch.</p>}
   {!needsSignIn&&!a.processingEnabled&&a.browserOpen===false&&<p className="text-xs leading-relaxed text-[var(--text-dim)]">Start batch reopens your saved Chrome session.</p>}
   <p className="text-xs text-[var(--text-faint)]">Processing continues until paused, the daily cap, or an account review.</p>
@@ -236,8 +236,8 @@ function AccountActions({account:a,disabled,pauseDisabled=disabled,busy,pendingA
 function AccountHistory({id,updatedAt}:{id:string;updatedAt:string|null}) {
  const [open,setOpen]=useState(false),[events,setEvents]=useState<WorkerAccountEvent[]|null>(null),[error,setError]=useState('');
  useEffect(()=>{
-  if(!open)return;let active=true;setError('');
-  fetch('/api/linkedin-accounts?events='+encodeURIComponent(id),{cache:'no-store'}).then(async response=>{if(!response.ok)throw new Error('Could not load account history.');return response.json();}).then(value=>{if(active)setEvents(value);}).catch(e=>{if(active)setError(e.message);});
+  if(!open)return;let active=true;
+  fetch('/api/linkedin-accounts?events='+encodeURIComponent(id),{cache:'no-store'}).then(async response=>{if(!response.ok)throw new Error('Could not load account history.');return response.json();}).then(value=>{if(active){setEvents(value);setError('');}}).catch(e=>{if(active)setError(e.message);});
   return()=>{active=false;};
  },[open,id,updatedAt]);
  return <details onToggle={event=>setOpen(event.currentTarget.open)} className="text-xs">

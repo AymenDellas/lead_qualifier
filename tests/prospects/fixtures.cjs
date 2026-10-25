@@ -3,6 +3,7 @@ const { emptyResearch, makeFact, FACT_KEYS, assessProspect } = require('../../sr
 const NOW = '2026-10-06T12:00:00.000Z';
 function research(overrides = {}) {
     const value = emptyResearch({ linkedinUrl: 'https://www.linkedin.com/in/ava-morgan', headline: 'Independent Executive Coach | Founder', profileIdentityConfirmed: true }, NOW);
+    value.followers={rawText:'2,000 followers',count:2000,checkedAt:NOW,threshold:1000};
     value.website = 'https://avamorgan.test'; value.websiteStatus = 'OWNED';
     value.lastActivityAt = NOW; value.activityStatus = 'Active';
     const quote = { url: value.website, excerpt: 'I am Ava Morgan, an independent executive coach serving leaders in Canada.', source: 'WEBSITE', observedAt: NOW };

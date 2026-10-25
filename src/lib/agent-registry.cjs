@@ -41,8 +41,11 @@ async function recover(pool,currentOwner,{processOwner=isProcessOwner}={}){
  }
 }
 async function accountAvailable(pool,id,owner){
- const row=(await pool.query('SELECT owner,status,lease_until>NOW() AS live FROM compel_worker_sessions WHERE account_id=$1',[id])).rows[0];
- if(!row||row.owner===owner||!row.live&&['offline','signed_out'].includes(row.status?.status))return true;
+ const row=(await pool.query('SELECT owner,status,lease_until>NOW() AS live,lease_until<=updated_at AS released FROM compel_worker_sessions WHERE account_id=$1',[id])).rows[0];
+ // releaseSession writes lease_until and updated_at in the same transaction.
+ // Old runtimes could retain a final BROWSER_CLOSED snapshot after that release.
+ // A heartbeat always places its lease in the future relative to updated_at.
+ if(!row||row.owner===owner||!row.live&&(row.released||['offline','signed_out'].includes(row.status?.status)))return true;
  throw error('ACCOUNT_OWNER_UNVERIFIED',row.live?'Another session still owns this account. Wait for its lease release or stop its agent.':'The old account owner has no verified release. Stop the old worker and review its ownership before recovering.');
 }
 async function release(pool,owner,status={stage:'OFFLINE'}){

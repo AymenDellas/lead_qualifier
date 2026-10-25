@@ -7,7 +7,7 @@ test('persistent check counters, cache reuse at the profile cap, expiry and expl
  const raw=new Pool({connectionString:process.env.DATABASE_URL,max:5,connectionTimeoutMillis:10000,ssl:{rejectUnauthorized:false}});
  const schema='compel_efficiency_test_'+randomUUID().replaceAll('-','');
  assert.match(schema,/^compel_efficiency_test_[a-f0-9]{32}$/);
- const qualify=sql=>sql.replace(/\b(compel_worker_events|compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_sessions|compel_worker_jobs|compel_research_budget|compel_prospect_runs)\b/g,`"${schema}".$1`);
+ const qualify=sql=>sql.replace(/\b(compel_worker_events|compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_account_profiles|compel_worker_day|compel_worker_sessions|compel_worker_jobs|compel_research_budget|compel_prospect_runs)\b/g,`"${schema}".$1`);
  const pool={query:(sql,values)=>raw.query(qualify(sql),values),connect:async()=>{
   const client=await raw.connect();return {query:(sql,values)=>client.query(qualify(sql),values),release:()=>client.release()};
  }};
@@ -33,7 +33,7 @@ test('persistent check counters, cache reuse at the profile cap, expiry and expl
    VALUES('previous',$1,'{}','done','legacy-0',$2::jsonb,$2::jsonb,$3)`,[url,JSON.stringify(saved),at]);
   const other=await core.cachedLinkedInProfile(pool,url,'legacy-1');assert.equal(other.firstName,'Saved');assert.equal(other.linkedinContact,undefined);
   await pool.query("UPDATE compel_linkedin_accounts SET daily_limit=1 WHERE id='legacy-0'");
-  await pool.query("UPDATE compel_worker_usage SET count=1 WHERE account_id='legacy-0' AND day=(NOW() AT TIME ZONE 'UTC')::date");
+  await pool.query("INSERT INTO compel_worker_account_profiles(account_id,day,profile_key,job_id) VALUES('legacy-0',compel_worker_day(),'https://www.linkedin.com/in/quota-used/','fixture')");
   const batch=await core.enqueue(pool,[url]);assert.equal(batch.queuedCount,1);
   const reused=await core.claim(pool,'legacy-0','one');assert.equal(reused.job.resumeResult.firstName,'Saved');assert.equal(reused.dailyCount,1);
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM compel_worker_profile_usage')).rows[0].n,0,'reuse makes no fresh profile reservation');
@@ -48,7 +48,7 @@ test('persistent check counters, cache reuse at the profile cap, expiry and expl
   await pool.query(`INSERT INTO compel_worker_jobs(id,profile_key,payload) VALUES('refresh',$1,$2::jsonb)`,[url,JSON.stringify({jobId:'refresh',linkedinUrl:url,explicitRetry:true})]);
   assert.equal((await core.claim(pool,'legacy-0','one')).limited,true,'explicit refresh respects the profile cap');
   await pool.query("UPDATE compel_linkedin_accounts SET daily_limit=2 WHERE id='legacy-0'");
-  const refreshed=await core.claim(pool,'legacy-0','one');assert.equal(refreshed.job.resumeResult,undefined);assert.equal(refreshed.dailyCount,2);
+  const refreshed=await core.claim(pool,'legacy-0','one');assert.equal(refreshed.job.resumeResult,undefined);assert.equal(refreshed.dailyCount,1);await core.reserveProfile(pool,{accountId:'legacy-0',owner:'one',profileUrl:url,jobId:refreshed.job.jobId});
 
   await pool.query('ALTER TABLE compel_worker_usage DROP COLUMN cached_profiles');
   await core.ensure({...pool});

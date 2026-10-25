@@ -18,7 +18,7 @@ test("prospecting shares account leases and budgets, persists jobs and protects 
   const schema = "compel_prospect_test_" + randomUUID().replaceAll("-", "");
   assert.match(schema, /^compel_prospect_test_[a-f0-9]{32}$/);
   const names =
-    "compel_worker_events|compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_sessions|compel_worker_jobs|compel_research_budget|compel_prospect_runs|case_study_prospects|case_study_activities|leads";
+    "compel_worker_events|compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_account_profiles|compel_worker_day|compel_worker_sessions|compel_worker_jobs|compel_research_budget|compel_prospect_runs|case_study_prospects|case_study_activities|leads";
   const qualify = (sql) =>
     sql.replace(new RegExp("\\b(" + names + ")\\b", "g"), `"${schema}".$1`);
   const pool = {
@@ -80,8 +80,8 @@ test("prospecting shares account leases and budgets, persists jobs and protects 
     assert.equal(duplicate, null);
     assert.equal(
       (await core.settings(pool)).accounts[0].dailyCount,
-      1,
-      "discovery shares the existing daily budget",
+      0,
+      "source lists are not profile reads",
     );
     const urls = [
       "https://www.linkedin.com/in/coach-one/",
@@ -111,10 +111,10 @@ test("prospecting shares account leases and budgets, persists jobs and protects 
       "assigned prospect jobs never consume another account",
     );
     const first = await core.claim(pool, "legacy-0", "owner-one");
-    assert.equal(first.dailyCount, 2);
+    assert.equal(first.dailyCount, 0);
     const result = {
       url: first.job.linkedinUrl,
-      profileIdentityConfirmed: true,
+      profileIdentityConfirmed: true,followers:{count:2000,rawText:"2,000 followers"},
       firstName: "Evidence",
       lastName: "Coach",
       headline: "I help people navigate change",
@@ -174,11 +174,11 @@ test("prospecting shares account leases and budgets, persists jobs and protects 
       urls: [first.job.linkedinUrl],
     });
     const cached = await core.claim(pool, "legacy-1", "owner-two");
-    assert.ok(cached.job.resumeResult);
+    assert.equal(cached.job.resumeResult,undefined,'Explicit rechecks refresh followers instead of reusing unchecked capture');
     assert.equal(
       cached.dailyCount,
       0,
-      "a cached profile does not charge the selected account for another LinkedIn visit",
+      "claiming a fresh recheck does not charge until its actual profile navigation",
     );
     const manual = {
       ...saved.assessment,
@@ -199,7 +199,7 @@ test("prospecting shares account leases and budgets, persists jobs and protects 
     const kept = await store.finishProfile(
       pool,
       { ...cached.job, owner: "owner-two" },
-      cached.job.resumeResult,
+      result,
       { facts: {} },
     );
     assert.equal(
@@ -247,8 +247,8 @@ test("prospecting shares account leases and budgets, persists jobs and protects 
     assert.equal(resumed.job.jobId, second.job.jobId);
     assert.equal(
       resumed.dailyCount,
-      3,
-      "resuming a reserved profile does not spend another unit",
+      0,
+      "claiming a checkpoint does not spend a profile slot",
     );
     await store.changeRun(pool, runId, "STOP");
     assert.equal(await store.runIsActive(pool, runId), false);
@@ -288,7 +288,7 @@ test("prospecting shares account leases and budgets, persists jobs and protects 
     );
     // A source run at the exact shared budget must not open LinkedIn at all.
     await pool.query(
-      "UPDATE compel_worker_usage SET count=4 WHERE account_id='legacy-0'",
+      "INSERT INTO compel_worker_account_profiles(account_id,day,profile_key,job_id) SELECT 'legacy-0',compel_worker_day(),'https://www.linkedin.com/in/cap-'||n||'/','fixture' FROM generate_series(1,4) n",
     );
     await store.createRun(pool, {
       accountId: "legacy-0",

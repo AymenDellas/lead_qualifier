@@ -12,6 +12,17 @@ const nextConfig = {
         '/api/copy-studio/*': ['./node_modules/@qwen-code/qwen-code/**/*'],
     },
 
+    // Local sessions/evidence are runtime state, never deployment assets. Broad
+    // dynamic filesystem paths in Finder/Create must not package this PC's data.
+    outputFileTracingExcludes: {
+        '/*': [
+            './.browser-profiles*/**/*', './data/**/*', './progress/**/*',
+            './queue*/**/*', './case-study-queue/**/*', './case-study-results/**/*',
+            './scrape-results/**/*', './api-data/**/*', './backups/**/*',
+            './output/**/*', './tmp/**/*', './.git/**/*', './.env*',
+        ],
+    },
+
     // Disable powered-by header for security
     poweredByHeader: false,
 

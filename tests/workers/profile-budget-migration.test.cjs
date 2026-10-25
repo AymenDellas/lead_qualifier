@@ -6,7 +6,7 @@ require('@next/env').loadEnvConfig(require('node:path').resolve(__dirname,'../..
 test('migration recovers unique visits and preserves cached work without repeating the counter repair',async()=>{
  const raw=new Pool({connectionString:process.env.DATABASE_URL,max:4,connectionTimeoutMillis:10000,ssl:{rejectUnauthorized:false}});
  const schema='compel_budget_test_'+randomUUID().replaceAll('-','');
- const qualify=sql=>sql.replace(/\b(compel_worker_events|compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_sessions|compel_worker_jobs|compel_research_budget|compel_prospect_runs)\b/g,`"${schema}".$1`);
+ const qualify=sql=>sql.replace(/\b(compel_worker_events|compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_account_profiles|compel_worker_day|compel_worker_sessions|compel_worker_jobs|compel_research_budget|compel_prospect_runs)\b/g,`"${schema}".$1`);
  const pool={query:(sql,values)=>raw.query(qualify(sql),values),connect:async()=>{
   const client=await raw.connect();return{query:(sql,values)=>client.query(qualify(sql),values),release:()=>client.release()};
  }};

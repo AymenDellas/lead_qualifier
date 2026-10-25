@@ -136,7 +136,7 @@ function createResearchRunner(options){
   try{
    const previousResearch=result.prospectQualification?.baseResearch||result.prospectQualification?.research;
    let knownWebsite='';
-   if(!job.prospecting){
+   if(!job.prospecting&&!result.decisionStage){
     try{
      const slug=result.url?.match(/\/in\/([^/?#]+)/i)?.[1]?.toLowerCase();
      knownWebsite=(await pool.query("SELECT website FROM leads WHERE lower(substring(linkedin_url from '/in/([^/?#]+)'))=$1 AND NULLIF(website,'') IS NOT NULL ORDER BY created_at LIMIT 1",[slug])).rows[0]?.website||'';
@@ -165,7 +165,7 @@ function createResearchRunner(options){
     result.prospectQualification=telemetry.spanSync('qualification',()=>assessProspect(research,{email:result.primaryEmail}));
     const q=result.prospectQualification.qualification;
     const pipeline=pipelineForAssessment(result.prospectQualification);
-    result.status=pipeline==='QUALIFIED'?'QUALIFIED':pipeline==='REVIEW'||q.activity==='UNKNOWN'||!research.profileIdentityConfirmed||q.needsAttention?'REVIEW':q.needsRetry?'ERROR':'REJECTED';
+    result.status=q.followers==='REJECTED'?'REJECTED':pipeline==='QUALIFIED'?'QUALIFIED':pipeline==='REVIEW'||q.activity==='UNKNOWN'||!research.profileIdentityConfirmed||q.needsAttention?'REVIEW':q.needsRetry?'ERROR':'REJECTED';
     if(result.status==='REVIEW')result.failure={stage:'qualification',code:q.followersReason||(!research.profileIdentityConfirmed?'PROFILE_IDENTITY':q.activity==='UNKNOWN'?'ACTIVITY_UNCONFIRMED':'CRAWL_INCOMPLETE'),reason:result.prospectQualification.nextAction,retryable:false};
     if(result.status==='ERROR'){
      result.failure=q.activity==='UNKNOWN'||!research.profileIdentityConfirmed
@@ -185,7 +185,7 @@ function createResearchRunner(options){
   // carry a transient account failure. Only website and CRM work can retry.
   const failure=result.failure;
   if(result.status==='ERROR'&&failure?.retryable&&['research','crm'].includes(failure.stage)&&retryCount<3){
-   failure.retryAt=new Date(now()+60000).toISOString();
+   failure.retryAt=new Date(now()).toISOString();
    await core.checkpoint(pool,job.jobId,owner,result);
    await core.defer(pool,job.jobId,owner,result,failure.retryAt);
    log('Public research deferred for '+job.jobId+': '+failure.reason);
@@ -196,14 +196,17 @@ function createResearchRunner(options){
    if(retryCount>=3&&['research','crm'].includes(failure.stage))failure.reason='Automatic retries exhausted. '+failure.reason;
   }
   if(result.status==='ERROR'&&failure?.retryable===false)result.status='REVIEW';
-  await core.complete(pool,job.jobId,owner,result);
+  try{await core.complete(pool,job.jobId,owner,result);}catch(error){
+   error.engineJobId=job.jobId;error.resumeResult=telemetry.attach({...result,status:'PENDING',failure:{stage:'crm',code:'RESULT_SAVE_PENDING',reason:'Final database acknowledgement failed; completed research retained.',retryable:true}});throw error;
+  }
   if(options.onComplete)await options.onComplete(job,result);
   return {jobId:job.jobId,result,deferred:false};
  }
  async function runOnce(){
   if(closed)return null;
   const claimed=await queue.claim(pool,owner);
-  return claimed?processJob(claimed.job):null;
+  if(!claimed)return null;
+  try{return await processJob(claimed.job);}catch(error){error.engineJobId=claimed.job.jobId;error.resumeResult||=claimed.job.resumeResult;throw error;}
  }
  function closeBrowser(){
   if(closingBrowser)return closingBrowser;

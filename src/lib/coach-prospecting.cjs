@@ -25,7 +25,7 @@ const audience =
   /\b(?:i|we) (?:help|coach|support|guide|work with)\b|\bcoaching for\b/i;
 const escape = (v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function assessCoach(input = {}, research = {}, criteria = {}) {
-  const follower=followersDecision(research.followers||input.followers,minFollowers());
+  const follower=followersDecision(research.followers||input.followers,(research.followers||input.followers)?.threshold??minFollowers());
   if(input.profileIdentityConfirmed&&follower.status!=='CONTINUE')return {policy:POLICY,status:follower.status==='REJECTED'?'OUTSIDE':'POTENTIAL',score:0,reason:follower.reason,
     reasonCode:follower.reason,evidence:[{source:'LinkedIn followers',url:input.url||'',quote:(research.followers||input.followers)?.rawText||'Follower count not shown'}],gaps:follower.status==='REVIEW'?['Confirm the LinkedIn follower count.']:[],assessedAt:new Date().toISOString()};
   const fields = [

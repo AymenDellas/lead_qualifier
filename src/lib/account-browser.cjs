@@ -44,7 +44,7 @@ function profilePath(root, account, fs, profileRoot) {
 }
 
 /**
- * Owns one visible saved account browser. Opening is always explicit; navigation,
+ * Owns one visible saved account browser. Persisted intent/manual requests authorize opening; navigation,
  * authentication and processing decisions belong to the account runtime.
  * The runtime owns its cross-process lease/PID lock; Chrome retains its own
  * profile lock. This map additionally prevents competing owners in one process.

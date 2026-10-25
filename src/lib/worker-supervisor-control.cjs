@@ -78,7 +78,7 @@ function createWorkerSupervisorController(options) {
     await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});
     fs.writeFileSync(startFile,JSON.stringify({pid:child.pid,startedAt:now(),token,stage:'REQUEST_RECEIVED'}));
     child.unref();
-    return result('starting',false,'Workers are starting. Account processing remains paused.');
+    return result('starting',false,'Agent is starting. Saved intent resumes; explicit pauses and review holds remain in force.');
    } catch(error) {
     release();
     throw new Error(error.code==='EACCES'||error.code==='EPERM'

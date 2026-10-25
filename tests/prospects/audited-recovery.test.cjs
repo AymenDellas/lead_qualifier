@@ -6,7 +6,7 @@ const {researchProspect,parsePage}=require('../../src/lib/prospect-research.cjs'
 const {assessProspect,validateResearch}=require('../../src/lib/prospect-qualification.cjs');
 const {createPageRenderer}=require('../../src/lib/public-page-browser.cjs');
 const now='2026-10-11T12:00:00.000Z',recent='2026-10-10T12:00:00.000Z',old='2026-08-01T12:00:00.000Z';
-const input={firstName:'Ava',lastName:'Morgan',profileIdentityConfirmed:true,lastActivityAt:recent,linkedinUrl:'https://www.linkedin.com/in/ava/',websites:['https://practice.test/']};
+const input={followers:{rawText:"2,000 followers",count:2000,checkedAt:now,threshold:1000},firstName:'Ava',lastName:'Morgan',profileIdentityConfirmed:true,lastActivityAt:recent,linkedinUrl:'https://www.linkedin.com/in/ava/',websites:['https://practice.test/']};
 const options={now,profileUrn:'urn:li:fsd_profile:ava',profileUrl:input.linkedinUrl};
 const urn=date=>'urn:li:activity:'+(BigInt(Date.parse(date))<<22n);
 const intro='<html><body><h1>Ava Morgan Coaching</h1><p>Ava Morgan helps leaders develop communication and leadership skills through executive coaching.</p>';
@@ -74,8 +74,8 @@ test('binary-looking responses, challenge pages and missing roots remain incompl
  const missing=await researchProspect(input,{now,ai:false,fetchPage:async()=>{throw Object.assign(Error('HTTP 404'),{httpStatus:404});}});
  assert.equal(missing.crawl.complete,false);assert.equal(missing.crawl.retryable,false);assert.match(missing.crawl.stoppedReason,/unavailable/);
  let rendered=0;
- const recovered=await researchProspect(input,{now,ai:false,fetchPage:async()=>{throw Object.assign(Error('HTTP 403'),{httpStatus:403});},renderPage:async url=>{rendered++;return{url,html:intro+'<footer>Contact ava@practice.test</footer></body></html>'};}});
- assert.equal(rendered,1);assert.equal(recovered.contacts[0].address,'ava@practice.test');assert.equal(recovered.crawl.complete,true);
+ const recovered=await researchProspect(input,{now,ai:false,fetchPage:async url=>({url,html:'<html><body><div id=app></div></body></html>'}),renderPage:async url=>{rendered++;return{url,html:intro+'<footer>Contact ava@practice.test</footer></body></html>'};}});
+ assert.equal(rendered,1);assert.equal(recovered.contacts[0].address,'ava@practice.test');assert.equal(recovered.crawl.evidenceSufficient,true);assert.equal(recovered.crawl.retryable,false);
 });
 test('an old incomplete checkpoint rechecks attribution once, then resumes without repeatedly fetching its root',async()=>{
  const fetchPage=async url=>({url,html:intro+'<a href="/contact">Contact</a><a href="/notes">Notes</a><footer>Contact ava@secondbrand.test</footer></body></html>'});
@@ -84,7 +84,7 @@ test('an old incomplete checkpoint rechecks attribution once, then resumes witho
  r=await researchProspect(input,{now,ai:false,maxPages:1,previousResearch:r,fetchPage:async url=>{calls.push(url);return fetchPage(url);}});
  assert.equal(r.crawl.attributionVersion,3);
  r=await researchProspect(input,{now,ai:false,previousResearch:r,fetchPage:async url=>{calls.push(url);return fetchPage(url);}});
- assert.equal(calls.filter(url=>url===input.websites[0]).length,1);assert.equal(r.crawl.complete,true);
+ assert.equal(calls.length,0,'Sufficient saved attributed contact evidence needs no recrawl');assert.equal(r.crawl.retryable,false);
 });
 test('browser fallback uses isolated contexts, filters all requests, shares bounded renders and closes contexts',async()=>{
  let contexts=0,closed=0,handler,fetches=0;const requests=[];

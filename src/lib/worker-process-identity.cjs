@@ -24,8 +24,10 @@ async function isProcessOwner(pid,script) {
 }
 async function clearUnownedProcessLock(file,script,{staleMs=0,now=Date.now}={}) {
  let original,saved;try{original=fs.readFileSync(file,'utf8');saved=JSON.parse(original);}catch{return;}
+ if(!Number.isInteger(saved.pid)||saved.pid<=0)return;
  if(await isProcessOwner(saved.pid,script)!==false)return;
- if(now()-Number(saved.heartbeatAt||saved.startedAt||fs.statSync(file).mtimeMs)<staleMs)return;
+ const remaining=staleMs-(now()-Number(saved.heartbeatAt||saved.startedAt||fs.statSync(file).mtimeMs));
+ if(remaining>0)return {waitMs:remaining};
  if(fs.readFileSync(file,'utf8')===original)fs.unlinkSync(file);
 }
 module.exports={isProcessOwner,clearUnownedProcessLock};

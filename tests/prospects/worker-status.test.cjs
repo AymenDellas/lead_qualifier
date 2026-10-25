@@ -10,14 +10,15 @@ function load(relative,dependencies){
 function statusRoute(heartbeat,failDatabase=false,routeName='process-lead',cachedLead){
  const fakePool={query:async sql=>{
   if(failDatabase)throw new Error('Database unavailable');
+  if(sql.includes("to_regprocedure('compel_worker_day()')"))return{rows:[{ready:true}]};
   if(sql.includes('FROM pg_attribute'))return{rows:[{migrated:true}]};
   if(sql.startsWith('\nCREATE TABLE'))return{rows:[]};
-  if(sql.includes('SELECT * FROM compel_worker_config'))return{rows:[{active_count:1,revision:0}]};
+  if(sql.includes('SELECT * FROM compel_worker_config')||sql.startsWith('SELECT *,compel_worker_day()'))return{rows:[{active_count:1,revision:0}]};
   if(sql.includes('FROM compel_linkedin_accounts a'))return{rows:[{id:'legacy-0',label:'First',email:'fixture@example.test',enabled:true,daily_limit:400,has_password:true,daily_count:276,status:heartbeat,lease_until:heartbeat?.status==='offline'?'2024-01-01':new Date(Date.now()+120000).toISOString()}]};
   if(sql.includes('FROM compel_worker_events'))return {rows:[]};
   if(sql.includes('AS pending'))return{rows:[{pending:1}]};
   if(sql.includes('AS total'))return{rows:[{total:276}]};
-  if(sql.includes('SELECT id,result'))return{rows:cachedLead?[{id:'job_saved',result:cachedLead,completed_at:new Date()}]:[]};
+  if(sql.includes('SELECT id,result')||sql.includes('history AS MATERIALIZED'))return{rows:cachedLead?[{id:'job_saved',result:cachedLead,completed_at:new Date()}]:[]};
   if(sql.includes('FROM leads'))return{rows:[{qualified:9,rejected:258}]};
   if(sql.includes('AS qualified'))return{rows:[{qualified:0,rejected:0}]};
   throw new Error('Unexpected fixture query');

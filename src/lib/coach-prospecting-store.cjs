@@ -127,11 +127,11 @@ async function queueProfiles(c, run, urls) {
       continue;
     }
     const id = "job_" + randomUUID();
-    const checkpoint = await core.cachedLinkedInProfile(c, url, run.account_id);
+    const checkpoint = run.source==='RECHECK'?null:await core.cachedLinkedInProfile(c, url, run.account_id);
     const payload = {
       jobId: id,
       linkedinUrl: url,
-      nativePostProcess: false,
+      nativePostProcess: false,...(run.source==='RECHECK'?{explicitRetry:true,followerRecheck:true}:{}),
       prospecting: {
         runId: run.id,
         accountId: run.account_id,
@@ -413,7 +413,7 @@ async function finishProfile(pool, job, result, research) {
     const manual = old?.data.prospecting?.assessment;
     // A recheck refreshes evidence; only another operator review replaces a
     // recorded human decision. This also avoids relying on cross-host clocks.
-    const follower=require("./follower-policy.cjs").followersDecision(research.followers||result.followers,require("./follower-policy.cjs").minFollowers());
+    const follower=require("./follower-policy.cjs").followersDecision(research.followers||result.followers,(research.followers||result.followers)?.threshold??require("./follower-policy.cjs").minFollowers());
     const assessment = follower.status==='CONTINUE'&&manual?.reason?.startsWith("Operator review:")
       ? manual
       : automatedAssessment;

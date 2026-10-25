@@ -1,0 +1,40 @@
+'use strict';
+const {test}=require('node:test'),assert=require('node:assert/strict'),{randomUUID}=require('node:crypto');
+const {Pool}=require('pg'),core=require('../../src/lib/linkedin-workers.cjs');
+const {research}=require('../prospects/fixtures.cjs');
+require('@next/env').loadEnvConfig(require('node:path').resolve(__dirname,'../..'));
+test('status previews omit heavy research without changing qualification or the saved full result; lightweight polling skips history',async()=>{
+ const raw=new Pool({connectionString:process.env.DATABASE_URL,ssl:{rejectUnauthorized:false},connectionTimeoutMillis:10000});
+ const schema='compel_status_test_'+randomUUID().replaceAll('-','');
+ assert.match(schema,/^compel_status_test_[a-f0-9]{32}$/);
+ const names='compel_worker_events|compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_account_profiles|compel_worker_day|compel_worker_sessions|compel_worker_jobs|compel_research_budget|compel_prospect_runs|leads';
+ let historyQueries=0;
+ const qualify=sql=>sql.replace(new RegExp('\\b('+names+')\\b','g'),`"${schema}".$1`);
+ const pool={query:(sql,v)=>{if(sql.includes('history AS MATERIALIZED'))historyQueries++;return raw.query(qualify(sql),v);},connect:async()=>{const c=await raw.connect();return{query:(sql,v)=>c.query(qualify(sql),v),release:()=>c.release()};}};
+ try {
+  await raw.query(`CREATE SCHEMA "${schema}"`);await core.ensure(pool);
+  const input=research({lastActivityAt:new Date().toISOString(),researchedAt:new Date().toISOString()});
+  const marker='HTML_CONTENT_MUST_STAY_OFF_STATUS';input.pages=[{url:'https://fixture.test/',html:marker.repeat(5000),status:'inspected'}];
+  const result={url:input.linkedinUrl,status:'QUALIFIED',primaryEmail:'ava@avamorgan.test',emails:['ava@avamorgan.test'],about:marker,prospectQualification:{research:input,baseResearch:input}};
+  const queued=await core.enqueue(pool,[input.linkedinUrl]);await pool.query("UPDATE compel_worker_jobs SET status='done',completed_at=NOW(),result=$2::jsonb WHERE id=$1",[queued.jobs[0],JSON.stringify(result)]);
+  const status=await core.queueStatus(pool),preview=status.recentResults[0].result;
+  assert.equal(preview.status,'QUALIFIED');assert.equal(preview.primaryEmail,result.primaryEmail);assert.equal(preview.prospectQualification.research.profileIdentityConfirmed,true);
+  assert.ok(!JSON.stringify(status).includes(marker));assert.ok(JSON.stringify(status).length<20000);
+  assert.equal((await core.jobStatus(pool,queued.jobs[0])).result.prospectQualification.research.pages[0].html,input.pages[0].html);
+  const count=historyQueries;const light=await core.queueStatus(pool,{includeHistory:false});assert.equal(historyQueries,count);assert.equal(light.recentResults,undefined);assert.equal(light.queueSize,status.queueSize);
+  const failed=await core.enqueue(pool,['https://www.linkedin.com/in/missing-contact-fields/']);
+  await pool.query("UPDATE compel_worker_jobs SET status='done',completed_at=NOW(),result=$2::jsonb WHERE id=$1",[failed.jobs[0],JSON.stringify({status:'ERROR',failure:{code:'PAGE_CHANGED',reason:'Original failure'}})]);
+  const recovered=(await core.queueStatus(pool)).recentResults.find(r=>r.jobId===failed.jobs[0]).result;
+  assert.deepEqual(recovered.emails,[]);assert.deepEqual(recovered.websites,[]);assert.equal(recovered.url,'https://www.linkedin.com/in/missing-contact-fields/');assert.equal(recovered.failure.reason,'Original failure');
+  assert.equal((await core.jobStatus(pool,failed.jobs[0])).result.emails,undefined,'the saved original is not mutated');
+  await core.importAccounts(pool,[{email:'waiting@fixture.test',password:'fixture-only'}]);
+  assert.equal(await core.acquireSession(pool,'legacy-0','fixture-owner'),true);
+  await core.confirmManualSignIn(pool,'legacy-0','fixture-owner',{name:'Fixture Owner',profileUrl:'https://www.linkedin.com/in/fixture-owner/'});
+  await core.heartbeat(pool,'legacy-0','fixture-owner',{runtimeVersion:'SESSION_V2',status:'idle',browserOpen:true,sessionReady:true});
+  await core.startProcessing(pool,'legacy-0',60);
+  const nextEligibleAt=new Date(Date.now()+60000).toISOString();
+  await core.heartbeat(pool,'legacy-0','fixture-owner',{runtimeVersion:'SESSION_V2',status:'sleeping',url:input.linkedinUrl,jobId:queued.jobs[0],reason:'Scheduled pacing',nextEligibleAt,browserOpen:true,sessionReady:true});
+  const waiting=(await core.queueStatus(pool,{includeHistory:false})).workerStatus;
+  assert.equal(waiting.status,'sleeping');assert.equal(waiting.url,input.linkedinUrl);assert.equal(waiting.nextEligibleAt,nextEligibleAt);assert.equal(waiting.processingAuthorized,true);
+ }finally{await raw.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);await raw.end();}
+});

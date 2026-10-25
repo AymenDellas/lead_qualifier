@@ -19,8 +19,8 @@ const currentProfile=profile
   '<section class="generated-card"><a href="/in/fixture-coach/" aria-label="Profile photo"></a><div><div><h2>Fixture Coach</h2></div><p>Career coach for experienced professionals</p><div><p>Vancouver, Canada</p></div></div>')
  .replace('<div class="inline-show-more-text">','<p>')
  .replace('HIDDEN CLAIM</span></div>','HIDDEN CLAIM</span></p>');
-function activity(){
- const at=Date.now()-7*86400000,urn=String(BigInt(at)<<22n);
+function activity(days=7){
+ const at=Date.now()-days*86400000,urn=String(BigInt(at)<<22n);
  return `<main><article class="feed-shared-update-v2" data-urn="urn:li:activity:${urn}"><div class="update-components-actor"><a href="${person}">Fixture Coach</a><time datetime="${new Date(at).toISOString()}">7d</time></div><p>Published career advice.</p></article></main>`;
 }
 async function fixture(fn,handler,{background=false}={}) {
@@ -250,4 +250,7 @@ test('a recent matching-author preview avoids the activity page and profile retu
   assert.deepEqual(result.emails,['coach@fixture-coach.test']);assert.equal(requests.length,1);
   assert.ok(!steps.includes('activity_page'));
  },()=>({status:200,contentType:'text/html',body:html}));
+});
+test('coach prospecting retains its original business criteria when recent activity is not a qualification requirement',async()=>{
+ await fixture(async page=>{const result=await reader.captureProfile(page,person,{requireRecentActivity:false});assert.equal(result.linkedinCapture.complete,true);assert.equal(result.activityStatus,'Inactive');assert.deepEqual(result.emails,['coach@fixture-coach.test']);assert.notEqual(result.decisionStage,'activity');},url=>({status:200,contentType:'text/html',body:url.includes('/recent-activity/')?activity(90):profile}));
 });

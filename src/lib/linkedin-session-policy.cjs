@@ -4,7 +4,7 @@
 // or wording in a member's post. This is a stop mechanism, not bot evasion.
 function pageSignal({url='',status=0,text='',manual=false}={}) {
  let path;
- try { const u=new URL(url);if(!/(^|\.)linkedin\.com$/i.test(u.hostname))return null;path=u.pathname; }catch{return null;}
+ try { const u=new URL(url);if(!/(^|\.)(?:linkedin\.com|licdn\.com)$/i.test(u.hostname))return null;path=u.pathname; }catch{return null;}
  if(status===429)return {code:'LINKEDIN_RATE_LIMIT',reason:'LinkedIn returned HTTP 429 (rate limit). Processing stopped; review the account before resuming.'};
  if([403,999].includes(status)||/your account (?:has been |is )(?:temporarily |permanently )?(?:restricted|suspended)|we.ve (?:temporarily )?restricted your account|automated (?:activity|software).*?(?:detected|prohibited)/i.test(text))
   return {code:'LINKEDIN_AUTH',reason:`LinkedIn reported an access restriction${status?' (HTTP '+status+')':''}. Processing stopped; resolve the account notice before reconnecting.`};

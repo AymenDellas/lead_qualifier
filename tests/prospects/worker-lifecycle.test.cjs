@@ -1,297 +1,181 @@
 'use strict';
-
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const qualification = require('../../src/lib/prospect-qualification.cjs');
-const workerPath = require.resolve('../../worker.cjs');
-const source = fs.readFileSync(workerPath, 'utf8');
+const { createAccountRuntime } = require('../../src/lib/account-runtime.cjs');
+const { fullCapture } = require('../../src/lib/worker-research-queue.cjs');
 
-// Execute the complete worker entry point with an in-memory queue and browser.
-// No real environment files, jobs, LinkedIn sessions or CRM requests are used.
-async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicate = false, closeHangs = false, extraTabs = 0, loginFails = false, navigationFailures = 0, manualLogin = false, checkLogin = false, accountId = null, signOut = false, restriction = false, budgetStop = false }) {
-    const root = path.dirname(workerPath);
-    const queueDir = path.join(root, 'queue');
-    const files = new Map();
-    const pidFile = path.join(root, 'data', accountId ? `worker-${accountId}.pid` : 'worker.pid');
-    if (duplicate) files.set(pidFile, JSON.stringify({ pid: 7777 }));
-    for (let i = 0; i < 370; i++) {
-        const jobId = `fixture-${String(i).padStart(3, '0')}`;
-        files.set(path.join(queueDir, `${jobId}.json`), JSON.stringify({
-            jobId, linkedinUrl: 'https://www.linkedin.com/in/test-coach/',
-        }));
-    }
-    const logs = [], errors = [], exits = [], launches = [], signals = new Map(), signalTasks = [], killed = [], closedTabs = [], browserEvents = [], statuses = [], accountHolds = [];
-    let newPages = 0, poolEnds = 0, pausedAccounts=0, deferredJobs=0, scraped=0;
-    let cookies=[{name:'li_at',domain:'.linkedin.com'}],logoutSaved=false;
-    let alive = false, stopRequested = false;
-    const requestStop = () => {
-        if (stopRequested) return;
-        stopRequested = true;
-        // Repeated signals must not run a second shutdown.
-        signalTasks.push(signals.get(signal)(), signals.get(signal)());
+const viewer = { name: 'Fixture Account', profileUrl: 'https://www.linkedin.com/in/fixture-account/' };
+const person = 'https://www.linkedin.com/in/fixture-coach/';
+function fixture(accountId = 'fixture-account') {
+    let open = false, url = 'https://www.linkedin.com/feed/', capture, allowance = {}, sleepHook = async () => {}, source = null, discovery = async () => ({});
+    const account = { id: accountId, enabled: true, authorized: false, confirmed_identity: viewer, login_token: 'connect-1', processing_until: 'start-1', attention_reason: '' };
+    const pending = Array.from({ length: 370 }, (_, i) => ({ jobId: 'fixture-' + i, linkedinUrl: person }));
+    const checkpoints = [], deferred = [], completed = [], handoffs = [], holds = [], permits = [], statuses = [], discoveryHolds = [];
+    const calls = { opens: 0, closes: 0, claims: 0, captures: 0, identities: 0, navigation: 0, logouts: 0, minimizes:0,reveals:0 };
+    const page = { on() {}, mainFrame: () => page, url: () => url, isClosed: () => !open,
+        goto: async () => { calls.navigation++; }, bringToFront: async () => {},
     };
-    const fakeFs = {
-        existsSync: file => path.extname(file) ? files.has(file) || path.basename(file) === '.env.local' : true,
-        mkdirSync: () => assert.fail('fixture directories already exist'),
-        readdirSync: dir => [...files.keys()].filter(file => path.dirname(file) === dir).map(file => path.basename(file)),
-        readFileSync: file => {
-            if (path.basename(file) === '.env.local') {
-                return 'LINKEDIN_ACCOUNTS=[{"email":"test@example.invalid","password":"fixture"}]';
-            }
-            assert.ok(files.has(file), `Unexpected fixture read: ${file}`);
-            return files.get(file);
-        },
-        writeFileSync: (file, value, options) => {
-            if (options?.flag === 'wx' && files.has(file)) throw Object.assign(new Error('Fixture lock exists'), { code: 'EEXIST' });
-            files.set(file, value);
-            if (path.basename(file).startsWith('worker-status')) statuses.push(JSON.parse(value));
-            if (path.basename(file) === 'fixture-000.json' && path.dirname(file) !== queueDir) {
-                queueMicrotask(requestStop);
-            }
-        },
-        unlinkSync: file => { files.delete(file); },
+    const browser = { isConnected: () => open };
+    const browserOwner = { isOpen: () => open, open: async () => { if (!open) calls.opens++; open = true; return { browser, page }; }, close: async () => { if (open) calls.closes++; open = false; },minimize:async()=>{calls.minimizes++;},reveal:async()=>{calls.reveals++;} };
+    const core = {
+        readRuntimeAccount: async () => ({ ...account }),
+        consumeLoginRequest: async () => { account.login_token = null; return true; },
+        confirmManualSignIn: async () => { account.attention_reason = ''; },
+        processingAllowed: async () => account.authorized && !account.attention_reason,
+        pauseProcessing: async (_pool, id, reason, attention, owner) => { assert.equal(id, accountId); assert.equal(owner, 'owner'); account.authorized = false; holds.push({ reason, attention }); if (attention) account.attention_reason = reason; },
+        reserveLinkedInCheck: async (_pool, id, owner, kind) => { assert.equal(id, accountId); assert.equal(owner, 'owner'); permits.push(kind); return typeof allowance === 'function' ? allowance(kind) : allowance; },
+        claim: async () => { calls.claims++; return pending.length ? { job: pending.shift() } : null; },
+        releaseClaim:async(_pool,jobId)=>{pending.unshift({jobId,linkedinUrl:person});},
+        checkpoint: async (_pool, jobId, owner, value) => checkpoints.push({ jobId, owner, value: structuredClone(value) }),
+        complete: async (_pool, jobId, owner, result) => completed.push({ jobId, owner, result }),
+        defer: async (_pool, jobId, owner, result, retryAt) => { deferred.push({ jobId, owner, result, retryAt }); pending.unshift({ jobId, linkedinUrl: person, resumeResult: result }); },
+        finishLogout: async () => { calls.logouts++; account.logout_token = null; account.signed_out_at = '2026-10-24T10:00:00.000Z'; return true; },
     };
-    const page = {
-        on: () => {}, mainFrame:()=>({}), setViewport: async () => {}, isClosed: () => false, bringToFront:async()=>browserEvents.push('front'),
-        goto: async () => {
-            browserEvents.push('navigate');
-            if (navigationFailures > 0) { navigationFailures--; throw Object.assign(new Error('Navigation timeout of 45000 ms exceeded'), { name: 'TimeoutError' }); }
-        },
-        url: () => loginFails || signOut ? 'https://www.linkedin.com/login' : 'https://www.linkedin.com/feed/', evaluate: async (_fn,url) => typeof url==='string'&&url.includes('voyager/api/me')?{status:200,data:{miniProfile:{firstName:'Fixture',lastName:'Account',publicIdentifier:'fixture-account',entityUrn:'urn:li:fs_miniProfile:fixture'}}}:true,
+    capture = async (_page, target, options) => { await options.beforeCheck('profile_page'); return { url: target, firstName: 'Fixture', emails: [], logs: [], profileIdentityConfirmed: true, linkedinCapture: { version: 2, complete: true } }; };
+    const reader = {
+        inspected: async (_page, options) => { options.checkResponse(200, url); return { url }; },
+        readSignedInIdentity: async () => { calls.identities++; return viewer; },
+        captureProfile: async (...args) => { calls.captures++; return capture(...args); },
     };
-    const makeBrowser = options => {
-        const tabs = new Set(Array.from({ length: extraTabs + 1 }, (_, i) => String(i)));
-        return {
-        process: () => ({ pid: 1234 }),
-        isConnected: () => alive,
-        pages: () => assert.fail('Startup must not initialize restored pages with browser.pages()'),
-        target: () => ({ createCDPSession: async () => ({
-            send: async (command, args) => {
-                if (command === 'Target.getTargets') {
-                    browserEvents.push('list-targets');
-                    return { targetInfos: [{ targetId: 'browser', type: 'browser' }, { targetId: 'service-worker', type: 'service_worker' },
-                        ...Array.from({ length: extraTabs + 1 }, (_, i) => ({ targetId: String(i), type: 'page' }))] };
-                }
-                if (command === 'Target.createTarget') {
-                    assert.equal(alive, true, 'Chrome must be alive when opening the temporary tab');
-                    assert.equal(args.url, 'about:blank');
-                    assert.equal(options.targetFilter({ type: () => 'page' }), false, 'restored pages must remain uninitialized');
-                    browserEvents.push('keeper'); tabs.add('keeper'); return { targetId: 'keeper' };
-                }
-                assert.equal(command, 'Target.closeTarget');
-                assert.ok(tabs.delete(args.targetId), 'only this browser’s existing tabs can close');
-                if (args.targetId === 'keeper') browserEvents.push('close-keeper');
-                else { browserEvents.push('close-target'); closedTabs.push(Number(args.targetId)); }
-                if (!options.headless && tabs.size === 0) alive = false;
-                return { success: true };
-            },
-            detach: async () => browserEvents.push('detach'),
-        }) }),
-        newPage: async () => {
-            assert.equal(options.targetFilter({ type: () => 'page' }), true);
-            assert.equal(alive, true, 'closing the last restored tab must not terminate the login browser');
-            tabs.add(`fresh-${newPages}`);
-            newPages++; browserEvents.push('new-page'); return page;
-        },
-        close: async () => { if (closeHangs) await new Promise(() => {}); alive = false; },
-        cookies:async()=>cookies,deleteCookie:async(...values)=>{cookies=cookies.filter(cookie=>!values.includes(cookie));},
-    }; };
-    const modules = {
-        fs: fakeFs, path,
-        'child_process': { execSync: command => { assert.equal(command, 'taskkill /F /T /PID 1234'); killed.push(command); alive = false; } },
-        'puppeteer': { use: () => {}, launch: async options => {
-            assert.equal(options.waitForInitialPage, false);
-            assert.equal(options.targetFilter({ type: () => 'page' }), false);
-            assert.equal(options.targetFilter({ type: () => 'browser' }), true);
-            launches.push(options); alive = true; return makeBrowser(options);
-        } },
-        './src/lib/linkedin-session-policy.cjs':require('../../src/lib/linkedin-session-policy.cjs'),
-        './src/lib/linkedin-browser-page.cjs':{readSignedInIdentity:async()=>({name:'Fixture Account',profileUrl:'https://www.linkedin.com/in/fixture-account/',memberUrn:'',checkedAt:new Date().toISOString()})},
-        './src/lib/prospect-qualification.cjs': qualification,
-        './src/lib/linkedin-activity.cjs': require('../../src/lib/linkedin-activity.cjs'),
-        './src/lib/profile-public-contacts.cjs': require('../../src/lib/profile-public-contacts.cjs'),
-        './src/lib/prospect-research.cjs': { researchProspect: () => assert.fail('No live research') },
-        './src/lib/linkedin-session-identity.cjs': require('../../src/lib/linkedin-session-identity.cjs'),
-        './src/lib/linkedin-signout.cjs': require('../../src/lib/linkedin-signout.cjs'),
-        './src/lib/worker-failure.cjs': require('../../src/lib/worker-failure.cjs'),
-        './src/lib/coach-prospecting-store.cjs': {ensure:async()=>{},claimSource:async()=>null,pauseAccount:async()=>{pausedAccounts++;}},
-        './src/lib/coach-prospecting-worker.cjs': {},
-        './src/lib/coach-prospecting.cjs': require('../../src/lib/coach-prospecting.cjs'),
-        http: {}, https: {},
-        pg: { Pool: class { async query() { return {rows:[{id:accountId,email:`${accountId}@example.invalid`,secret:'encrypted',profile_key:`profile-${accountId}`,logout_request_token:signOut?'logout-token':null} ]}; } async end() { assert.equal(++poolEnds,1,'shutdown and main finally must share one database cleanup'); } } },
-        'node:crypto': require('node:crypto'),
-        './src/lib/linkedin-workers.cjs': { ensure:async()=>{},acquireSession:async()=>true,decrypt:()=>assert.fail('Workers must never decrypt saved credentials'),processingAllowed:async()=>true,pauseProcessing:async(_p,_id,_reason,attention)=>{accountHolds.push(attention);},confirmManualSignIn:async()=>{},reserveLinkedInCheck:async()=>({}),releaseSession:async()=>{},consumeLoginRequest:async()=>true,
-            finishLogout:async()=>{logoutSaved=true;return true;},
-            claim:async()=>({job:JSON.parse(files.get(path.join(queueDir,'fixture-000.json'))),dailyCount:1,dailyLimit:400}),
-            defer:async()=>{deferredJobs++;},recordLinkedInCheck:async()=>{},checkpoint:async()=>{},complete:async()=>{},heartbeat:async()=>{} },
-    };
-    const context = vm.createContext({
-        __dirname: root, global: {}, structuredClone, URL, fixtureBudgetStop:budgetStop,
-        require: name => { assert.ok(Object.hasOwn(modules, name), `Unexpected module: ${name}`); return modules[name]; },
-        process: {
-            pid: 4444, argv: ['node', workerPath, '--start', ...(accountId ? ['--account',accountId] : []), ...(manualLogin ? ['--login'] : []), ...(checkLogin ? ['--check-login'] : []), ...(signOut ? ['--logout'] : [])], env: { DAILY_SCRAPE_LIMIT: '0' }, platform: 'win32',
-            on: (name, handler) => signals.set(name, handler), exit: code => { exits.push(code); signals.get('exit')?.(); },
-            memoryUsage: () => ({ rss: 64 * 1024 * 1024 }),
-            kill: pid => { if (duplicate && pid === 7777) return; if (pid !== 1234 || !alive) throw new Error('fixture process exited'); },
-        },
-        console: {
-            log: message => { logs.push(message); if (stopBeforeLaunch && message.includes('pending job(s)')) requestStop(); },
-            error: (...args) => errors.push(args.map(String).join(' ')),
-        },
-        setTimeout: callback => { queueMicrotask(callback); return 1; }, clearTimeout: () => {},
-        setInterval:()=>({unref(){}}),clearInterval:()=>{},
-        fixtureScrape: async (_page, url) => {scraped++;return { url, firstName: 'TEST Coach', emails: [], logs: [], status: restriction?'ERROR':'PENDING',...(restriction?{failure:{stage:'linkedin',code:'LINKEDIN_RATE_LIMIT',reason:'LinkedIn reported a limit.',retryable:false}}:{}) };},
-        fixtureEnrich: async result => ({ ...result, status: 'REJECTED' }),
+    const runtime = createAccountRuntime({ prefetch:false,pool: {}, accountId, owner: 'owner', core, browserOwner, reader,
+        now: () => Date.parse('2026-10-24T10:00:00.000Z'), sleep: ms => sleepHook(ms), onStatus: value => statuses.push(value),
+        discoveryStore: { claimSource: async () => source, pauseAccount: async (_pool, id, reason) => discoveryHolds.push({ id, reason }) },
+        prospecting: { discover: (...args) => discovery(...args) },
+        researchQueue: { fullCapture, handoff: async (_pool, jobId, owner, value) => handoffs.push({ jobId, owner, value }) },
+        signOut: async b => { assert.equal(b, browser); },
     });
-    // Strict mode also catches browser/PID assignments that accidentally rely on
-    // implicit globals, which normal CommonJS execution would otherwise permit.
-    const completion = vm.runInContext(`'use strict';\n${source}`, context, { timeout: 1000 });
-    vm.runInContext("scrapeProfile = async (...args)=>{if(fixtureBudgetStop){linkedinStop={stage:'control',code:'WORKER_PAUSED',reason:'Hourly LinkedIn check budget reached.',retryable:false};return {url:args[1],status:'ERROR',failure:linkedinStop};}return fixtureScrape(...args);}; enrichAndFinalize = fixtureEnrich;", context);
-    await completion;
-    await Promise.all(signalTasks);
-    assert.deepEqual(errors, []);
-    if(accountId)assert.equal(poolEnds,1);
-    const statusPath = path.join(root, 'queue-results', accountId ? `worker-status-${accountId}.json` : 'worker-status.json');
-    const status = files.has(statusPath) ? JSON.parse(files.get(statusPath)) : null;
-    if(budgetStop){
-        assert.deepEqual(exits,[1]);assert.equal(status.status,'paused');assert.equal(status.manualResumeRequired,false);assert.ok(accountHolds.every(value=>!value));
-        assert.equal(deferredJobs,1);assert.equal([...files.keys()].filter(file=>path.dirname(file)===queueDir).length,370);
-        return {status};
-    }
-    if(restriction){
-        assert.deepEqual(exits,[1]);assert.equal(status.status,'paused');assert.equal(status.manualResumeRequired,true);assert.ok(accountHolds.includes(true),'account restriction must persist beyond worker status');
-        assert.equal(scraped,1);assert.equal(pausedAccounts,1);assert.equal(deferredJobs,1);
-        assert.equal(alive,false);assert.equal(files.has(pidFile),false);
-        assert.equal([...files.keys()].filter(file=>path.dirname(file)===queueDir).length,370);
-        return {status};
-    }
-    if(signOut) {
-        assert.equal(status.status,'signed_out');assert.equal(status.signedIn,null);assert.equal(logoutSaved,true);
-        assert.equal(cookies.length,0);assert.equal(alive,false);assert.equal(files.has(pidFile),false);
-        assert.equal([...files.keys()].filter(file=>path.dirname(file)===queueDir).length,370,'sign-out cannot process or remove queued leads');
-        assert.deepEqual(exits,[0]);return {launches,logs};
-    }
-    if(manualLogin&&checkLogin) {
-        assert.deepEqual(exits,[0]);assert.equal(status.status,'offline');assert.equal(status.reason,'Manual sign-in complete');
-        assert.equal(launches.length,1);assert.equal(launches[0].headless,false);assert.ok(browserEvents.includes('front'));
-        assert.equal([...files.keys()].filter(file=>path.dirname(file)===queueDir).length,370);
-        return {launches,logs,browserEvents,newPages,statuses};
-    }
-    if (duplicate || loginFails || status?.reason?.includes('Browser could not load')) {
-        assert.equal([...files.keys()].filter(file => path.dirname(file) === queueDir).length, 370);
-        assert.equal(alive, false);
-        if (duplicate) { assert.equal(launches.length, 0); assert.ok(files.has(pidFile)); }
-        else { assert.ok(launches.every(options => !options.headless)); assert.equal(files.has(pidFile), false); }
-        return { files, launches, logs, queueDir, killed, closedTabs, newPages, browserEvents };
-    }
-    assert.deepEqual(exits, [0]);
-    assert.ok(logs.some(message => message.includes('Found 370 pending job(s)')));
-    assert.equal(logs.filter(message => message.includes('shutting down gracefully')).length, 1);
-    assert.equal(status.status, 'offline');
-    assert.equal(status.reason, checkLogin ? 'Startup check complete' : signal);
-    assert.equal(alive, false);
-    assert.equal(files.has(pidFile), false);
-    return { files, launches, logs, queueDir, killed, closedTabs, newPages, browserEvents, configuredAccounts: JSON.parse(context.process.env.LINKEDIN_ACCOUNTS) };
+    const tick=runtime.tick;runtime.tick=async()=>{await tick();await runtime.drain();};
+    return { runtime, account, calls, pending, checkpoints, completed, deferred, handoffs, holds, permits, statuses, discoveryHolds, page,
+        connect: async () => { await runtime.tick(); await runtime.tick(); },
+        set capture(value) { capture = value; }, set allowance(value) { allowance = value; }, set sleep(value) { sleepHook = value; },
+        set url(value) { url = value; }, set source(value) { source = value; }, set discovery(value) { discovery = value; }, set open(value) { open = value; } };
 }
 
-test('ordinary qualification pauses the whole account after a limit and retains queued work without retrying',async()=>{
-    await runWorker({accountId:'legacy-0',restriction:true});
+test('an idle runtime does not open a saved browser, navigate, validate identity, or claim queued profiles', async () => {
+    const f = fixture(); f.account.login_token = null;
+    await f.runtime.tick(); await f.runtime.tick();
+    assert.equal(f.calls.opens, 0); assert.equal(f.calls.navigation, 0); assert.equal(f.calls.identities, 0); assert.equal(f.calls.claims, 0);
+    assert.equal(f.pending.length, 370); assert.equal(f.runtime.snapshot().status, 'idle');
+});
+test('processing minimizes the session; manual connection and account warnings reveal it without a restart',async()=>{
+ const f=fixture();await f.connect();assert.equal(f.calls.reveals,1);assert.equal(f.calls.minimizes,0);
+ f.account.authorized=true;await f.runtime.tick();assert.equal(f.calls.minimizes,1);assert.equal(f.calls.opens,1);
+ f.account.authorized=false;await f.runtime.tick();assert.equal(f.calls.reveals,1,'ordinary Pause keeps the window in the background');
+ await f.runtime.handleSignal({stage:'linkedin',code:'LINKEDIN_AUTH',reason:'Review required',retryable:false});
+ assert.equal(f.calls.reveals,2);assert.equal(f.calls.closes,0);assert.equal(f.account.authorized,false);
 });
 
-test('account workers launch distinct browser profiles and use their own login identity', async () => {
-    const first=await runWorker({accountId:'legacy-0',checkLogin:true});
-    const second=await runWorker({accountId:'legacy-1',checkLogin:true});
-    assert.notEqual(first.launches[0].userDataDir,second.launches[0].userDataDir);
-    assert.match(first.launches[0].userDataDir,/profile-legacy-0$/);
-    assert.match(second.launches[0].userDataDir,/profile-legacy-1$/);
-    assert.equal(first.configuredAccounts[0].email,'test@example.invalid','saved credentials are not loaded or replaced');
-    assert.equal(second.configuredAccounts[0].email,'test@example.invalid');
-});
-test('account sign-out clears authentication, preserves every queued lead and never auto-logins',async()=>{
-    const result=await runWorker({accountId:'legacy-0',signOut:true});
-    assert.equal(result.launches.length,1);assert.equal(result.launches[0].headless,false);
-});
-test('an explicit account sign-in opens a visible login browser immediately without claiming leads',async()=>{
-    await runWorker({accountId:'legacy-0',manualLogin:true,checkLogin:true});
+test('an explicit Start captures one queued profile and hands complete evidence to independent research', async () => {
+    const f = fixture(); await f.connect(); f.account.authorized = true; await f.runtime.tick();
+    assert.equal(f.calls.opens, 1); assert.equal(f.calls.captures, 1); assert.equal(f.calls.identities, 1);
+    assert.equal(f.pending.length, 369); assert.equal(f.handoffs.length, 1);
+    assert.equal(f.handoffs[0].value.linkedinAccountId, 'fixture-account'); assert.equal(f.handoffs[0].value.linkedinCapture.complete, true);
+    assert.equal(f.completed.length, 0, 'Account capture must not mark research as complete.');
+    assert.equal(f.runtime.snapshot().browserOpen, true); assert.equal(f.calls.closes, 0);
 });
 
-test('fresh and restored second-account sign-in windows survive startup tab cleanup', async () => {
-    for (const extraTabs of [0, 30]) {
-        const { browserEvents, newPages } = await runWorker({ accountId: 'legacy-1', manualLogin: true, checkLogin: true, extraTabs });
-        assert.equal(newPages, 1, 'manual login reuses the clean worker tab');
-        assert.ok(browserEvents.indexOf('keeper') < browserEvents.indexOf('close-target'));
-        assert.ok(browserEvents.indexOf('new-page') < browserEvents.indexOf('close-keeper'));
-    }
+test('legacy pacing values cannot sleep or block an owned profile action',async()=>{
+ const f=fixture();await f.connect();f.account.authorized=true;f.allowance={waitMs:60000};f.sleep=async()=>assert.fail('No throttle sleeps');await f.runtime.tick();assert.equal(f.handoffs.length,1);assert.ok(!f.statuses.some(s=>s.status==='sleeping'));assert.equal(f.account.authorized,true);
 });
 
-test('a LinkedIn loading timeout keeps the manual sign-in window open and allows login to complete', async () => {
-    const { statuses, browserEvents, launches } = await runWorker({ accountId: 'legacy-1', manualLogin: true, checkLogin: true, navigationFailures: 1 });
-    assert.equal(launches.length, 1);
-    assert.ok(browserEvents.includes('front'));
-    assert.ok(statuses.some(status => status.status === 'awaiting_login' && /Refresh the page/.test(status.reason)));
-    assert.ok(statuses.some(status => status.status === 'ready' && status.signedIn?.name === 'Fixture Account'));
+test('a stale or deleted queued URL fails only that profile and the batch continues without another Start',async()=>{
+ for(const code of ['PROFILE_REDIRECT','PROFILE_UNAVAILABLE']) {
+  const f=fixture();await f.connect();f.account.authorized=true;
+  f.capture=async()=>{throw Object.assign(Error('Unavailable queued URL'),{failure:{stage:'linkedin',code,reason:'Unavailable queued URL',retryable:false}});};
+  await f.runtime.tick();assert.equal(f.completed.length,1);assert.equal(f.completed[0].result.failure.code,code);
+  f.capture=async(_page,url,options)=>{await options.beforeCheck('profile_page');return {url,profileIdentityConfirmed:true,linkedinCapture:{version:2,complete:true}};};
+  await f.runtime.tick();await f.runtime.tick();assert.equal(f.handoffs.length,2);assert.deepEqual(f.holds,[]);assert.equal(f.account.authorized,true);assert.equal(f.calls.opens,1);
+ }
 });
 
-for (const signal of ['SIGINT', 'SIGTERM']) {
-    test(`worker resumes a pending queue, saves the completed job and handles ${signal}`, async () => {
-        const { files, launches, logs, queueDir } = await runWorker({ signal });
-        assert.equal(launches.length, 1);
-        assert.ok(logs.some(message => message.includes('Worker is READY')));
-        assert.equal([...files.keys()].filter(file => path.dirname(file) === queueDir).length, 369);
-        const result = JSON.parse(files.get(path.join(path.dirname(workerPath), 'queue-results', 'fixture-000.json')));
-        assert.equal(result.status, 'done');
-        assert.equal(result.result.status, 'REJECTED');
-    });
-}
-
-test('shutdown before browser launch leaves all pending jobs available for restart', async () => {
-    const { files, launches, queueDir } = await runWorker({ signal: 'SIGTERM', stopBeforeLaunch: true });
-    assert.equal(launches.length, 0);
-    assert.equal([...files.keys()].filter(file => path.dirname(file) === queueDir).length, 370);
+test('pause stops new claims while preserving the same visible browser and every remaining profile', async () => {
+    const f = fixture(); await f.connect(); f.account.authorized = true; await f.runtime.tick();
+    f.account.authorized = false; await f.runtime.tick(); await f.runtime.tick();
+    assert.equal(f.calls.claims, 1); assert.equal(f.pending.length, 369); assert.equal(f.calls.closes, 0);
+    assert.equal(f.runtime.snapshot().status, 'idle'); assert.equal(f.runtime.snapshot().sessionReady, true);
+    f.account.authorized = true; await f.runtime.tick();
+    assert.equal(f.calls.opens, 1); assert.equal(f.calls.navigation, 1); assert.equal(f.calls.identities, 1); assert.equal(f.handoffs.length, 2);
 });
 
-test('a second worker cannot launch Chrome or touch the first worker’s queue or lock', async () => {
-    const { logs } = await runWorker({ duplicate: true });
-    assert.ok(logs.some(message => message.includes('duplicate will exit')));
+test('a pause during a pacing wait defers the current job with its partial capture intact', async () => {
+    const f = fixture(); await f.connect();
+    const partial = { url: person, firstName: 'Fixture', profileIdentityConfirmed: true, linkedinCapture: { version: 2, stage: 'contact', complete: false }, logs: [], emails: [] };
+    f.capture = async (_page, _url, options) => { await options.beforeCheck('profile_page'); await options.onCheckpoint(partial); await options.beforeCheck('contact'); assert.fail('The contact interaction must not execute after pause.'); };
+    f.allowance=kind=>{if(kind==='contact')f.account.authorized=false;return {};};
+    f.account.authorized = true; await f.runtime.tick();
+    assert.equal(f.deferred.length, 1); assert.equal(f.completed.length, 0); assert.equal(f.handoffs.length, 0); assert.equal(f.pending.length, 370);
+    assert.equal(f.checkpoints.length, 1); assert.equal(f.deferred[0].result.linkedinCapture.stage, 'contact');
+    assert.equal(f.deferred[0].result.linkedinCapture.complete, false); assert.equal(f.deferred[0].result.failure.code, 'WORKER_PAUSED');
+    assert.equal(f.holds.some(value => value.attention), false); assert.equal(f.calls.closes, 0);
+    await f.runtime.tick(); assert.equal(f.calls.captures, 1);
+    f.allowance = {};
+    f.capture = async (_page, _url, options) => { assert.equal(options.resume.linkedinCapture.stage, 'contact'); return { ...partial, linkedinCapture: { version: 2, complete: true } }; };
+    f.account.authorized = true; await f.runtime.tick();
+    assert.equal(f.handoffs.length, 1); assert.equal(f.calls.opens, 1); assert.equal(f.pending.length, 369);
 });
 
-test('shutdown forcibly reaps only its tracked Chrome tree if browser.close hangs', async () => {
-    const { killed, launches } = await runWorker({ closeHangs: true });
-    assert.equal(launches.length, 1); assert.deepEqual(killed, ['taskkill /F /T /PID 1234']);
+test('a LinkedIn restriction holds the account and preserves queued work without another page interaction', async () => {
+    const f = fixture(); await f.connect();
+    f.capture = async (_page, url, options) => {
+        await options.beforeCheck('profile_page');
+        await options.onCheckpoint({ url, firstName: 'Fixture', linkedinCapture: { version: 2, complete: false, stage: 'contact' } });
+        options.checkResponse(429, url); assert.fail('Capture cannot continue after a restriction.');
+    };
+    f.account.authorized = true; await f.runtime.tick();
+    assert.equal(f.deferred.length, 1); assert.equal(f.pending.length, 370); assert.equal(f.completed.length, 0);
+    assert.ok(f.account.attention_reason); assert.ok(f.holds.some(value => value.attention)); assert.equal(f.discoveryHolds.length, 1);
+    assert.equal(f.runtime.snapshot().manualResumeRequired, true); assert.equal(f.calls.closes, 0);
+    f.account.authorized = true; await f.runtime.tick(); await f.runtime.tick();
+    assert.equal(f.calls.captures, 1); assert.equal(f.calls.claims, 1); assert.equal(f.calls.opens, 1);
+    await assert.rejects(f.runtime.permit('contact'), error => error.failure.code === 'LINKEDIN_RATE_LIMIT');
+    assert.deepEqual(f.permits, ['profile_page']);
 });
 
-test('restored worker tabs are closed before any page/plugin initialization and only one fresh page is opened', async () => {
-    const { launches, closedTabs, newPages, browserEvents } = await runWorker({ extraTabs: 30 });
-    assert.equal(launches.length, 1); assert.deepEqual(closedTabs, Array.from({ length: 31 }, (_, i) => i));
-    assert.equal(newPages, 1);
-    assert.ok(browserEvents.lastIndexOf('close-target') < browserEvents.indexOf('new-page'));
-    assert.ok(browserEvents.indexOf('new-page') < browserEvents.indexOf('navigate'));
+test('a changed profile format preserves evidence and pauses with the visible browser still open', async () => {
+    const f = fixture(); await f.connect();
+    f.capture = async (_page, url, options) => { await options.onCheckpoint({ url, firstName: 'Fixture', linkedinCapture: { version: 2, stage: 'activity', complete: false } }); throw Error('Profile layout no longer matches.'); };
+    f.account.authorized = true; await f.runtime.tick();
+    assert.equal(f.completed.length, 1); assert.equal(f.completed[0].result.failure.code, 'PAGE_CHANGED');
+    assert.equal(f.completed[0].result.firstName, 'Fixture'); assert.equal(f.completed[0].result.linkedinCapture.stage, 'activity');
+    assert.equal(f.runtime.snapshot().status, 'ready'); assert.equal(f.runtime.snapshot().browserOpen, true);
+    assert.equal(f.calls.closes, 0); assert.equal(f.account.authorized, true); assert.ok(f.holds.every(value => !value.attention));
+    assert.equal(f.completed[0].result.status,'REVIEW');await f.runtime.tick();assert.equal(f.calls.captures,2,'nonretryable format failure cannot stop the remaining queue');
 });
 
-test('an expired login stops without submitting credentials or retrying', async () => {
-    const { files, logs } = await runWorker({ loginFails: true });
-    const status = JSON.parse(files.get(path.join(path.dirname(workerPath), 'queue-results', 'worker-status.json')));
-    assert.equal(status.status, 'paused'); assert.match(status.reason, /manual sign-in/i);
-    assert.equal(logs.some(message => message.includes('Logging in as')),false);
+test('a cached complete capture enters public research without opening another profile', async () => {
+    const f = fixture(); await f.connect();
+    f.pending[0].resumeResult = { url: person, firstName: 'Saved', profileIdentityConfirmed: true, linkedinCapture: { complete: true } };
+    f.account.authorized = true; await f.runtime.tick();
+    assert.equal(f.calls.captures, 0); assert.deepEqual(f.permits, []); assert.equal(f.handoffs.length, 1);
+    assert.equal(f.handoffs[0].value.firstName, 'Saved'); assert.equal(f.calls.navigation, 1);
 });
 
-test('a startup navigation timeout pauses after one browser without submitting credentials or relaunching', async () => {
-    const { files, launches, logs, queueDir } = await runWorker({ navigationFailures: 1 });
-    const status = JSON.parse(files.get(path.join(path.dirname(workerPath), 'queue-results', 'worker-status.json')));
-    assert.equal(status.status, 'paused');assert.match(status.reason,/Processing is paused/);
-    assert.equal(launches.length,1);assert.equal(launches[0].headless,false);
-    assert.ok(logs.every(message=>!message.includes('Retrying the browser startup')));
-    assert.equal([...files.keys()].filter(file=>path.dirname(file)===queueDir).length,370);
+test('expired saved login pauses after the explicit Start and never submits credentials or automatically retries', async () => {
+    const f = fixture(); f.account.login_token = null; f.account.authorized = true; f.url = 'https://www.linkedin.com/login';
+    await f.runtime.tick(); await f.runtime.tick();
+    assert.equal(f.calls.opens, 1); assert.equal(f.calls.navigation, 1); assert.equal(f.calls.captures, 0); assert.equal(f.calls.claims, 1);
+    assert.ok(f.account.attention_reason); assert.equal(f.pending.length, 370); assert.equal(f.calls.closes, 0);
+    assert.equal(f.runtime.snapshot().browserOpen, true);
 });
 
-test('startup verification can confirm login and close Chrome without claiming any queued profile', async () => {
-    const { files, launches, logs, queueDir } = await runWorker({ checkLogin: true });
-    assert.equal(launches.length, 1); assert.equal(launches[0].headless,false);
-    assert.equal([...files.keys()].filter(file => path.dirname(file) === queueDir).length, 370);
-    assert.ok(logs.some(message => message.includes('Startup login check passed')));
+test('a Start navigation timeout retries within three attempts then shows an actionable failure',async()=>{
+ const f=fixture();f.account.login_token=null;f.account.authorized=true;f.page.goto=async()=>{f.calls.navigation++;throw Error('Navigation timeout');};for(let n=0;n<3;n++)await f.runtime.tick();assert.equal(f.calls.opens,3);assert.equal(f.calls.navigation,3);assert.equal(f.pending.length,370);assert.equal(f.account.authorized,false);assert.equal(f.runtime.snapshot().startupStage,'FAILED');assert.ok(f.runtime.snapshot().action);
 });
 
-test('exhausting a check budget retains the claimed job without turning a routine pause into a security hold',async()=>{await runWorker({accountId:'legacy-0',budgetStop:true});});
+test('sign-out affects only the selected saved session and preserves every queued profile', async () => {
+    const f = fixture(); await f.connect(); f.account.logout_token = 'logout-token'; await f.runtime.tick();
+    assert.equal(f.calls.logouts, 1); assert.equal(f.calls.closes, 1); assert.equal(f.runtime.snapshot().status, 'signed_out');
+    assert.equal(f.runtime.snapshot().signedIn, null); assert.equal(f.runtime.snapshot().browserOpen, false); assert.equal(f.pending.length, 370);
+    await f.runtime.tick(); assert.equal(f.calls.opens, 1); assert.equal(f.calls.claims, 0);
+});
+
+test('repeated shutdown closes the owner once and retains pending work and completed handoff', async () => {
+    const f = fixture(); await f.connect(); f.account.authorized = true; await f.runtime.tick();
+    await Promise.all([f.runtime.close(), f.runtime.close()]); await f.runtime.tick();
+    assert.equal(f.calls.closes, 1); assert.equal(f.pending.length, 369); assert.equal(f.handoffs.length, 1);
+    assert.equal(f.calls.claims, 1); assert.equal(f.runtime.snapshot().status, 'offline');
+});
+
+test('a browser disconnect reopens the saved profile and continues authorized work',async()=>{
+ const f=fixture();await f.connect();f.account.authorized=true;f.open=false;f.runtime.disconnected(Error('Chrome closed.'));await f.runtime.tick();assert.equal(f.account.authorized,true);assert.equal(f.calls.opens,2);assert.equal(f.calls.captures,1);assert.equal(f.handoffs.length,1);assert.equal(f.runtime.snapshot().sessionReady,true);
+});

@@ -105,7 +105,7 @@ function validateResearch(value) {
     const research = emptyResearch(value, value.researchedAt);
     for(const key of ['followers','connections']){
         const record=value[key];research[key]=record?{rawText:normalText(record.rawText).slice(0,200),count:Number.isSafeInteger(record.count)&&record.count>=0?record.count:null,
-            checkedAt:validDate(record.checkedAt)?record.checkedAt:research.researchedAt,...(key==='followers'?{threshold:Number.isSafeInteger(record.threshold)?record.threshold:1000}:{})}:null;
+            checkedAt:validDate(record.checkedAt)?record.checkedAt:research.researchedAt,...(key==='followers'?{threshold:Number.isSafeInteger(record.threshold)&&record.threshold>=0?record.threshold:minFollowers()}:{})}:null;
     }
     research.linkedinUrl = typeof research.linkedinUrl === 'string' && validHttpUrl(research.linkedinUrl) ? research.linkedinUrl.slice(0, 2000) : '';
     research.lastActivityAt = validDate(value.lastActivityAt) ? value.lastActivityAt : null;
@@ -135,7 +135,7 @@ function validateResearch(value) {
         research.crawl = { version: c.version, attributionVersion:[2,3].includes(c.attributionVersion)?c.attributionVersion:0, complete: c.complete === true, visited: urls(c.visited), pending: urls(c.pending), failed: urls(c.failed), roots: urls(c.roots), matchedHosts: (c.matchedHosts || []).filter(host => /^[a-z\d.-]+$/i.test(host)).slice(0, 8),
             contactMatchedHosts: (c.contactMatchedHosts || []).filter(host => /^[a-z\d.-]+$/i.test(host)).slice(0, 8),
             ...(c.version === 2 ? { retryable: c.retryable === true, attempted: urls(c.attempted), maxRoutes: Math.max(1, Math.min(600, Number(c.maxRoutes) || 600)), storageLimited: c.storageLimited === true,
-                maxTimeMs:Math.max(0,Number(c.maxTimeMs)||0),elapsedMs:Math.max(0,Number(c.elapsedMs)||0),budgetExhausted:c.budgetExhausted===true,evidenceSufficient:c.evidenceSufficient===true } : {}),
+                firstStartedAt:Number.isFinite(Date.parse(c.firstStartedAt))?new Date(c.firstStartedAt).toISOString():null,maxTimeMs:Math.max(0,Number(c.maxTimeMs)||0),elapsedMs:Math.max(0,Number(c.elapsedMs)||0),budgetExhausted:c.budgetExhausted===true,evidenceSufficient:c.evidenceSufficient===true } : {}),
             discovered: Math.max(0, Number(c.discovered) || 0), inspected: Math.max(0, Number(c.inspected) || 0), contactPages: Math.max(0, Number(c.contactPages) || 0), descriptionPages: Math.max(0, Number(c.descriptionPages) || 0), stoppedReason: normalText(c.stoppedReason).slice(0, 500),
             candidates: (Array.isArray(c.candidates) ? c.candidates : []).slice(0, 150).filter(contact => contact && !isUnsafeContact(contact.address) && validHttpUrl(contact.url)).map(contact => ({ address: normalText(contact.address).toLowerCase(), url: contact.url.slice(0, 1000), explicit: contact.explicit === true, contactPage: contact.contactPage === true, businessContact: contact.businessContact === true,contactInvitation:contact.contactInvitation===true,sharedContact:contact.sharedContact===true,contactEvidenceVersion:contact.contactEvidenceVersion===1?1:0 })),
         };
@@ -231,7 +231,7 @@ function assessProspect(researchInput, context = {}) {
     // Compatibility applies only when a reader explicitly displays a stored
     // pre-v2 assessment. Fresh work and explicit rechecks never set this flag.
     const legacyUnchecked=context.legacyFollowersUnchecked===true&&!research.followers;
-    const followerGate=legacyUnchecked?{status:'CONTINUE',reason:null,threshold:context.minFollowers??minFollowers()}:followersDecision(research.followers,context.minFollowers??minFollowers());
+    const followerGate=legacyUnchecked?{status:'CONTINUE',reason:null,threshold:context.minFollowers??research.followers?.threshold??minFollowers()}:followersDecision(research.followers,context.minFollowers??research.followers?.threshold??minFollowers());
     if (!research.profileIdentityConfirmed) blockers.push('LinkedIn profile identity could not be confirmed; retry the scrape.');
     if (activity === 'INACTIVE') blockers.push('No LinkedIn activity within the last 30 days.');
     else if (activity === 'UNKNOWN') blockers.push('LinkedIn activity could not be confirmed; retry the activity check.');

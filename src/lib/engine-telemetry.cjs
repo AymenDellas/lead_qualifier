@@ -56,7 +56,9 @@ function attach(value){const trace=current();return trace?{...value,engineMetric
 function countRequest(kind){const trace=current();if(trace)trace.requests[kind]=(trace.requests[kind]||0)+1;}
 async function persist(pool,result,{final=false}={}){
  const trace=current();if(!trace)return;
- if(final){trace.decidedAt=iso(Date.now());trace.outcome=result.status;trace.errorCode=result.failure?.code||null;}
+ if(final){trace.decidedAt=iso(Date.now());trace.outcome=result.status;trace.errorCode=result.failure?.code||null;
+  trace.reasonCode=result.reasonCode||result.failure?.code||result.prospectQualification?.qualification?.followersReason||null;
+  trace.decisionStage=result.decisionStage||result.failure?.stage||'qualification';}
  await ensure(pool);
  await pool.query(`INSERT INTO compel_engine_traces(job_id,account_id,batch_id,picked_at,decided_at,outcome,trace)
   VALUES($1,$2,$3,$4,$5,$6,$7::jsonb) ON CONFLICT(job_id) DO UPDATE SET
@@ -152,12 +154,18 @@ function percentile(values,p){
 function summarize(traces){
  const decided=traces.filter(t=>t.decidedAt&&['QUALIFIED','REJECTED','REVIEW','ERROR'].includes(t.outcome));
  const durations=decided.map(t=>Date.parse(t.decidedAt)-Date.parse(t.pickedAt));
- const stageTotals={},errors={},funnel={},outcomes={};
+ const stageTotals={},errors={},reviewReasons={},rejectionReasons={},decisionsByStage={},funnel={},outcomes={},leads=[];
  for(const trace of traces){
   if(trace.outcome)outcomes[trace.outcome]=(outcomes[trace.outcome]||0)+1;
-  if(trace.errorCode)errors[trace.errorCode]=(errors[trace.errorCode]||0)+1;
+  if(trace.errorCode&&trace.outcome==='ERROR')errors[trace.errorCode]=(errors[trace.errorCode]||0)+1;
+  const reasons=trace.outcome==='REVIEW'?reviewReasons:trace.outcome==='REJECTED'?rejectionReasons:null;
+  if(reasons&&(trace.reasonCode||trace.errorCode)){const code=trace.reasonCode||trace.errorCode;reasons[code]=(reasons[code]||0)+1;}
+  if(trace.decidedAt){const key=(trace.decisionStage||'legacy/unrecorded')+' · '+trace.outcome;decisionsByStage[key]=(decisionsByStage[key]||0)+1;}
   for(const key of Object.keys(trace.totals||{}))funnel[key]=(funnel[key]||0)+1;
-  if(trace.decidedAt)for(const [key,ms]of Object.entries(attributedTime(trace)))stageTotals[key]=(stageTotals[key]||0)+ms;
+  const times=trace.decidedAt?attributedTime(trace):{};
+  if(trace.decidedAt)for(const [key,ms]of Object.entries(times))stageTotals[key]=(stageTotals[key]||0)+ms;
+  leads.push({jobId:trace.jobId,profileUrl:trace.profileUrl||null,outcome:trace.outcome||'PROCESSING',decisionStage:trace.decisionStage||null,reason:trace.reasonCode||trace.errorCode||null,
+   durationMs:trace.decidedAt?Date.parse(trace.decidedAt)-Date.parse(trace.pickedAt):null,queueWaitMs:trace.queueWaitMs||0,retries:trace.retries||0,stages:times});
  }
  const totalMs=durations.reduce((sum,n)=>sum+n,0),first=decided.length?Math.min(...decided.map(t=>Date.parse(t.pickedAt))):null,
   last=decided.length?Math.max(...decided.map(t=>Date.parse(t.decidedAt))):null;
@@ -167,7 +175,7 @@ function summarize(traces){
   medianQueueWaitMs:percentile(traces.map(t=>t.queueWaitMs||0),.5),
   retryCount:traces.reduce((sum,t)=>sum+(t.retries||0),0),
   reworkCount:traces.reduce((sum,t)=>sum+Math.max(0,(t.totals?.['linkedin.profile']?.count||0)-1)+Math.max(0,(t.totals?.['website.crawl']?.count||0)-1),0),
-  errorRate:decided.length?(outcomes.ERROR||0)/decided.length:null,errors,funnel,outcomes,
+  errorRate:decided.length?(outcomes.ERROR||0)/decided.length:null,errors,reviewReasons,rejectionReasons,decisionsByStage,funnel,outcomes,leads,
   stages:Object.entries(stageTotals).map(([name,ms])=>({name,ms,share:totalMs?ms/totalMs:0})).sort((a,b)=>b.ms-a.ms),
   incompleteSpans:traces.some(t=>t.droppedSpans>0),
  };
@@ -175,11 +183,12 @@ function summarize(traces){
 async function readMetrics(pool,{batchId=null}={}){
  let rows,resources;
  try{
-  rows=await pool.query(`SELECT trace FROM compel_engine_traces WHERE ($1::text IS NULL AND picked_at>NOW()-interval '24 hours' OR batch_id=$1)
-   ORDER BY picked_at DESC LIMIT 200`,[batchId]);
-  resources=await pool.query("SELECT data,seen_at FROM compel_engine_resources WHERE seen_at>NOW()-interval '90 seconds'");
+  rows=await pool.query(`SELECT t.trace,j.profile_key AS profile_url FROM compel_engine_traces t LEFT JOIN compel_worker_jobs j ON j.id=t.job_id
+   WHERE ($1::text IS NULL AND t.picked_at>NOW()-interval '24 hours' OR t.batch_id=$1) ORDER BY t.picked_at DESC LIMIT 200`,[batchId]);
+  resources=await pool.query(`SELECT data,seen_at FROM compel_engine_resources WHERE seen_at>NOW()-interval '90 seconds'
+   AND (COALESCE((SELECT to_jsonb(c)->'agent_status'->>'owner' FROM compel_worker_config c WHERE id=1),'')='' OR owner=(SELECT to_jsonb(c)->'agent_status'->>'owner' FROM compel_worker_config c WHERE id=1))`);
  }catch(error){if(error.code==='42P01')return {available:false,reason:'Start an instrumented local worker to collect measurements.'};throw error;}
- return {available:true,...summarize(rows.rows.map(row=>row.trace)),resources:resources.rows.map(row=>({...row.data,seenAt:row.seen_at})),sampleLimit:200};
+ return {available:true,...summarize(rows.rows.map(row=>({...row.trace,profileUrl:row.profile_url}))),resources:resources.rows.map(row=>({...row.data,seenAt:row.seen_at})),sampleLimit:200};
 }
 module.exports={SCHEMA,ensure,createTrace,current,withLead,withTrace,span,spanSync,attach,persist,pageActions,observePage,countRequest,
  observePool,queryRates,attributedTime,percentile,summarize,readMetrics,MAX_SPANS};

@@ -5,6 +5,7 @@ const { test } = require("node:test"),
   vm = require("node:vm");
 const store = require("../../src/lib/coach-prospecting-store.cjs"),
   worker = require("../../src/lib/coach-prospecting-worker.cjs");
+const { createAccountRuntime } = require("../../src/lib/account-runtime.cjs");
 const run = {
   id: "fixture-run",
   account_id: "fixture-account",
@@ -84,7 +85,7 @@ test("discovery passes all visible candidates to evidence research and stops imm
   }
 });
 test("active worker paths contain no private API replay or session-cookie reads",()=>{
- for(const name of ['../../worker.cjs','../../src/lib/linkedin-browser-page.cjs','../../src/lib/linkedin-activity-page.cjs','../../src/lib/coach-prospecting-worker.cjs']) {
+ for(const name of ['../../worker.cjs','../../src/lib/account-runtime.cjs','../../src/lib/account-browser.cjs','../../src/lib/worker-research-runner.cjs','../../src/lib/linkedin-browser-page.cjs','../../src/lib/linkedin-activity-page.cjs','../../src/lib/coach-prospecting-worker.cjs']) {
   const code=fs.readFileSync(require.resolve(name),'utf8');assert.ok(!code.includes('/voyager/api/'),name);assert.ok(!code.includes('document.cookie'),name);
  }
 });
@@ -114,12 +115,31 @@ test("history normalization preserves LinkedIn prospecting outcomes without appl
   assert.equal(normalize(result), result);
 });
 
-test("a restriction in the page reader propagates through qualification without another fallback",async()=>{
- const source=fs.readFileSync(require.resolve('../../worker.cjs'),'utf8'),start=source.indexOf('async function scrapeProfile('),end=source.indexOf('async function enrichAndFinalize(',start);
- let calls=0;
+test("a page-reader restriction holds the account and retains the job without another fallback",async()=>{
+ let calls=0,open=false;
+ const viewer={name:'Fixture',profileUrl:'https://www.linkedin.com/in/fixture-viewer/'};
+ const account={enabled:true,authorized:true,processing_until:'start-1',confirmed_identity:viewer,attention_reason:''};
+ const deferred=[],permits=[],holds=[];
  const failure={stage:'linkedin',code:'LINKEDIN_AUTH',reason:'Fixture restriction',retryable:false};
- const scrape=vm.runInNewContext(source.slice(start,end)+';scrapeProfile',{ACCOUNT_ID:'fixture',linkedinStop:null,recordLinkedInCheck:()=>{},checkLinkedInAccess:()=>{},pageReader:{captureProfile:async()=>{calls++;throw Object.assign(Error('restricted'),{failure});}}});
- const result=await scrape({},'https://www.linkedin.com/in/fixture/',null);assert.equal(result.status,'ERROR');assert.equal(result.failure,failure);assert.equal(calls,1);
+ const page={on(){},goto:async()=>{}};
+ const runtime=createAccountRuntime({pool:{},accountId:'fixture',owner:'owner',
+  browserOwner:{isOpen:()=>open,open:async()=>{open=true;return{browser:{},page};},close:async()=>{open=false;}},
+  core:{readRuntimeAccount:async()=>({...account}),processingAllowed:async()=>account.authorized,
+   reserveLinkedInCheck:async(_pool,_id,_owner,kind)=>{permits.push(kind);return{};},
+   claim:async()=>({job:{jobId:'fixture-job',linkedinUrl:'https://www.linkedin.com/in/fixture/'}}),
+   pauseProcessing:async(_pool,_id,reason,attention)=>{account.authorized=false;account.attention_reason=attention?reason:'';holds.push({reason,attention});},
+   defer:async(_pool,id,owner,result)=>{assert.equal(id,'fixture-job');assert.equal(owner,'owner');deferred.push(result);},
+   complete:async()=>assert.fail('An account restriction must retain the job for explicit recovery.'),
+  },
+  reader:{inspected:async()=>({url:'https://www.linkedin.com/feed/'}),readSignedInIdentity:async()=>viewer,
+   captureProfile:async(_page,_url,options)=>{calls++;await options.beforeCheck('profile_page');throw Object.assign(Error('restricted'),{failure});}},
+  researchQueue:{fullCapture:()=>false,handoff:async()=>assert.fail('Restricted capture cannot enter public research.')},
+  discoveryStore:{claimSource:async()=>null,pauseAccount:async()=>{}},prospecting:{},
+ });
+ await runtime.tick();await runtime.tick();
+ assert.equal(deferred.length,1);assert.equal(deferred[0].status,'REVIEW');assert.equal(deferred[0].failure,failure);assert.equal(calls,1);
+ assert.deepEqual(permits,['identity','profile_page']);assert.deepEqual(holds,[{reason:failure.reason,attention:true}]);
+ assert.equal(open,true);assert.equal(runtime.snapshot().manualResumeRequired,true);
 });
 
 test("source URLs reject unrelated hosts, credentials, non-HTTPS and non-people search pages", () => {

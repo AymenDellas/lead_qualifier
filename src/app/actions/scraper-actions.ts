@@ -11,7 +11,7 @@ import type { ProspectAssessment } from '@/lib/prospect-qualification.cjs';
 
 export type Lead = {
     url: string;
-    status: 'PENDING' | 'SCANNING' | 'QUALIFIED' | 'INVESTIGATE' | 'NURTURE' | 'REJECTED' | 'ACTIVITY_FAILED' | 'ACTIVE_NO_CONTACT' | 'ERROR';
+    status: 'PENDING' | 'SCANNING' | 'QUALIFIED' | 'INVESTIGATE' | 'NURTURE' | 'REJECTED' | 'ACTIVITY_FAILED' | 'ACTIVE_NO_CONTACT' | 'REVIEW' | 'ERROR' | 'PROSPECTED' | 'CANCELLED';
     prospectQualification?: ProspectAssessment;
     firstName?: string;
     headline?: string;
@@ -32,42 +32,8 @@ export type SavedRun = {
     emailsFound: number;
 };
 
-// ── Progress Save/Load for crash recovery ──
+// Read-only legacy run archives; runtime recovery lives in PostgreSQL.
 const PROGRESS_DIR = path.join(process.cwd(), 'progress');
-
-export async function saveProgress(leads: Lead[], processedCount: number, totalCount: number): Promise<string> {
-    try {
-        if (!fs.existsSync(PROGRESS_DIR)) fs.mkdirSync(PROGRESS_DIR, { recursive: true });
-        const data = { savedAt: new Date().toISOString(), processedCount, totalCount, leads };
-
-        const latestPath = path.join(PROGRESS_DIR, 'progress_latest.json');
-        fs.writeFileSync(latestPath, JSON.stringify(data, null, 2));
-
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const stampedPath = path.join(PROGRESS_DIR, `results_${timestamp}.json`);
-        fs.writeFileSync(stampedPath, JSON.stringify(data, null, 2));
-
-        console.log(`💾 Progress saved: ${processedCount}/${totalCount} leads → ${latestPath}`);
-        return latestPath;
-    } catch (err) {
-        console.error('Failed to save progress:', err);
-        return '';
-    }
-}
-
-export async function loadProgress(): Promise<{ leads: Lead[], processedCount: number, totalCount: number } | null> {
-    try {
-        const filePath = path.join(PROGRESS_DIR, 'progress_latest.json');
-        if (!fs.existsSync(filePath)) return null;
-        const raw = fs.readFileSync(filePath, 'utf-8');
-        const data = JSON.parse(raw);
-        console.log(`📂 Loaded progress: ${data.processedCount}/${data.totalCount} leads from ${data.savedAt}`);
-        return { leads: data.leads, processedCount: data.processedCount, totalCount: data.totalCount };
-    } catch (err) {
-        console.error('Failed to load progress:', err);
-        return null;
-    }
-}
 
 // ── Saved Runs Management ──
 

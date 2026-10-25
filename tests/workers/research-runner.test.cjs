@@ -53,7 +53,7 @@ test('website retries retain snapshots and stay in the public research lane',asy
  const first=await f.runner.process(f.job);
  assert.equal(first.deferred,true);assert.equal(first.result.failure.stage,'research');
  assert.equal(first.result.profileIdentityConfirmed,true);assert.equal(f.calls.checkpoint.length,1);assert.equal(f.calls.defer.length,1);
- assert.equal(f.calls.defer[0][4],'2026-10-24T10:01:00.000Z');assert.equal(f.calls.complete.length,0);
+ assert.equal(f.calls.defer[0][4],'2026-10-24T10:00:00.000Z');assert.equal(f.calls.complete.length,0);
  const final=await f.runner.process({...f.job,retryCount:3});
  assert.equal(final.deferred,false);assert.equal(final.result.failure.retryable,false);assert.equal(f.calls.complete.length,1);
 });
@@ -103,6 +103,10 @@ test('partial captures are refused before research or CRM work',async()=>{
  assert.equal(f.calls.research.length,0);assert.equal(f.calls.save.length,0);
  assert.equal(queue.fullCapture({...capture(),linkedinCapture:undefined}),true,'legacy full snapshots remain readable');
  assert.equal(queue.fullCapture({...capture(),profileIdentityConfirmed:false}),false);
+});
+test('a failed final acknowledgement retains completed research and the exact job for fenced recovery',async()=>{
+ const f=fixture({core:{checkpoint:async()=>{},defer:async()=>{},complete:async()=>{throw Error('Database connection lost');}}});
+ await assert.rejects(f.runner.runOnce(),error=>{assert.equal(error.engineJobId,f.job.jobId);assert.equal(error.resumeResult.failure.code,'RESULT_SAVE_PENDING');assert.ok(error.resumeResult.prospectQualification.research);assert.equal(error.resumeResult.profileIdentityConfirmed,true);return true;});await f.runner.close();
 });
 test('public HTTP redirects cannot reach LinkedIn and each hop retains DNS-pinned reader options',async()=>{
  const requests=[];

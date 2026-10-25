@@ -59,7 +59,7 @@ function searchPage({
   };
   const document = {
     body: { innerText: "People search results" },
-    querySelector: () => null,
+    querySelector: selector=>selector==='main'?{getClientRects:()=>[{}]}:null,
     querySelectorAll: (selector) => {
       if (selector === 'main a[href*="/in/"]') return links();
       if (selector.includes("pagination")) return index < pages ? [next] : [];
@@ -81,8 +81,8 @@ function searchPage({
     });
   return {
     calls,
-    mouse:{move:async()=>{},wheel:async()=>{hydrated=true;}},
-    $$:async selector=>document.querySelectorAll(selector).map(node=>({evaluate:async fn=>fn(node),click:async()=>node.click(),hover:async()=>{},dispose:async()=>{}})),
+    mouse:{move:async()=>{},click:async()=>next.click(),wheel:async()=>{hydrated=true;}},
+    $$:async selector=>document.querySelectorAll(selector).map(node=>({evaluate:async fn=>fn(node),scrollIntoView:async()=>{},boundingBox:async()=>({x:0,y:0,width:80,height:30}),dispose:async()=>{}})),
     on: (event, fn) => handlers.set(event, fn),
     off: (event) => handlers.delete(event),
     goto: async (url) => {
@@ -202,12 +202,12 @@ test("cards that finish rendering after the first read are saved before advancin
   assert.equal(r.last.data.pages, 10);
 });
 
-test("the page budget stops a search even when every displayed profile already exists", async () => {
+test("discovery reaches the actual list end without a self-imposed page cap", async () => {
   const p = searchPage({ pages: 51 }),
     r = await scan(p, { existing: 1000 });
   assert.equal(r.captured.size, 0);
-  assert.equal(p.calls.clicks, 49);
-  assert.match(r.last.data.message, /50-page budget/);
+  assert.equal(p.calls.clicks, 50);
+  assert.match(r.last.data.message, /no enabled Next/);
 });
 test("exhausted and stalled searches report the actual shortfall instead of claiming the target", async () => {
   for (const stalled of [false, true]) {

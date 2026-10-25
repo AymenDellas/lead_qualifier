@@ -19,7 +19,7 @@ function createAgent(options){
  const readControl=options.readControl||(async()=> (await pool.query(READ_CONTROL)).rows[0]);
  const acquire=options.acquireAccount||(async(id,accountOwner)=>{await registry.accountAvailable(pool,id,accountOwner);return core.acquireSession(pool,id,accountOwner);});
  let stopped=false,failure=null,controlDue=0,controlBackoff=2000,resource=null,waker=null,heartbeatTask=null,heartbeatTimer=null,control=null;
- const research=[{task:null,due:0,backoff:2000},{task:null,due:0,backoff:2000}];
+ const research=[{task:null,due:0,backoff:2000},{task:null,due:0,backoff:2000}],publicFailures=new Map();
  const localState=process.env.LOCALAPPDATA||process.env.XDG_STATE_HOME||path.join(os.homedir(),'.local','state');
  const notify=()=>{waker?.();};
  function wake(){controlDue=0;controlBackoff=2000;for(const e of entries.values())e.due=0;for(const lane of research)lane.due=0;notify();}
@@ -29,7 +29,7 @@ function createAgent(options){
   const before=stages[id];stages[id]={...value,at:new Date(now()).toISOString()};
   if(value.startupStage&&before?.startupStage!==value.startupStage){
    const task=options.onStage?options.onStage(id,stages[id]):pool.query(`INSERT INTO compel_worker_events(account_id,kind,message,data)
-    VALUES($1,'startup',$2,$3::jsonb)`,[id,value.reason||value.startupStage,JSON.stringify({stage:value.startupStage,failedStage:value.failedStage,action:value.action})]);
+    VALUES($1,'startup',$2,$3::jsonb)`,[id,value.startupStage+': '+(value.reason||''),JSON.stringify({stage:value.startupStage,failedStage:value.failedStage,action:value.action})]);
    Promise.resolve(task).catch(error=>log('Startup history: '+error.message));
   }
  }
@@ -83,6 +83,7 @@ function createAgent(options){
   const needsManual=[...entries.values()].some(other=>other!==entry&&(other.account.login_token||other.account.logout_token));
   if(entry.browser.isOpen()&&!manual&&(entry.jobs>=maxJobs||memory(entry)>memoryLimit||needsManual||!worked&&now()-entry.lastWorkAt>=idleMs)){
    await entry.runtime.recycle(entry.jobs>=maxJobs?'automatic job-count recycle':memory(entry)>memoryLimit?'Chrome process-tree memory threshold':needsManual?'another account requested manual review':'idle timeout');
+   entries.delete(entry.account.id);entries.set(entry.account.id,entry);
    entry.jobs=0;for(const other of entries.values())if(other.runtime.snapshot().status==='waiting_browser')other.due=0;
   }else if(!entry.browser.isOpen()&&coordinator.reserved.has(entry.account.id))await entry.browser.close();
   entry.backoff=worked||state.status==='recovering'?2000:Math.min(30000,entry.backoff*2);
@@ -97,7 +98,8 @@ function createAgent(options){
  }
  async function step(){
   if(stopped)return;if(now()>=controlDue)await reconcile();if(stopped)return;
-  for(const entry of entries.values()){
+  const scheduled=[...entries.values()].sort((a,b)=>Number(!!(b.account.login_token||b.account.logout_token))-Number(!!(a.account.login_token||a.account.logout_token)));
+  for(const entry of scheduled){
    if(entry.closing||entry.task||now()<entry.due)continue;
    if((entry.account.login_token||entry.account.logout_token)&&!coordinator.reserved.has(entry.account.id)&&coordinator.reserved.size>=maxBrowsers){
     entry.runtime.waitForBrowser?.('Waiting for the available LinkedIn browser. Another account owns it.');entry.due=now()+entry.backoff;entry.backoff=Math.min(30000,entry.backoff*2);continue;
@@ -105,8 +107,14 @@ function createAgent(options){
    runAccount(entry);
   }
   for(const lane of research)if(!lane.task&&now()>=lane.due){
-   lane.task=runner.runOnce().then(result=>{lane.backoff=result?2000:Math.min(30000,lane.backoff*2);lane.due=result?now():now()+lane.backoff;})
-    .catch(error=>{log('Public research: '+error.message);lane.due=now()+30000;}).finally(()=>{lane.task=null;notify();});
+   lane.task=runner.runOnce().then(result=>{if(result?.jobId)publicFailures.delete(result.jobId);lane.backoff=result?2000:Math.min(30000,lane.backoff*2);lane.due=result?now():now()+lane.backoff;})
+    .catch(async error=>{log('Public research: '+error.message);lane.due=now()+30000;
+     if(error.engineJobId)try{
+      const attempts=(publicFailures.get(error.engineJobId)||0)+1;publicFailures.set(error.engineJobId,attempts);
+      if(attempts>2)throw Error('Public result save failed repeatedly for '+error.engineJobId+': '+error.message+'. Check PostgreSQL, then restart; checkpoints are retained.');
+      await researchQueue.releaseJob(pool,error.engineJobId,owner+'/research',error.resumeResult);lane.due=now();
+     }catch(cause){failure=cause;stopped=true;notify();}
+    }).finally(()=>{lane.task=null;notify();});
   }
  }
  async function heartbeat(){
@@ -114,7 +122,7 @@ function createAgent(options){
   heartbeatTask=(async()=>{
    const state={stage:'AGENT_ACK',accounts:stages,resources:resource};
    if(options.onHeartbeat)await options.onHeartbeat(state);else if(await registry.heartbeat(pool,owner,state))stopped=true;
-   for(const entry of entries.values())if(!entry.closing){
+   for(const entry of [...entries.values()])if(!entry.closing){
     entry.browser.heartbeat?.();await entry.runtime.flush?.();
     await core.heartbeat(pool,entry.account.id,entry.owner,{...entry.runtime.snapshot(),memoryMB:memory(entry),agentPid:process.pid,agentHost:registry.hostId,agentOwner:owner});
    }

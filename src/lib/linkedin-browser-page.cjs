@@ -383,7 +383,7 @@ async function captureProfile(page,person,options={}) {
   activity=preview.activityStatus==='Active'&&preview.lastActivityAt?preview:await readActivity(page,person,options);
  }
  const activityResult={...capturedProfile,...activity,followers:initial.followers,connections:initial.connections};
- if(!activityResult.lastActivityAt||activityResult.activityStatus!=='Active'){
+ if(options.requireRecentActivity!==false&&(!activityResult.lastActivityAt||activityResult.activityStatus!=='Active')){
   const inactive=activityResult.activityStatus==='Inactive'&&!!activityResult.lastActivityAt;
   return finish({...activityResult,status:inactive?'REJECTED':'REVIEW',decisionStage:'activity',reasonCode:inactive?'ACTIVITY_INACTIVE':'ACTIVITY_UNCONFIRMED',
    ...(!inactive?{failure:{stage:'qualification',code:'ACTIVITY_UNCONFIRMED',reason:activityResult.activityEvidence?.reason||'No reliably dated matching-author activity. Review the saved evidence.',retryable:false}}:{})},'activity_decided');

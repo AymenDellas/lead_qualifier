@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { failureOf } from "@/lib/worker-failure.cjs";
+import { normalizeEngineResult, normalizeEngineResults } from '@/lib/engine-result.cjs';
 import CrmDatabase from "./CrmDatabase";
 import EngineMetricsPanel from './EngineMetricsPanel';
 import BusinessWorkspace from "./business/BusinessWorkspace";
@@ -50,8 +51,6 @@ const CopyStudio = dynamic(() => import("./copy-studio/App"), { ssr: false, load
 import type { BusinessView } from '@/lib/business';
 
 import {
-    saveProgress,
-    loadProgress,
     listSavedRuns,
     loadSavedRun,
     deleteSavedRun,
@@ -62,43 +61,6 @@ import { scrapeWebsiteEmails, type WebsiteScrapeResult } from "@/app/actions/scr
 import { getVerificationReadiness, verifyEmailBatchFast, type VerificationResult } from "@/app/actions/email-verifier-actions";
 import VerificationProviderStatus from '@/components/VerificationProviderStatus';
 
-// ── Worker API helper: submit job & poll until done ──
-async function processLeadViaWorker(linkedinUrl: string): Promise<Lead> {
-    const res = await fetch('/api/process-lead', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ linkedinUrl, nativePostProcess: true }),
-    });
-    const queued = await res.json();
-    if (!res.ok || queued.error) throw new Error(queued.error || 'Failed to queue job');
-    const jobId = queued.jobId;
-
-    // Poll until worker finishes
-    for (let attempt = 0; attempt < 120; attempt++) {
-        await new Promise(r => setTimeout(r, 3000));
-        const pollRes = await fetch(`/api/process-lead?jobId=${jobId}`);
-        const data = await pollRes.json();
-        if (data.status === 'done') {
-            const r = data.result;
-            return {
-                url: r.url || linkedinUrl,
-                status: r.status || 'ERROR',
-                firstName: r.firstName || '',
-                headline: r.headline || '',
-                activityStatus: r.activityStatus || 'Unknown',
-                website: r.website || '',
-                websites: r.websites || [],
-                emails: r.emails || [],
-                logs: r.logs || [],
-                prospectQualification: r.prospectQualification,
-            };
-        }
-        if (data.status === 'not_found' || data.status === 'error') {
-            throw new Error(data.error || data.message || 'Job failed');
-        }
-    }
-    throw new Error('Job timed out after 6 minutes');
-}
 import { exportToGoogleSheets, isGoogleSheetsConfigured } from "@/app/actions/google-sheets";
 import UrlCleaner from "./UrlCleaner";
 import FinderEngine from "./FinderEngine";
@@ -174,6 +136,9 @@ const LEAD_STATUS: Record<string, { label: string; mark: string }> = {
     SCANNING: { label: 'Scanning', mark: 'mark-info' },
     PENDING: { label: 'Waiting', mark: 'mark-idle' },
     ERROR: { label: 'Failed', mark: 'mark-bad' },
+    REVIEW: { label: 'Review', mark: 'mark-warn' },
+    PROSPECTED: { label: 'Prospected', mark: 'mark-info' },
+    CANCELLED: { label: 'Cancelled', mark: 'mark-idle' },
 };
 
 function LeadStatusMark({ status, researched }: { status: string; researched: boolean }) {
@@ -365,9 +330,10 @@ export default function Dashboard() {
     const [logs, setLogs] = useState<{ msg: string, time: string, type: 'info' | 'success' | 'error', isJson?: boolean }[]>([]);
     const [isDragging, setIsDragging] = useState(false);
     const [batchInfo, setBatchInfo] = useState<string>('');
-    const isPausedRef = React.useRef(false);
-    const [isPaused, setIsPaused] = useState(false);
-    const isCancelledRef = React.useRef(false);
+    const [isPaused, setIsPaused] = useState(true);
+    const [engineControlPending,setEngineControlPending]=useState(false);
+    const [engineControlError,setEngineControlError]=useState('');
+    const queueReadVersion=React.useRef(0);
 
     // New state
     const [toasts, setToasts] = useState<Toast[]>([]);
@@ -403,49 +369,33 @@ export default function Dashboard() {
     const [workerStatus, setWorkerStatus] = useState<any>(null);
     const [dailyStats, setDailyStats] = useState<{ date: string; count: number; limit: number }>({ date: '', count: 0, limit: 0 });
 
-    useEffect(() => {
-        if (activeTab !== 'engine') return;
-        const fetchStatus = async () => {
+    const applyQueueStatus=useCallback((data:any)=>{
+        setQueueSize(data.queueSize||0);setWorkerStatus(data.workerStatus);
+        if(data.dailyStats)setDailyStats(data.dailyStats);
+        setIsProcessing(data.queueSize>0||data.workerStatus?.status==='processing');
+        setIsPaused(!(data.workerStatus?.processingAuthorized??data.accounts?.some((a:any)=>a.processingEnabled)??data.workerStatus?.status==='processing'));
+        if(Array.isArray(data.recentResults)) {
+            const rows=data.recentResults.flatMap((entry:any)=>{const value=entry&&typeof entry==='object'&&'result' in entry?entry.result:entry;const lead=normalizeEngineResult(value);return lead?[{lead,completedAt:entry?.completedAt}]:[];});
+            setLeads(rows.map((r:{lead:Lead})=>r.lead));
+            setLogs(rows.map((r:{lead:Lead;completedAt?:string})=>({msg:describeLead(r.lead),time:r.completedAt?new Date(r.completedAt).toLocaleTimeString():'Time unavailable',type:r.lead.status==='QUALIFIED'?'success' as const:r.lead.status==='ERROR'?'error' as const:'info' as const})).reverse());
+        }
+    },[]);
+    useEffect(()=>{
+        if(activeTab!=='engine')return;
+        let cancelled=false,timer:ReturnType<typeof setTimeout>,historyAt=0;
+        const controller=new AbortController();
+        const poll=async()=>{
+            const version=queueReadVersion.current;
             try {
-                const res = await fetch('/api/queue-status');
-                if (res.ok) {
-                    const data = await res.json();
-                    setQueueSize(data.queueSize || 0);
-                    setWorkerStatus(data.workerStatus);
-                    if (data.dailyStats) setDailyStats(data.dailyStats);
-                    
-                    // Update isProcessing state based on active work
-                    const isWorking = (data.queueSize > 0) || (data.workerStatus && data.workerStatus.status === 'processing');
-                    setIsProcessing(isWorking);
-                    
-                    if (data.recentResults && data.recentResults.length > 0) {
-                        // Extract only valid results (sometimes recentResults has status wrappers)
-                        const extractedLeads = data.recentResults.map((r: any) => r.result ? r.result : r);
-                        setLeads(extractedLeads);
-
-                        // One readable sentence per result. This used to be
-                        // JSON.stringify of the whole lead, which put a 30-line
-                        // pretty-printed blob in the feed for every profile —
-                        // the same data the results table below already shows,
-                        // in the least readable form available.
-                        const niceLogs = extractedLeads.map((l: any, index: number) => ({
-                            msg: describeLead(l),
-                            time: data.recentResults[index].completedAt ? new Date(data.recentResults[index].completedAt).toLocaleTimeString() : 'Time unavailable',
-                            type: l.status === 'QUALIFIED' ? 'success' as const
-                                : l.status === 'ERROR' ? 'error' as const
-                                    : 'info' as const,
-                        }));
-                        setLogs(niceLogs.reverse()); // Reverse so newest is at the bottom if we scroll down
-                    }
-                }
-            } catch (e) {
-                // ignore
-            }
+                const includeHistory=Date.now()-historyAt>=15000;
+                const response=await fetch(includeHistory?'/api/queue-status':'/api/queue-status?history=0',{cache:'no-store',signal:controller.signal});
+                if(response.ok){const data=await response.json();if(!cancelled&&version===queueReadVersion.current){applyQueueStatus(data);if(includeHistory)historyAt=Date.now();}}
+            }catch{/* Keep the last confirmed status during a connection interruption. */}
+            finally{if(!cancelled)timer=setTimeout(poll,3000);}
         };
-        fetchStatus();
-        const int = setInterval(fetchStatus, 3000);
-        return () => clearInterval(int);
-    }, [activeTab]);
+        void poll();
+        return()=>{cancelled=true;clearTimeout(timer);controller.abort();};
+    },[activeTab,applyQueueStatus]);
 
     // ── Toast helpers ──
     const addToast = useCallback((message: string, type: Toast['type']) => {
@@ -464,7 +414,7 @@ export default function Dashboard() {
             const savedLeads = sessionStorage.getItem('compel_leads');
             const savedUrls = sessionStorage.getItem('compel_urls');
             const savedProgress = sessionStorage.getItem('compel_progress');
-            if (savedLeads) setLeads(JSON.parse(savedLeads));
+            if (savedLeads) setLeads(normalizeEngineResults(JSON.parse(savedLeads)));
             if (savedUrls) setCsvUrls(JSON.parse(savedUrls));
             if (savedProgress) setProgress(parseInt(savedProgress));
 
@@ -640,47 +590,40 @@ export default function Dashboard() {
         }
     };
 
-    const handleResumeFromSave = async () => {
-        const saved = await loadProgress();
-        if (saved && saved.leads.length > 0) {
-            setLogs(prev => [...prev, {
-                msg: `📂 Loaded ${saved.processedCount}/${saved.totalCount} leads from saved progress. Resuming...`,
-                time: new Date().toLocaleTimeString(), type: 'info'
-            }]);
-            addToast(`Loaded ${saved.processedCount} leads from saved progress`, 'info');
-            handleStartEngine(saved.processedCount, saved.leads);
-        } else {
-            addToast('No saved progress found.', 'error');
-        }
+    const sendEngineControl=async(action:'resume'|'pause')=>{
+        queueReadVersion.current++;
+        const response=await fetch('/api/engine-control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});
+        const data=await response.json();
+        if(!response.ok)throw new Error(data.error||'Could not update account processing.');
+        queueReadVersion.current++;applyQueueStatus(data);
+        const blocked=data.control?.blocked||[];
+        if(blocked.length)addToast(blocked.map((a:any)=>a.label+': '+a.reason).join(' '),'info');
+        return data;
     };
-
-    const handlePause = () => {
-        isPausedRef.current = !isPausedRef.current;
-        setIsPaused(isPausedRef.current);
-        setLogs(prev => [...prev, {
-            msg: isPausedRef.current ? '⏸ Processing paused.' : '▶ Processing resumed.',
-            time: new Date().toLocaleTimeString(), type: 'info'
-        }]);
-        addToast(isPausedRef.current ? 'Processing paused' : 'Processing resumed', 'info');
-    };
-
-    const handleCancel = async () => {
-        isCancelledRef.current = true;
-        // Unpause so the pause-wait loop exits and sees the cancel flag
-        isPausedRef.current = false;
-        setIsPaused(false);
-        setLogs(prev => [...prev, {
-            msg: '🛑 Cancelling... will stop after the current lead finishes.',
-            time: new Date().toLocaleTimeString(), type: 'info'
-        }]);
-        addToast('Cancelling after current lead...', 'info');
-
+    const handlePause=async()=>{
+        setEngineControlPending(true);setEngineControlError('');
+        const action=isPaused?'resume':'pause';
         try {
-            await fetch('/api/clear-queue', { method: 'POST' });
-            setQueueSize(0);
-        } catch (error) {
-            // ignore
-        }
+            await sendEngineControl(action);
+            const message=action==='resume'?'Processing started. The agent continues until Pause, the daily limit or account review.':'Account processing paused. Queued profiles are retained.';
+            addToast(message,'success');setLogs(prev=>[...prev,{msg:message,time:new Date().toLocaleTimeString(),type:'info'}]);
+        }catch(error){const message=error instanceof Error?error.message:'Could not update processing.';setEngineControlError(message);addToast(message,'error');}
+        finally{setEngineControlPending(false);}
+    };
+    const handleResumeCheckpoints=async()=>{
+        if(!isPaused){addToast('Processing is already enabled. The agent resumes saved checkpoints automatically.','info');return;}
+        await handlePause();
+    };
+    const handleCancel=async()=>{
+        setEngineControlPending(true);setEngineControlError('');
+        try {
+            await sendEngineControl('pause');
+            const response=await fetch('/api/clear-queue',{method:'POST'});
+            if(!response.ok)throw new Error('Processing paused, but the waiting queue could not be cleared. Retry Stop.');
+            setQueueSize(0);setIsProcessing(false);
+            addToast('Processing stopped and waiting profiles removed. Any profile already in flight can finish saving.','success');
+        }catch(error){const message=error instanceof Error?error.message:'Could not stop processing.';setEngineControlError(message);addToast(message,'error');}
+        finally{setEngineControlPending(false);}
     };
 
     const handleRetryFailed = async () => {
@@ -696,12 +639,12 @@ export default function Dashboard() {
     };
 
     const handleClearQueue = async () => {
-        if (!confirm("Are you sure you want to empty the queue? This will delete all pending and processing jobs.")) return;
+        if (!confirm("Are you sure you want to empty the queue? This will cancel waiting jobs. Profiles already in flight retain their locks and checkpoints.")) return;
         try {
             const res = await fetch('/api/clear-queue', { method: 'POST' });
             const data = await res.json();
             if (data.success) {
-                addToast(`Queue cleared! Deleted ${data.deleted} files.`, 'success');
+                addToast(`Cancelled ${data.deleted} waiting jobs.`, 'success');
             } else {
                 addToast(data.error || 'Failed to clear queue', 'error');
             }
@@ -777,10 +720,11 @@ export default function Dashboard() {
     const handleLoadRun = async (filename: string) => {
         const data = await loadSavedRun(filename);
         if (data) {
-            setLeads(data.leads);
+            const restored=normalizeEngineResults(data.leads);
+            setLeads(restored);
             setProgress(100);
             setShowHistory(false);
-            addToast(`Loaded ${data.leads.length} leads from saved run`, 'success');
+            addToast(`Loaded ${restored.length} leads from saved run`, 'success');
         } else {
             addToast('Failed to load saved run', 'error');
         }
@@ -829,19 +773,22 @@ export default function Dashboard() {
 
     // "Offline" and "idle" look identical in a status file — the difference is
     // whether the heartbeat is still being written. Say which one it is.
-    const workerState: 'running' | 'paused' | 'idle' | 'offline' =
+    const workerState: 'running' | 'waiting' | 'paused' | 'idle' | 'offline' =
         workerStatus?.stale || !workerStatus ? 'offline'
             : workerStatus.status === 'processing' ? 'running'
+                : workerStatus.status === 'sleeping' ? 'waiting'
                 : workerStatus.status === 'paused' ? 'paused'
                     : 'idle';
     const workerLabel = {
         running: 'Worker running',
+        waiting: 'Worker waiting',
         paused: 'Worker paused',
         idle: 'Worker idle',
         offline: 'Worker offline',
     }[workerState];
     const workerDot = {
         running: '',
+        waiting: 'dot-warn',
         paused: 'dot-warn',
         idle: 'dot-idle',
         offline: 'dot-bad',
@@ -1316,7 +1263,7 @@ export default function Dashboard() {
                                         </div>
                                         <p className="field-hint">
                                             Takes the best-scoring <span className="num">{QUEUE_BATCH_SIZE}</span> profiles
-                                            waiting in that region and starts straight away. Most of your list is in
+                                            waiting in that region and saves them to the queue. Resume processing below after signing in. Most of your list is in
                                             &ldquo;everywhere else&rdquo;.
                                         </p>
                                     </div>
@@ -1357,6 +1304,8 @@ export default function Dashboard() {
                                         </div>
                                     </div>
 
+                                    {engineControlError&&<p role="alert" className="text-sm text-[var(--bad)]">{engineControlError}</p>}
+                                    {queueSize>0&&isPaused&&<p role="status" className="field-hint">{queueSize.toLocaleString()} profiles are saved. Click Resume to process them through your connected accounts.</p>}
                                     <div className="flex flex-wrap items-center gap-2 pt-1">
                                         {!isProcessing ? (
                                             <button
@@ -1371,11 +1320,11 @@ export default function Dashboard() {
                                             </button>
                                         ) : (
                                             <>
-                                                <button onClick={handlePause} className="btn btn-outline btn-lg">
+                                                <button onClick={handlePause} disabled={engineControlPending} className="btn btn-outline btn-lg">
                                                     {isPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
-                                                    {isPaused ? 'Resume' : 'Pause'}
+                                                    {engineControlPending?'Updating…':isPaused?'Resume':'Pause'}
                                                 </button>
-                                                <button onClick={handleCancel} className="btn btn-danger btn-lg" title="Stop after the profile in flight">
+                                                <button onClick={handleCancel} disabled={engineControlPending} className="btn btn-danger btn-lg" title="Stop after the profile in flight">
                                                     <StopCircle className="w-3.5 h-3.5" />
                                                     Stop
                                                 </button>
@@ -1385,13 +1334,13 @@ export default function Dashboard() {
                                         <span className="flex-1" />
 
                                         <button
-                                            onClick={handleResumeFromSave}
-                                            disabled={isProcessing || csvUrls.length === 0}
+                                            onClick={handleResumeCheckpoints}
+                                            disabled={engineControlPending}
                                             className="btn btn-ghost"
-                                            title="Pick up the last saved run where it stopped"
+                                            title="Resume queued work from PostgreSQL checkpoints"
                                         >
                                             <RotateCcw className="w-3.5 h-3.5" />
-                                            Resume last
+                                            Resume saved work
                                         </button>
                                         <button
                                             onClick={handleRetryFailed}
@@ -1449,9 +1398,9 @@ export default function Dashboard() {
                                         </div>
                                     </div>
 
-                                    {workerState === 'running' && workerStatus?.url && (
+                                    {(workerState === 'running'||workerState === 'waiting') && workerStatus?.url && (
                                         <div className="pt-3 border-t border-[var(--line)]">
-                                            <p className="label-micro">Now scraping</p>
+                                            <p className="label-micro">{workerState==='waiting'?'Current profile':'Now scraping'}</p>
                                             <p className="text-[12px] text-[var(--text-dim)] truncate mt-1 font-[family-name:var(--font-mono)]">
                                                 {workerStatus.url.split('/in/')[1] || workerStatus.url}
                                             </p>
@@ -1462,6 +1411,9 @@ export default function Dashboard() {
                                 {workerState === 'paused' && workerStatus?.pauseReason === 'DAILY_LIMIT' && <p role="status" className="panel-note">
                                     Daily profile limit reached. {queueSize.toLocaleString()} queued profiles are saved. New profiles resume {workerStatus.nextDailyResetAt ? `after ${new Date(workerStatus.nextDailyResetAt).toLocaleString()}` : 'when the daily allowance resets'} while the worker is running. Retries and saved website research can continue without another daily slot.
                                 </p>}
+                                {workerStatus?.reason&&workerStatus.pauseReason!=='DAILY_LIMIT'&&<p role="status" className="panel-note">{workerStatus.reason}</p>}
+                                {workerState==='waiting'&&workerStatus?.nextEligibleAt&&<p role="status" className="panel-note">Next check: {new Date(workerStatus.nextEligibleAt).toLocaleString()}. Processing resumes automatically while the session is active.</p>}
+                                {(workerStatus?.researchPending>0||workerStatus?.researchProcessing>0)&&<p role="status" className="panel-note">Public website research: {workerStatus.researchProcessing||0} processing · {workerStatus.researchPending||0} waiting. Saved profiles can finish research while LinkedIn is paused.</p>}
                                 {workerStatus?.waitingCount > 0 && <p role="status" className="panel-note">
                                     {workerStatus.waitingCount} profiles retained for automatic retry. {workerStatus.nextRetryAt ? `Next retry after ${new Date(workerStatus.nextRetryAt).toLocaleTimeString()}.` : ''} Saved scrapes do not use another LinkedIn daily slot.
                                 </p>}

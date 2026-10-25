@@ -182,7 +182,7 @@ function validateSettings(body) {
 }
 async function settings(pool) {
  await ensure(pool);
- const config = (await pool.query('SELECT * FROM compel_worker_config WHERE id=1')).rows[0];
+ const config = (await pool.query('SELECT *,compel_worker_day()::text AS daily_day,((compel_worker_day()+1)::timestamp AT TIME ZONE daily_timezone) AS resume_at FROM compel_worker_config WHERE id=1')).rows[0];
  const rows = (await pool.query(`SELECT a.id,a.label,a.email,a.enabled,a.daily_limit,a.position,(a.secret<>'') AS has_password,
   a.login_requested_at,a.logout_requested_at,a.signed_out_at,a.processing_enabled,a.processing_until,a.changed_at::text AS control_version,a.connected_at,a.confirmed_identity,a.attention_reason,s.status,s.updated_at,s.lease_until,COALESCE(p.used,0) AS daily_count,
   COALESCE(u.request_count,0) AS request_count,COALESCE(u.cached_profiles,0) AS cached_profiles,COALESCE(u.request_kinds,'{}') AS request_kinds
@@ -190,10 +190,10 @@ async function settings(pool) {
   LEFT JOIN compel_worker_usage u ON u.account_id=a.id AND u.day=compel_worker_day()
   LEFT JOIN (SELECT account_id,count(*)::int AS used FROM compel_worker_account_profiles WHERE day=compel_worker_day() GROUP BY account_id) p ON p.account_id=a.id
   WHERE a.archived IS FALSE ORDER BY a.position,a.id`)).rows;
- return { defaultDailyLimit:daily.defaultLimit(),revision: config.revision, supervisorOnline:!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000, activeCount: Math.min(config.active_count, rows.filter(a => a.enabled).length), accounts: rows.map(a => ({
+ return { resources:config.agent_status?.resources||null,dailyDay:config.daily_day,defaultDailyLimit:daily.defaultLimit(),revision: config.revision, supervisorOnline:!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000, activeCount: Math.min(config.active_count, rows.filter(a => a.enabled).length), accounts: rows.map(a => ({
   id:a.id,label:a.label,email:a.email,enabled:a.enabled,dailyLimit:a.daily_limit,hasPassword:a.has_password,
-  dailyCount:a.daily_count,dailyTimezone:config.daily_timezone,dailyResumeAt:a.daily_count>=a.daily_limit?a.status?.nextEligibleAt||null:null,status:a.status?.status || 'offline',reason:a.status?.reason || '',
-  runtimeVersion:a.status?.runtimeVersion||'',sessionReady:!!a.status?.sessionReady,browserOpen:!!a.status?.browserOpen,nextEligibleAt:a.status?.nextEligibleAt||null,
+  dailyCount:a.daily_count,dailyTimezone:config.daily_timezone,dailyResumeAt:a.daily_count>=a.daily_limit?config.resume_at:null,status:a.status?.status || 'offline',reason:a.status?.reason || '',
+  runtimeVersion:a.status?.runtimeVersion||'',sessionReady:!!a.status?.sessionReady,browserOpen:!!a.status?.browserOpen,nextEligibleAt:a.status?.nextEligibleAt||(a.daily_count>=a.daily_limit?config.resume_at:null),
   dailyRequests:a.request_count||0,dailyCachedProfiles:a.cached_profiles||0,requestKinds:a.request_kinds||{},
   processingEnabled:!!a.processing_enabled,processingUntil:null,
   connectedAt:a.connected_at||null,attentionReason:a.attention_reason||'',
@@ -207,7 +207,11 @@ async function settings(pool) {
 }
 function startupForAccount(config,a){
  const live=config.agent_status?.accounts?.[a.id],saved=a.status;
- const state=live?.controlVersion===a.control_version?live:saved?.controlVersion===a.control_version?saved:null;
+ const agentOnline=!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000;
+ const state=(agentOnline||live?.startupStage==='FAILED')&&live?.controlVersion===a.control_version?live:saved?.controlVersion===a.control_version?saved:null;
+ if(a.attention_reason&&!a.login_requested_at)return {startupStage:'SESSION_REVIEW',startupReason:a.attention_reason};
+ if(!a.processing_enabled&&!a.login_requested_at&&!a.logout_requested_at&&state?.startupStage!=='FAILED')return {startupStage:agentOnline?(a.status?.sessionReady?'SESSION_VERIFIED':'AGENT_ACK'):'OFFLINE'};
+ if(!agentOnline&&a.processing_enabled)return {startupStage:'REQUEST_RECEIVED',startupReason:'Processing intent is saved. Start the local agent to resume it.'};
  if(state?.startupStage)return {startupStage:state.startupStage,failedStage:state.failedStage||null,startupReason:state.reason||'',startupAction:state.action||''};
  if(a.login_requested_at||a.processing_enabled)return {startupStage:'REQUEST_RECEIVED',startupReason:'Request saved. Waiting for the local agent to acknowledge it.'};
  return {startupStage:null};
@@ -281,7 +285,7 @@ async function acquireSession(pool, id, owner) {
  await ensure(pool);
  return (await pool.query(`INSERT INTO compel_worker_sessions(account_id,owner,lease_until,status) VALUES($1,$2,NOW()+interval '120 seconds','{"status":"starting"}')
   ON CONFLICT(account_id) DO UPDATE SET owner=$2,lease_until=NOW()+interval '120 seconds',status='{"status":"starting"}',updated_at=NOW()
-  WHERE compel_worker_sessions.lease_until<NOW() OR compel_worker_sessions.owner=$2 RETURNING account_id`,[id,owner])).rowCount === 1;
+  WHERE compel_worker_sessions.owner=$2 OR (compel_worker_sessions.lease_until<NOW() AND (compel_worker_sessions.lease_until<=compel_worker_sessions.updated_at OR compel_worker_sessions.status->>'status' IN ('offline','signed_out'))) RETURNING account_id`,[id,owner])).rowCount === 1;
 }
 async function heartbeat(pool, id, owner, status) {
  const update = await pool.query(`UPDATE compel_worker_sessions SET lease_until=NOW()+interval '120 seconds',status=$3::jsonb,updated_at=NOW() WHERE account_id=$1 AND owner=$2 AND lease_until>NOW()`,[id,owner,json(status)]);
@@ -426,6 +430,7 @@ async function enqueue(pool, urls, options = {}) {
  const queued=entries.filter(entry=>inserted.has(entry.id)).map(entry=>({id:entry.id,url:entry.profile_key}));
  for(const entry of eligible)if(!inserted.has(entry.id))skipped.push({url:entry.profile_key,reason:'Already queued or completed today'});
  const jobs=queued.map(entry=>entry.id);
+ if(jobs.length)await pool.query("SELECT pg_notify('compel_engine_wake','')");
  return {jobs,queuedCount:jobs.length,skipped,queued};
 }
 // A duplicate Inbox row must not bring an assessed/contacted profile back into
@@ -572,6 +577,7 @@ async function retryFailed(pool) {
    AND NOT EXISTS(SELECT 1 FROM compel_worker_jobs newer WHERE newer.profile_key=j.profile_key AND newer.queue_order>j.queue_order)
    ORDER BY j.created_at FOR UPDATE OF j`)).rows;
   for(const job of jobs) {
+   if(failureOf(job.result).retryable===false)continue;
    if((await client.query(`SELECT id FROM compel_worker_jobs WHERE profile_key=$1 AND status IN ('pending','processing')`,[job.profile_key])).rowCount)continue;
    const saved=failureOf(job.result).stage==='linkedin'?(job.checkpoint?.linkedinCapture?.version===2?job.checkpoint:null):job.result.profileIdentityConfirmed?job.result:job.checkpoint;
    const resume=saved?structuredClone(saved):null;
@@ -658,7 +664,7 @@ async function queueStatus(pool,{includeHistory=true}={}) {
   SELECT id,completed_at FROM latest ORDER BY completed_at DESC,queue_order DESC LIMIT 100
  ) SELECT id,profile_key,result,completed_at FROM (
   SELECT j.id,j.profile_key,h.completed_at,
-   (j.result - ARRAY['logs','html','rawHtml','about','latestPostText','activityEvidence','prospectQualification']) ||
+   (j.result - ARRAY['logs','html','rawHtml','about','latestPostText','activityEvidence','prospectQualification','engineMetrics']) ||
    CASE WHEN jsonb_typeof(j.result->'prospectQualification')='object' THEN jsonb_build_object('prospectQualification',
     ((j.result->'prospectQualification') - ARRAY['baseResearch','research']) ||
     CASE WHEN jsonb_typeof(r.value)='object' THEN jsonb_build_object('research',
@@ -674,7 +680,7 @@ async function queueStatus(pool,{includeHistory=true}={}) {
  ) previews ORDER BY completed_at DESC`)).rows:[];
  const selected=config.accounts.filter(a=>a.enabled&&!a.signedOut&&!a.logoutPending).slice(0,config.activeCount);
  const live=selected.filter(a=>a.online), busy=live.find(a=>a.status==='processing'), sleeping=live.find(a=>a.status==='sleeping');
- const dailyCount=Number((await pool.query("SELECT COALESCE(sum(count),0)::integer AS total FROM compel_worker_usage WHERE day=compel_worker_day()")).rows[0].total);
+ const dailyCount=config.accounts.reduce((sum,a)=>sum+a.dailyCount,0);
  const dailyLimit=selected.reduce((sum,a)=>sum+a.dailyLimit,0);
  const latestToday=`SELECT DISTINCT ON(profile_key) profile_key,result FROM compel_worker_jobs
   WHERE status='done' AND completed_at>=(compel_worker_day()::timestamp AT TIME ZONE (SELECT daily_timezone FROM compel_worker_config WHERE id=1))
@@ -711,9 +717,9 @@ async function queueStatus(pool,{includeHistory=true}={}) {
    pauseReason:limitReached?'DAILY_LIMIT':paused?'ACCOUNT_PAUSED':null,nextDailyResetAt,
    dailyCount,dailyLimit,dailyRequests:config.accounts.reduce((sum,a)=>sum+a.dailyRequests,0),dailyCachedProfiles:config.accounts.reduce((sum,a)=>sum+a.dailyCachedProfiles,0),dailyQualified:today.qualified,dailyRejected:today.rejected,dailyErrors:today.errors,
    dailyCompleted:today.qualified+today.rejected+today.errors,activeAccounts:live.length,configuredAccounts:selected.length,
-   memoryMB:live.reduce((sum,a)=>sum+a.memoryMB,0),ratePerHour:ratePerHour||null,url:busy?.url||sleeping?.url||'',waitingCount:rows.waiting,nextRetryAt:rows.next_retry,
+   memoryMB:config.supervisorOnline?(config.resources?.treeRssMB??live.reduce((sum,a)=>sum+a.memoryMB,0)):0,ratePerHour:ratePerHour||null,url:busy?.url||sleeping?.url||'',waitingCount:rows.waiting,nextRetryAt:rows.next_retry,
    dailyBudgetCount:selected.reduce((sum,a)=>sum+a.dailyCount,0),dailyRemaining},
-  dailyStats:{date:new Date().toISOString().slice(0,10),count:dailyCount,limit:dailyLimit},
+  dailyStats:{date:config.dailyDay||new Date().toISOString().slice(0,10),count:dailyCount,limit:dailyLimit},
   ...(includeHistory?{recentResults:recent.map(row=>({jobId:row.id,result:historyPreview(row.result,row.profile_key),completedAt:row.completed_at}))}:{})};
 }
-module.exports={reserveProfile:daily.reserve,sessionOwned,recordLinkedInChecks,releaseCaptureClaims,releaseClaim,SCHEMA,ensure,readRuntimeAccount,accountEvents,confirmManualSignIn,startProcessing,pauseProcessing,processingAllowed,recordLinkedInAction,reserveLinkedInCheck,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,requestLogout,finishLogout,enqueue,queueCandidates,skipCompletedDuplicates,reusableLinkedInProfile,cachedLinkedInProfile,recordLinkedInCheck,claim,complete,checkpoint,defer,retryFailed,reserveResearch,coolResearch,jobStatus,clearQueue,queueStatus,importResult,json};
+module.exports={saveCaptureReview:(pool,input)=>require('./worker-research-store.cjs').saveCaptureReview(pool,input),reserveProfile:daily.reserve,sessionOwned,recordLinkedInChecks,releaseCaptureClaims,releaseClaim,SCHEMA,ensure,readRuntimeAccount,accountEvents,confirmManualSignIn,startProcessing,pauseProcessing,processingAllowed,recordLinkedInAction,reserveLinkedInCheck,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,requestLogout,finishLogout,enqueue,queueCandidates,skipCompletedDuplicates,reusableLinkedInProfile,cachedLinkedInProfile,recordLinkedInCheck,claim,complete,checkpoint,defer,retryFailed,reserveResearch,coolResearch,jobStatus,clearQueue,queueStatus,importResult,json};

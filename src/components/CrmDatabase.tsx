@@ -1586,6 +1586,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                                         <td className="px-4 py-2.5 font-medium text-[var(--text)]">
                                             {lead.first_name} {lead.last_name}
                                             {!lead.first_name && <span className="text-[var(--text-faint)] italic">Unknown</span>}
+                                            <FollowerEvidence followers={lead.prospect_assessment?.research.followers} connections={lead.prospect_assessment?.research.connections}/>
                                         </td>
                                         <td className="px-4 py-2.5 text-xs">
                                             {lead.linkedin_url ? (

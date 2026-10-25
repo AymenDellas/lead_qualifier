@@ -7,7 +7,7 @@ const controlError=reason=>Object.assign(new Error(reason),{failure:{stage:'cont
 const transient=error=>/detached|execution context|context was destroyed|cannot find context|navigat/i.test(error?.message||'');
 
 // A runtime owns one account tab. Runner intent, browser existence and queued
-// work are separate: pause changes intent; it never closes/recreates Chrome.
+// work are separate. Pause changes intent; the agent manages idle/recovery recycling.
 function createAccountRuntime(options) {
  const {pool,accountId,owner,browserOwner}=options;
  const core=options.core||require('./linkedin-workers.cjs');
@@ -49,6 +49,8 @@ function createAccountRuntime(options) {
  function publish(state,extra={}) {
   status={...status,status:state,reason:'',reasonCode:null,manualResumeRequired:false,url:'',jobId:null,phase:null,runId:null,nextEligibleAt:null,...extra,runtimeVersion,
    ...(state==='processing'?{startupStage:'PROCESSING'}:{}),
+   ...(state==='idle'?{startupStage:identity?'SESSION_VERIFIED':'AGENT_ACK'}:{}),
+   ...(state==='offline'?{startupStage:'OFFLINE'}:{}),
    browserOpen:browserOwner.isOpen(),sessionReady:!!identity&&browserOwner.isOpen(),signedIn:identity,updatedAt:new Date(now()).toISOString()};
   status.controlVersion=activeVersion;
   onStatus({...status});return status;
@@ -191,7 +193,7 @@ function createAccountRuntime(options) {
   if(handledStart===startToken)return false;
   signal=null;
   publish('starting',{reason:'Opening the saved session and checking the signed-in member.'});
-  if(!browserOwner.isOpen()&&browserAttempted)await browserOwner.close(); // explicit Start permits reopening, never an automatic retry
+  if(!browserOwner.isOpen()&&browserAttempted)await browserOwner.close(); // release a disconnected handle before an owned relaunch
   await open();
   await permit('identity');
   await assertActive();
@@ -217,6 +219,9 @@ function createAccountRuntime(options) {
    publish('recovering',{startupStage:'BROWSER_STARTING',reason:'Chrome will reopen and resume this profile from its checkpoint (bounded attempt '+((job.retryCount||0)+1)+'/2).'});return;
   }
   if(crashed){result.status='REVIEW';result.failure.retryable=false;result.failure.reason='Chrome retry attempts exhausted. Review the saved evidence.';}
+  if(result.status==='REVIEW'&&failure.stage!=='control'&&!['LINKEDIN_AUTH','LINKEDIN_RATE_LIMIT','ACCOUNT_MISMATCH'].includes(failure.code)&&!job.prospecting&&job.nativePostProcess&&core.saveCaptureReview){
+   const saved=await core.saveCaptureReview(pool,{job,owner,capture:result,failure:result.failure});result.crmSaved=true;result.crmLeadId=saved.id;
+  }
   if(['PROFILE_REDIRECT','PROFILE_UNAVAILABLE'].includes(failure.code)) {
    await core.complete(pool,job.jobId,owner,result);
    publish('ready',{reason:'Skipped an unavailable or redirected profile URL. Continuing with the saved queue.'});
@@ -247,7 +252,7 @@ function createAccountRuntime(options) {
    // visit. Partial captures always resume the matching account page first.
    if(!researchQueue.fullCapture(captured)) {
     captured=await reader.captureProfile(telemetry.pageActions(surface.page),job.linkedinUrl,{
-     accountId,beforeCheck:async kind=>{
+     accountId,requireRecentActivity:!job.prospecting,beforeCheck:async kind=>{
       if(job.prospecting&&!await discoveryStore.runIsActive(pool,job.prospecting.runId))throw controlError('The prospecting run was stopped. Captured evidence is retained.');
       await permit(kind);
       if(kind==='profile_page'&&core.reserveProfile){
@@ -358,7 +363,7 @@ function createAccountRuntime(options) {
   handledStart=null;
   publish(manual||signal?'paused':'recovering',{startupStage:manual||signal?'SESSION_REVIEW':'BROWSER_STARTING',reason:error?.message||'Chrome disconnected. The current job can resume from its checkpoint.',reasonCode:'BROWSER_CLOSED'});
  }
- async function recycle(reason){await saves.idle();await browserOwner.close();identity=null;surface=null;handledStart=null;publish('ready',{reason:'Chrome closed: '+reason+'. Saved sign-in is retained.'});}
+ async function recycle(reason){const limit=status.status==='DAILY_LIMIT_REACHED'?{reason:status.reason,nextEligibleAt:status.nextEligibleAt,startupStage:'DAILY_LIMIT_REACHED'}:null;await saves.idle();await browserOwner.close();identity=null;surface=null;handledStart=null;publish(limit?'DAILY_LIMIT_REACHED':'ready',limit||{reason:'Chrome closed: '+reason+'. Saved sign-in is retained.'});}
  async function recoverSaves(){await saves.idle();await releasePrefetch();await core.releaseCaptureClaims?.(pool,accountId,owner);saves.clearError();recoveringJob=false;publish('ready',{reason:'Save queue recovered. Pending profiles resume from PostgreSQL checkpoints.'});}
  return {tick,permit,handleSignal,close,disconnected,recycle,recoverSaves,waitForBrowser:reason=>publish('waiting_browser',{startupStage:'BROWSER_STARTING',reason}),requestStop:()=>{stopped=true;},flush:()=>flushStatistics(status.jobId),drain:()=>saves.idle(),snapshot:()=>({...status,jobsStarted,pendingSaves:saves.size,controlVersion:activeVersion,saveError:saves.error?.message||null,prospectingVersion:'COACH_EVIDENCE_V1'})};
 }

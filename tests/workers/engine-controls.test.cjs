@@ -8,7 +8,7 @@ test('Resume authorizes configured account sessions, Pause persists the stop, an
  let supervisorOnline=true;
  try {
   core.settings=async()=>({activeCount:2,supervisorOnline,accounts});
-  core.startProcessing=async(_pool,id,minutes)=>{assert.equal(minutes,60);const account=accounts.find(a=>a.id===id);if(account.attentionReason)throw Error('Resolve the account review first.');account.processingEnabled=true;calls.push(['start',id]);};
+  core.startProcessing=async(_pool,id,minutes)=>{assert.equal(minutes,undefined);const account=accounts.find(a=>a.id===id);if(account.attentionReason)throw Error('Resolve the account review first.');if(!account.connectedAt)throw Error('Complete manual sign-in.');account.processingEnabled=true;calls.push(['start',id]);};
   core.pauseProcessing=async(_pool,id)=>{accounts.find(a=>a.id===id).processingEnabled=false;calls.push(['pause',id]);};
   const resumed=await controlEngine({},'resume');assert.deepEqual(resumed.updated,['one']);assert.equal(resumed.blocked[0].id,'held');assert.equal(accounts[1].attentionReason,'Security review');assert.equal(accounts[2].processingEnabled,false);
   await controlEngine({},'pause');assert.deepEqual(calls,[['start','one'],['pause','one']]);assert.ok(accounts.every(a=>!a.processingEnabled));

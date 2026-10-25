@@ -28,11 +28,13 @@ async function main(){
  try{
   const scripts=[__filename,path.join(root,'scripts/linkedin-worker-supervisor.cjs')];
   for(;;){
-   await clearUnownedProcessLock(lock,scripts,{staleMs:15000});
+   const recovery=await clearUnownedProcessLock(lock,scripts,{staleMs:15000});
+   if(recovery?.waitMs){stage('AGENT_ACK','Confirmed stale owner; waiting for its heartbeat to expire.');await new Promise(resolve=>setTimeout(resolve,Math.min(recovery.waitMs,1000)));if(stopping)return;continue;}
    try{unlock=acquireProcessLock(lock,{heartbeat:true,staleMs:15000});break;}
    catch(error){if(error.code!=='OWNER_HEARTBEAT_PENDING')throw error;stage('AGENT_ACK',error.message,'Waiting for the dead owner heartbeat.');await new Promise(resolve=>setTimeout(resolve,1000));if(stopping)return;}
   }
   process.once('exit',unlock);stage('AGENT_ACK','Process acknowledged; connecting to PostgreSQL.');
+  require('./src/lib/follower-policy.cjs').minFollowers();
   await core.ensure(pool);await pool.query(registry.SCHEMA);await telemetry.ensure(pool);
   await require('./src/lib/engine-daily-policy.cjs').configure(pool);
   await require('./src/lib/worker-research-store.cjs').ensure(pool);

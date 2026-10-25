@@ -7,7 +7,7 @@ const feed = 'https://www.linkedin.com/feed/';
 const security = { stage: 'linkedin', code: 'LINKEDIN_AUTH', reason: 'LinkedIn requires a security check.', retryable: false };
 
 function fixture() {
-    let state = {}, time = Date.parse('2026-10-24T10:00:00.000Z'), open = false, menuBlocked = false, navigationTimeout = false;
+    let state = {}, time = Date.parse('2026-10-24T10:00:00.000Z'), open = false, menuBlocked = false, navigationTimeout = false,limit=null;
     const account = { id: 'fixture-account', enabled: true, authorized: false, login_token: 'connect-1', confirmed_identity: viewer, processing_until: 'start-1', attention_reason: '' };
     const statuses = [], holds = [], confirmations = [], reads = [], menuReads = [], permits = [], navigations = [];
     const calls = { opens: 0, closes: 0, claims: 0, fronts: 0, consumed: 0 };
@@ -24,7 +24,7 @@ function fixture() {
         processingAllowed: async () => account.authorized && !account.attention_reason,
         reserveLinkedInCheck: async (_pool, _id, _owner, kind, options) => { permits.push({ kind, ...options }); return menuBlocked ? { waitMs: 60000, reason: 'Identity budget is resting.' } : {}; },
         pauseProcessing: async (_pool, _id, reason, attention) => { holds.push({ reason, attention }); account.authorized = false; if (attention) account.attention_reason = reason; },
-        claim: async () => { calls.claims++; return null; },
+        claim: async () => { calls.claims++; return limit; },
     };
     const reader = {
         inspected: async (_page, options) => {
@@ -48,7 +48,7 @@ function fixture() {
     });
     return { runtime, account, calls, statuses, holds, confirmations, reads, menuReads, permits, navigations, browserOwner,
         set state(value) { state = value; }, set time(value) { time = value; }, set menuBlocked(value) { menuBlocked = value; },
-        set navigationTimeout(value) { navigationTimeout = value; }, set open(value) { open = value; } };
+        set limit(value){limit=value;},set navigationTimeout(value) { navigationTimeout = value; }, set open(value) { open = value; } };
 }
 
 test('Connect opens one browser and passive identity confirmation leaves it idle without claiming leads', async () => {
@@ -132,4 +132,8 @@ test('a resting menu permit never blocks later passive identity confirmation or 
     f.state = { identity: viewer }; await f.runtime.tick();
     assert.deepEqual(f.confirmations, [viewer]); assert.equal(f.runtime.snapshot().status, 'idle');
     assert.equal(f.calls.opens, 1); assert.equal(f.calls.closes, 0);
+});
+
+test('daily cap keeps intent and resume time visible after automatic idle browser closure',async()=>{
+ const f=fixture();await f.runtime.tick();f.state={identity:viewer};await f.runtime.tick();f.account.authorized=true;const resumeAt='2026-10-25T23:00:00.000Z';f.limit={limited:true,used:2,limit:2,resumeAt,timezone:'Africa/Casablanca'};await f.runtime.tick();assert.equal(f.runtime.snapshot().status,'DAILY_LIMIT_REACHED');await f.runtime.recycle('idle timeout');assert.equal(f.runtime.snapshot().status,'DAILY_LIMIT_REACHED');assert.equal(f.runtime.snapshot().nextEligibleAt,resumeAt);assert.equal(f.runtime.snapshot().browserOpen,false);assert.equal(f.account.authorized,true);
 });

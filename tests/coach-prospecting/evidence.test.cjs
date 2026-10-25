@@ -4,7 +4,7 @@ const { test } = require("node:test"),
 const q = require("../../src/lib/coach-prospecting.cjs");
 const url = "https://www.linkedin.com/in/example-coach/";
 const profile = {
-  url,
+  url,followers:{rawText:"2,000 followers",count:2000},
   profileIdentityConfirmed: true,
   headline: "Career strategist | Founder",
   about:

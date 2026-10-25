@@ -27,3 +27,14 @@ test('a final activity or follower decision never starts website research',async
   const r=await researchProspect({...input(),decisionStage:stage},{ai:false,fetchPage:async()=>assert.fail('Final decision cannot crawl')});assert.equal(r.pages.length,0);
  }
 });
+test('an unreadable shell gets one bounded render then terminal review evidence, without a repeat crawl',async()=>{
+ let requests=0,renders=0;const fetchPage=async url=>{requests++;return {url,html:'<div id="app"></div>'};};
+ const renderPage=async url=>{renders++;return {url,html:'<div id="app"></div>'};};
+ const first=await researchProspect(input(),{ai:false,fetchPage,renderPage});assert.equal(requests,1);assert.equal(renders,1);assert.equal(first.crawl.retryable,false);
+ await researchProspect(input(),{ai:false,previousResearch:first,fetchPage,renderPage});assert.equal(requests,1);assert.equal(renders,1);
+});
+test('a site deadline includes time between checkpoint attempts',async()=>{
+ const previous=await researchProspect(input(),{ai:false,fetchPage:async()=>{throw Object.assign(Error('HTTP 503'),{httpStatus:503});}});
+ previous.crawl.firstStartedAt=new Date(Date.now()-30000).toISOString();
+ const final=await researchProspect(input(),{ai:false,previousResearch:previous,fetchPage:async()=>assert.fail('Expired wall-clock site budget')});assert.equal(final.crawl.budgetExhausted,true);assert.equal(final.crawl.retryable,false);
+});

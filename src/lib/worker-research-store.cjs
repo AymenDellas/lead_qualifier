@@ -1,6 +1,6 @@
 'use strict';
 const { randomUUID } = require('node:crypto');
-const { validateResearch, assessProspect, pipelineForAssessment, isUnsafeContact, hostOf } = require('./prospect-qualification.cjs');
+const { emptyResearch,validateResearch, assessProspect, pipelineForAssessment, isUnsafeContact, hostOf } = require('./prospect-qualification.cjs');
 const {json}=require('./linkedin-workers.cjs');
 const schemaReady=new WeakMap();
 async function ensure(pool) {
@@ -53,4 +53,11 @@ async function saveWorkerResearch(pool, input) {
   await client.query('COMMIT'); return {id:lead.id,tier:assessment.tier,pipelineStatus:stage,assessment};
  }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
 }
-module.exports={ensure,saveWorkerResearch};
+async function saveCaptureReview(pool,{job,owner,capture,failure}){
+ const research=validateResearch({...emptyResearch(capture),...capture.prospectQualification?.research,version:1,researchedAt:new Date().toISOString(),engine:'rules',
+  linkedinUrl:job.linkedinUrl,profileIdentityConfirmed:capture.profileIdentityConfirmed===true,headline:capture.headline||'',about:capture.about||'',
+  followers:capture.followers||null,connections:capture.connections||null,lastActivityAt:capture.lastActivityAt||null,activityEvidence:capture.activityEvidence||null,
+  limitations:[...(capture.prospectQualification?.research?.limitations||[]),failure.code+': '+failure.reason]});
+ return saveWorkerResearch(pool,{linkedinUrl:job.linkedinUrl,jobId:job.jobId,owner,research,reviewRequired:true});
+}
+module.exports={ensure,saveWorkerResearch,saveCaptureReview};

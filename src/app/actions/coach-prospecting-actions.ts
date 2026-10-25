@@ -269,7 +269,7 @@ export async function saveCoachReviewAction(
     };
     let next = { ...d, prospecting: { ...previous } };
     if (edit.kind === "FIT") {
-        if(edit.status==='MATCH'&&followersDecision(previous.followers,minFollowers()).status!=='CONTINUE')throw Error('Recheck followers before marking this prospect a match. The count must exceed the configured minimum.');
+        if(edit.status==='MATCH'&&followersDecision(previous.followers,previous.followers?.threshold??minFollowers()).status!=='CONTINUE')throw Error('Recheck followers before marking this prospect a match. The count must exceed the configured minimum.');
       next.prospecting.assessment = {
         ...previous.assessment,
         status: edit.status,
