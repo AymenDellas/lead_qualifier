@@ -47,3 +47,16 @@ isolated PostgreSQL schema, cookie persistence across actual browser launches,
 and the existing frozen 50-lead qualification replay.
 
 Validation: 301 engine/prospect/coach tests pass with zero skips. After removing the now-unused preclaim path, all 18 affected runtime/scheduler tests pass again. TypeScript and lint of changed files pass. The 50-record stored-evidence replay matches the preceding v2 decisions exactly (zero new changes, zero errors). Local account API smoke confirms the agent online, all three non-archived limits at 300, all three review holds retained, and processing paused. No live LinkedIn profile was opened for validation.
+
+Manual sign-in recovery also supports Arabic account-menu/profile/sign-out labels,
+including RTL formatting marks and generated-class portals. Feed authors and
+post links cannot serve as the account-menu identity. Password-reset/navigation
+changes re-arm the one permitted menu opening on the new feed document; an
+unhydrated/missing control does not permanently consume that attempt. Passive
+observation continues without repeatedly clicking an already-opened menu.
+Arabic restriction/identity-warning notices still block confirmation, including
+HTTP 200 pages. The third account's existing signed-in session was verified via
+its rendered account menu and confirmed through the normal manual-connect flow;
+processing stayed paused. Recovery verification: 38 reader/runtime/policy checks,
+the expanded Arabic rendered fixture, 19 final ownership/manual/security checks,
+typecheck and changed-file lint pass. The frozen 50-lead replay has no new deltas.

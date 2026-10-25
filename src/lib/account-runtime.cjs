@@ -156,11 +156,13 @@ function createAccountRuntime(options) {
    // matching feed identity. A security page remains open, without automation.
    const state=await inspect(true);
    if(!isFeed(state.url))return;
+   if(manual.menuGeneration!==pageGeneration){manual.menuAttempted=false;manual.menuGeneration=pageGeneration;}
    const observedSignal=signalGeneration,observedPage=pageGeneration;
    let found=await reader.readSignedInIdentity(surface.page,{manual:true,passive:true});
    if(!found&&!manual.menuAttempted) {
     manual.menuAttempted=true;
-    try{found=await reader.readSignedInIdentity(surface.page,{manual:true,leaveMenuOpen:true,beforeCheck:kind=>permit(kind,{manual:true})});}
+    const request=manual;
+    try{found=await reader.readSignedInIdentity(surface.page,{manual:true,leaveMenuOpen:true,onMenuAttempt:opened=>{if(manual===request)request.menuAttempted=opened;},beforeCheck:kind=>permit(kind,{manual:true})});}
     catch(error){if(error.failure?.code!=='WORKER_PAUSED'&&!transient(error))throw error;}
    }
    if(!found)return;

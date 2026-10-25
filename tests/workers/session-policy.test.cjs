@@ -30,3 +30,9 @@ test('identity polling requires the LinkedIn feed, not an unrelated URL containi
  assert.equal(sameMember({profileUrl:'https://www.linkedin.com/in/one/'},{profileUrl:'https://www.linkedin.com/in/one'}),true);
  assert.equal(sameMember({memberUrn:''},{memberUrn:''}),false);
 });
+test('Arabic restriction and identity-warning notices still block manual confirmation on HTTP 200',()=>{
+ for(const text of ['تم تقييد حسابك مؤقتًا','حسابك مُقيَّد','لقد قيّدنا حسابك','يرجى التحقق من هويتك','لاحظنا نشاط غير معتاد','تحذير أمني']){
+  assert.equal(pageSignal({url:'https://www.linkedin.com/feed/',status:200,text,manual:true})?.code,'LINKEDIN_AUTH');
+ }
+ assert.equal(pageSignal({url:'https://www.linkedin.com/login',manual:true,text:'تسجيل الدخول'}),null);
+});

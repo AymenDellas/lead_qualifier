@@ -11,7 +11,8 @@ function fixture() {
     const account = { id: 'fixture-account', enabled: true, authorized: false, login_token: 'connect-1', confirmed_identity: viewer, processing_until: 'start-1', attention_reason: '' };
     const statuses = [], holds = [], confirmations = [], reads = [], menuReads = [], permits = [], navigations = [];
     const calls = { opens: 0, closes: 0, claims: 0, fronts: 0, consumed: 0 };
-    const page = { on() {}, mainFrame: () => page, url: () => state.url || feed,
+    const events=new (require('node:events').EventEmitter)();
+    const page = { on:(...args)=>events.on(...args), mainFrame: () => page, url: () => state.url || feed,
         goto: async url => { navigations.push(url); if (navigationTimeout) throw Error('Navigation timeout'); },
         bringToFront: async () => { calls.fronts++; }, isClosed: () => !open,
     };
@@ -47,7 +48,7 @@ function fixture() {
         prospecting: {}, researchQueue, discoveryStore: { claimSource: async () => null, pauseAccount: async () => {} },
         now: () => time, sleep: async () => assert.fail('Manual identity confirmation must not sleep on an interaction permit.'), onStatus: status => statuses.push(status),
     });
-    return { runtime, reader, account, calls, statuses, holds, confirmations, reads, menuReads, permits, navigations, browserOwner,
+    return { runtime, reader, page, events, account, calls, statuses, holds, confirmations, reads, menuReads, permits, navigations, browserOwner,
         set state(value) { state = value; }, set time(value) { time = value; }, set menuBlocked(value) { menuBlocked = value; },
         set limit(value){limit=value;},set navigationTimeout(value) { navigationTimeout = value; }, set open(value) { open = value; } };
 }
@@ -149,4 +150,14 @@ test('manual sign-in hands off to headless processing, and a held account return
  await f.runtime.recycle('review');assert.equal(f.runtime.snapshot().manualResumeRequired,true);assert.equal(f.runtime.snapshot().reasonCode,'LINKEDIN_AUTH');
  f.account.login_token='manual-2';await f.runtime.tick();assert.deepEqual(modes,[false,true,false]);assert.ok(f.account.attention_reason,'opening review alone cannot clear the hold');
  await f.runtime.close();
+});
+
+test('password-reset navigation re-arms one manual menu read on the new feed document',async()=>{
+ const f=fixture();await f.runtime.tick();await f.runtime.tick();assert.equal(f.menuReads.length,1);
+ f.state={url:'https://www.linkedin.com/checkpoint/password-reset/'};f.events.emit('framenavigated',f.page);await f.runtime.tick();assert.ok(f.holds.some(h=>h.attention));
+ f.state={url:feed,menuIdentity:viewer};f.events.emit('framenavigated',f.page);await f.runtime.tick();assert.equal(f.menuReads.length,2);assert.deepEqual(f.confirmations,[viewer]);assert.equal(f.runtime.snapshot().status,'idle');assert.equal(f.account.authorized,false);assert.equal(f.calls.claims,0);await f.runtime.close();
+});
+test('a menu that has not hydrated does not permanently consume the manual identity attempt',async()=>{
+ const f=fixture();let attempts=0;const read=f.reader.readSignedInIdentity;f.reader.readSignedInIdentity=async(page,options)=>{if(options.passive)return read(page,options);attempts++;options.onMenuAttempt(attempts>1);if(attempts===1)return null;return read(page,options);};
+ await f.runtime.tick();await f.runtime.tick();assert.equal(f.confirmations.length,0);f.state={menuIdentity:viewer};await f.runtime.tick();assert.equal(attempts,2);assert.deepEqual(f.confirmations,[viewer]);assert.equal(f.calls.claims,0);await f.runtime.close();
 });

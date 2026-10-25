@@ -254,3 +254,20 @@ test('a recent matching-author preview avoids the activity page and profile retu
 test('coach prospecting retains its original business criteria when recent activity is not a qualification requirement',async()=>{
  await fixture(async page=>{const result=await reader.captureProfile(page,person,{requireRecentActivity:false});assert.equal(result.linkedinCapture.complete,true);assert.equal(result.activityStatus,'Inactive');assert.deepEqual(result.emails,['coach@fixture-coach.test']);assert.notEqual(result.decisionStage,'activity');},url=>({status:200,contentType:'text/html',body:url.includes('/recent-activity/')?activity(90):profile}));
 });
+
+test('Arabic navigation and account portal identify the signed-in member without trusting a feed author',async()=>{
+ await fixture(async page=>{
+  await page.setContent(`<header><nav><button onclick="document.querySelector('#account').hidden=false">\u200fصفحتي\u200f</button></nav></header>
+   <main><article><img alt="Feed Author"><p>Feed Author</p><a href="https://www.linkedin.com/in/feed-author/">عرض الملف الشخصي</a><button>تسجيل الخروج</button></article></main>
+   <div hidden id="account"><div><img alt="Arabic Fixture Viewer"><p>Arabic Fixture Viewer</p><p>Business coach</p><a href="https://www.linkedin.com/in/arabic-viewer/">عرض الملف الشخصي</a></div><h3>الحساب</h3><h3>إدارة</h3><button>تسجيل الخروج</button></div>`);
+  assert.equal(await reader.readSignedInIdentity(page,{manual:true,passive:true}),null);const attempted=[],checks=[];
+  const found=await reader.readSignedInIdentity(page,{manual:true,leaveMenuOpen:true,onMenuAttempt:opened=>attempted.push(opened),beforeCheck:async kind=>checks.push(kind)});
+  assert.equal(found.name,'Arabic Fixture Viewer');assert.equal(found.profileUrl,'https://www.linkedin.com/in/arabic-viewer/');assert.deepEqual(checks,['identity']);assert.deepEqual(attempted,[false,true]);
+  assert.equal((await reader.readSignedInIdentity(page,{manual:true,passive:true})).profileUrl,found.profileUrl);
+  await page.setContent('<aside data-view-name="identity-self-profile"><img alt="Arabic Self Viewer"><a href="https://www.linkedin.com/in/arabic-self/">عرض الملف الشخصي</a></aside><main>Feed</main>');
+  assert.equal((await reader.readSignedInIdentity(page,{manual:true,passive:true})).name,'Arabic Self Viewer','the localized View profile label is not a member name');
+ });
+});
+test('missing manual Me control reports no click, allowing a later hydrated control to be tried',async()=>{
+ await fixture(async page=>{await page.setContent('<header><nav>Loading account controls</nav></header><main>Feed</main>');const attempts=[];assert.equal(await reader.readSignedInIdentity(page,{manual:true,onMenuAttempt:opened=>attempts.push(opened)}),null);assert.deepEqual(attempts,[false,false]);});
+});

@@ -9,6 +9,12 @@ const {pageSignal, failure} = require('./linkedin-session-policy.cjs');
 const telemetry=require('./engine-telemetry.cjs');
 const followerPolicy=require('./follower-policy.cjs');
 const text = value => String(value || '').replace(/\s+/g, ' ').trim();
+const identityLabels={
+ me:'^(?:Me|Vous|Yo|Ich|Eu|Io|صفحتي|أنا|انا)$',
+ view:'^(?:View (?:my )?profile|Voir (?:le |mon )?profil|Ver (?:mi )?perfil|Profil anzeigen|عرض (?:الملف الشخصي|ملفي الشخصي|ملفك الشخصي)|مشاهدة (?:الملف الشخصي|ملفي الشخصي))$',
+ signOut:'^(?:Sign out|Log out|Se déconnecter|Cerrar sesión|Abmelden|تسجيل الخروج|تسجيل خروج)$',
+};
+const identityLabel=value=>text(value).replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,'');
 function problem(code, reason) {
  return Object.assign(new Error(reason), {failure: {stage:'linkedin', code, reason, retryable:false}});
 }
@@ -160,9 +166,9 @@ function signedInIdentity(state, now=new Date().toISOString()) {
   const scope=$(node), links=scope.find('a[href]').addBack('a[href]').toArray().filter(n=>profileUrl($(n).attr('href')));
   const urls=[...new Set(links.map(n=>profileUrl($(n).attr('href'))))];
   if(urls.length!==1)return;
-  const link=links.find(n=>!/^view profile$/i.test(text($(n).text())) && text($(n).text()));
+  const link=links.find(n=>!new RegExp(identityLabels.view,'iu').test(identityLabel($(n).text())) && text($(n).text()));
   const name=text(scope.find('h2,h3,.artdeco-entity-lockup__title,.feed-identity-module__actor-meta').first().text()) || text(link&&$(link).text()) || text(scope.find('img[alt]').first().attr('alt')).replace(/^(?:photo of|profile photo of)\s+/i,'');
-  if(!name||/^(?:me|view profile|profile photo|profile)$/i.test(name))return;
+  if(!name||new RegExp(identityLabels.view,'iu').test(identityLabel(name))||new RegExp(identityLabels.me,'iu').test(identityLabel(name))||/^(?:profile photo|profile|الملف الشخصي)$/iu.test(identityLabel(name)))return;
   const identity=cleanIdentity({name,profileUrl:urls[0],checkedAt:now});
   if(identity)identities.push(identity);
  });
@@ -173,18 +179,20 @@ async function readSignedInIdentity(page,options={}) {
  // Manual sign-in observes the page the user is using. It must not click the
  // Me menu repeatedly, navigate, or interpret an unfinished feed as a failure.
  if(options.passive)return signedInIdentity(await inspected(page,options))||await readAccountMenuIdentity(page);
+ options.onMenuAttempt?.(false);
  await page.waitForSelector('nav,header,.feed-identity-module,.profile-card',{timeout:12000});
  let identity=signedInIdentity(await inspected(page,options));
  if(identity)return identity;
  const meSelector='button.global-nav__primary-link-me-menu-trigger,.global-nav__me button,button[aria-label="Me"],header button,nav button,[role="navigation"] button,[role="banner"] button';
- const meControl=info=>/^(?:Me|Vous|Yo|Ich|Eu|Io)$/i.test(text(info.label));
+ const meControl=info=>new RegExp(identityLabels.me,'iu').test(identityLabel(info.label));
  const opened=await clickControl(page,meSelector,meControl,'identity',options);
+ options.onMenuAttempt?.(opened);
  if(!opened)return null;
  // Account menus can render in a portal with generated classes. Observe the
  // opened menu for a bounded time without clicking again or navigating.
  identity=signedInIdentity(await inspected(page,options))||await readAccountMenuIdentity(page);
  if(!identity){
-  await page.waitForFunction(()=>[...document.querySelectorAll('a[href*="/in/"]')].some(a=>a.getClientRects().length&&/view (?:my )?profile|voir (?:le |mon )?profil|ver (?:mi )?perfil/i.test(a.textContent)),{timeout:6000,polling:'mutation'}).catch(()=>{});
+  await page.waitForFunction(pattern=>[...document.querySelectorAll('a[href*="/in/"]')].some(a=>a.getClientRects().length&&new RegExp(pattern,'iu').test((a.textContent||'').replace(/\s+/g,' ').replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,'').trim())),{timeout:6000,polling:'mutation'},identityLabels.view).catch(()=>{});
   identity=signedInIdentity(await inspected(page,options))||await readAccountMenuIdentity(page);
  }
  // A manual window stays on the revealed identity for the user to review.
@@ -199,14 +207,15 @@ async function readAccountMenuIdentity(page) {
  // Only called after opening the real navigation Me control. Modern LinkedIn
  // uses generated classes and puts this account card in an unlabelled portal.
  // Require its explicit View profile link and a single member in that card.
- const candidate=await page.evaluate(()=>{
+ const candidate=await page.evaluate(labels=>{
   const visible=n=>!!n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden';
-  const clean=s=>(s||'').replace(/\s+/g,' ').trim();
+  const clean=s=>(s||'').replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,'').replace(/\s+/g,' ').trim();
+  const meLabel=new RegExp(labels.me,'iu'),viewLabel=new RegExp(labels.view,'iu'),signOutLabel=new RegExp(labels.signOut,'iu');
   const member=n=>{try{const u=new URL(n.href);return u.protocol==='https:'&&u.hostname==='www.linkedin.com'&&/^\/in\/[^/]+\/?$/.test(u.pathname)?u.origin+u.pathname.replace(/\/$/,'')+'/':null;}catch{return null;}};
-  const generic=/^(?:Me|Vous|Yo|Ich|Eu|Io|View profile|View my profile|Voir le profil|Ver perfil|Profil anzeigen|Account|Profile|Manage|Settings|Sign out)$/i;
-  const me=[...document.querySelectorAll('header button,nav button,[role="navigation"] button,[role="banner"] button')].some(n=>visible(n)&&/^(?:Me|Vous|Yo|Ich|Eu|Io)$/i.test(clean(n.getAttribute('aria-label')||n.innerText)));
+  const generic={test:s=>meLabel.test(s)||viewLabel.test(s)||signOutLabel.test(s)||/^(?:Account|Profile|Manage|Settings|الحساب|الملف الشخصي|إدارة|الإعدادات|الاعدادات)$/iu.test(s)};
+  const me=[...document.querySelectorAll('header button,nav button,[role="navigation"] button,[role="banner"] button')].some(n=>visible(n)&&meLabel.test(clean(n.getAttribute('aria-label')||n.innerText)));
   if(!me)return null;
-  const viewLinks=[...document.querySelectorAll('a[href*="/in/"]')].filter(n=>visible(n)&&/^(?:View (?:my )?profile|Voir le profil|Ver perfil|Profil anzeigen)$/i.test(clean(n.innerText||n.getAttribute('aria-label'))));
+  const viewLinks=[...document.querySelectorAll('a[href*="/in/"]')].filter(n=>visible(n)&&!n.closest('main,[role="main"],article')&&viewLabel.test(clean(n.innerText||n.getAttribute('aria-label'))));
   const identities=[];
   for(const view of viewLinks) {
    const url=member(view);if(!url)continue;
@@ -215,7 +224,7 @@ async function readAccountMenuIdentity(page) {
     const links=[...card.querySelectorAll('a[href*="/in/"]')].filter(visible),urls=[...new Set(links.map(member).filter(Boolean))];
     if(urls.length!==1||urls[0]!==url)break;
     // Sign out is an account control, never text in a post or a suggestion.
-    const accountControl=[...card.querySelectorAll('a,button')].some(n=>visible(n)&&/^(?:Sign out|Log out|Se déconnecter|Cerrar sesión|Abmelden)$/i.test(clean(n.innerText||n.getAttribute('aria-label'))));
+    const accountControl=[...card.querySelectorAll('a,button')].some(n=>visible(n)&&signOutLabel.test(clean(n.innerText||n.getAttribute('aria-label'))));
     const named=links.map(n=>clean(n.querySelector('h2,h3,strong,p')?.innerText||n.innerText)).find(s=>s&&!generic.test(s));
     const heading=[...card.querySelectorAll('h2,h3')].filter(visible).map(n=>clean(n.innerText)).find(s=>s&&!generic.test(s));
     const photo=[...card.querySelectorAll('img[alt]')].filter(visible).map(n=>clean(n.alt).replace(/^(?:profile (?:photo|picture) of|photo of)\s+/i,'')).find(s=>s&&!generic.test(s)&&!/^profile (?:photo|picture)$/i.test(s));
@@ -226,7 +235,7 @@ async function readAccountMenuIdentity(page) {
   }
   const urls=[...new Set(identities.map(i=>i.profileUrl))];
   return urls.length===1?identities[0]:null;
- });
+ },identityLabels);
  return cleanIdentity(candidate&&{...candidate,checkedAt:new Date().toISOString()});
 }
 
