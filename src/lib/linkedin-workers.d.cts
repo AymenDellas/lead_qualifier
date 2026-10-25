@@ -3,7 +3,7 @@ export type ActivityCategory='profile'|'contact'|'activity'|'discovery'|'identit
 export type ActivityLimits=Record<ActivityCategory,{hourly:number;daily:number}>;
 export type WorkingHours={timezone:string;days:number[];start:string;end:string};
 export type ActivityUsage={daily:number;hourly:number;actions:Record<ActivityCategory,{daily:number;hourly:number}>};
-export type WorkerAccount = { id: string; label: string; email: string; enabled: boolean; dailyLimit: number; hasPassword: boolean; dailyCount: number; dailyRequests?:number; dailyCachedProfiles?:number; requestKinds?:Record<string,number>; status: string; reason: string; online: boolean; prospectingReady?:boolean; loginPending: boolean; logoutPending?:boolean; signedOut?:boolean; updatedAt: string | null; signedIn?:LinkedInIdentity|null; processingEnabled?:boolean;processingUntil?:string|null;connectedAt?:string|null;attentionReason?:string;dailyRequestLimit?:number;requestIntervalSeconds?:number;activityLimits?:ActivityLimits;workingHours?:WorkingHours|null;activityUsage?:ActivityUsage };
+export type WorkerAccount = { id: string; label: string; email: string; enabled: boolean; dailyLimit: number; hasPassword: boolean; dailyCount: number; dailyRequests?:number; dailyCachedProfiles?:number; requestKinds?:Record<string,number>; status: string; reason: string; runtimeVersion?:string;sessionReady?:boolean;browserOpen?:boolean;nextEligibleAt?:string|null; online: boolean; prospectingReady?:boolean; loginPending: boolean; logoutPending?:boolean; signedOut?:boolean; updatedAt: string | null; signedIn?:LinkedInIdentity|null; processingEnabled?:boolean;processingUntil?:string|null;connectedAt?:string|null;attentionReason?:string;dailyRequestLimit?:number;requestIntervalSeconds?:number;activityLimits?:ActivityLimits;workingHours?:WorkingHours|null;activityUsage?:ActivityUsage };
 export type WorkerAccountEvent={id:string;kind:string;message:string;createdAt:string};
 export type WorkerSettings = { revision: number; activeCount: number; accounts: WorkerAccount[]; supervisorOnline?:boolean };
 export function ensure(pool: unknown): Promise<void>;
@@ -16,7 +16,7 @@ export function pauseProcessing(pool:unknown,id:string,reason?:string,attention?
 export function accountEvents(pool:unknown,id:string):Promise<WorkerAccountEvent[]>;
 export function retryFailed(pool:unknown):Promise<{queuedCount:number;researchOnly:number;scrapeCount:number}>;
 export function enqueue(pool: unknown, urls: unknown[], options?: {nativePostProcess?: boolean;targetRegion?: string;jobId?: string}): Promise<{ jobs: string[]; queuedCount: number; skipped: {url: unknown;reason: string}[]; queued: {id:string;url:string}[] }>;
-export function queueStatus(pool: unknown): Promise<any>;
+export function queueStatus(pool: unknown,options?:{includeHistory?:boolean}): Promise<any>;
 export function queueCandidates(pool: unknown): Promise<{id:string;linkedin_url:string;location:string;fit_score:number|null;created_at:string}[]>;
 export function skipCompletedDuplicates(pool: unknown): Promise<number>;
 export function jobStatus(pool: unknown, id: string): Promise<any>;

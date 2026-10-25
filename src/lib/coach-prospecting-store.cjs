@@ -382,6 +382,11 @@ async function pauseAccount(pool, accountId, message) {
     );
   });
 }
+async function releaseSource(pool,runId,owner) {
+  // A global account pause suspends discovery without individually stopping
+  // that campaign. A user-cancelled/held run cannot be reactivated here.
+  return pool.query("UPDATE compel_prospect_runs SET status='PENDING',owner=NULL,lease_until=NULL,updated_at=NOW() WHERE id=$1 AND owner=$2 AND status='RUNNING'",[runId,owner]);
+}
 async function runIsActive(pool, id) {
   const r = await pool.query(
     "SELECT status FROM compel_prospect_runs WHERE id=$1",
@@ -590,6 +595,7 @@ module.exports = {
   sourceProgress,
   changeRun,
   pauseAccount,
+  releaseSource,
   runIsActive,
   finishProfile,
   refreshRuns,

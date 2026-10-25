@@ -1,6 +1,6 @@
 "use strict";
 const store = require("./coach-prospecting-store.cjs");
-const {firstControl}=require("./linkedin-browser-page.cjs");
+const {firstControl,pressControl,controlPoint}=require("./linkedin-browser-page.cjs");
 const { researchProspect } = require("./prospect-research.cjs");
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function readDiscoveryState(page) {
@@ -18,7 +18,7 @@ async function scrollList(page) {
   try {
     for(const list of lists) {
       const scrollable=await list.evaluate(n=>n.getClientRects().length&&n.scrollHeight>n.clientHeight+100&&['auto','scroll'].includes(getComputedStyle(n).overflowY)&&n.querySelectorAll('a[href*="/in/"]').length>2);
-      if(scrollable){await list.hover();hovered=true;break;}
+      if(scrollable){const point=await controlPoint(list);await page.mouse.move(point.x,point.y);hovered=true;break;}
     }
     if(!hovered)await page.mouse.move(600,500);
     await page.mouse.wheel({deltaY:650});
@@ -27,7 +27,7 @@ async function scrollList(page) {
 async function nextSearchPage(page, urls, beforeCheck) {
   const next=await firstControl(page,'main button,main a,.artdeco-pagination button,.artdeco-pagination a',n=>/^next(?:\s+page)?$/i.test(n.label.replace(/\s+/g,' ').trim()));
   if(!next)return 'END';
-  try {await beforeCheck?.('discovery');await next.click();}
+  try {await beforeCheck?.('discovery');await pressControl(page,next);}
   finally {await next.dispose();}
   try {
     const changed = await page.waitForFunction(
@@ -203,7 +203,7 @@ async function discover(
     );
     return { done: true };
   } catch (error) {
-    if(error.failure?.code==='WORKER_PAUSED'){await store.pauseAccount(pool,run.account_id,error.failure.reason);return {stopped:true};}
+    if(error.failure?.code==='WORKER_PAUSED'){await store.releaseSource(pool,run.id,owner);return {stopped:true};}
     if (blocked) {
       await store.pauseAccount(pool, run.account_id, blocked);
       return { paused: blocked };

@@ -21,8 +21,9 @@ function externalUrl(value, redirected=false) {
 }
 async function snapshot(page) {
  return page.evaluate(() => {
-  const roots = [...document.querySelectorAll('main,header,nav,[role="dialog"],.feed-identity-module,.profile-card')]
-   .filter(n => !n.parentElement?.closest('main,header,nav,[role="dialog"],.feed-identity-module,.profile-card'));
+  const selector='main,[role="main"],header,[role="banner"],nav,[role="navigation"],dialog,[role="dialog"],.feed-identity-module,.profile-card,[data-view-name="identity-self-profile"],[data-view-name="nav-settings__dropdown"],.global-nav__me';
+  const roots = [...document.querySelectorAll(selector)]
+   .filter(n => !n.parentElement?.closest(selector));
   const content = roots.filter(n => n.getClientRects().length).map(root => {
    const clone = root.cloneNode(true), originals = [root,...root.querySelectorAll('*')], copies = [clone,...clone.querySelectorAll('*')];
    originals.forEach((n,i) => {
@@ -30,12 +31,12 @@ async function snapshot(page) {
     if(n.tagName==='A'&&n.href)copies[i]?.setAttribute('href',n.href);
    });
    clone.querySelectorAll('*').forEach(n => {
-    for(const a of [...n.attributes]) if(!['href','class','id','role','aria-label','aria-hidden','alt','datetime','data-urn','data-view-name'].includes(a.name)) n.removeAttribute(a.name);
+    for(const a of [...n.attributes]) if(!['href','class','id','role','open','aria-label','aria-level','aria-hidden','alt','datetime','data-urn','data-view-name'].includes(a.name)) n.removeAttribute(a.name);
    });
    return clone.outerHTML;
   }).join('');
   // These are account notices, not phrases found in somebody's post or bio.
-  const alerts = [...document.querySelectorAll('[role="alert"],[role="dialog"]')].filter(n => n.getClientRects().length).map(n => n.innerText).join('\n');
+  const alerts = [...document.querySelectorAll('[role="alert"],dialog,[role="dialog"]')].filter(n => n.getClientRects().length).map(n => n.innerText).join('\n');
   return {url:location.href, title:document.title, notice:alerts.slice(0,12000), html:'<html><body>'+content+'</body></html>'};
  });
 }
@@ -43,7 +44,7 @@ async function inspected(page, options={}, response) {
  options.checkResponse?.(response?.status?.() || 0, page.url());
  const state=await snapshot(page);
  if(Buffer.byteLength(state.html)>2*1024*1024) throw problem('PAGE_CONTENT_SIZE','Rendered LinkedIn content exceeded the reading limit.');
- const signal=pageSignal({url:state.url,status:response?.status?.()||0,text:state.title+'\n'+state.notice});
+ const signal=pageSignal({url:state.url,status:response?.status?.()||0,text:state.title+'\n'+state.notice,manual:options.manual===true});
  if(signal) throw Object.assign(new Error(signal.reason),{failure:failure(signal)});
  return state;
 }
@@ -52,22 +53,45 @@ async function firstControl(page, selector, match=()=>true) {
  let selected=null;
  for(const el of elements) {
   try {
+   if(selected){await el.dispose();continue;}
    const info=await el.evaluate(n=>({href:n.href||'',label:n.getAttribute('aria-label')||n.textContent||'',visible:!!n.getClientRects().length,disabled:!!n.disabled||n.getAttribute('aria-disabled')==='true'}));
    if(!selected&&info.visible&&!info.disabled&&match(info)) selected=el;
    else await el.dispose();
-  }catch(error){await el.dispose().catch(()=>{});throw error;}
+  }catch(error){await el.dispose().catch(()=>{});if(!detachedControl(error)){await selected?.dispose().catch(()=>{});throw error;}}
  }
  return selected;
 }
+function detachedControl(error) {
+ return /Node is detached from document|Attempted to use detached Frame|JSHandle is disposed/i.test(error?.message||'');
+}
+async function controlPoint(el) {
+ // ElementHandle.click/hover wait on animation frames before scrolling. Chrome
+ // can suspend those frames while minimized. Use native scrolling, measured
+ // rendered bounds, and ordinary browser pointer input instead.
+ await el.scrollIntoView();
+ const box=await el.boundingBox();
+ if(!box||box.width<=0||box.height<=0)throw problem('PAGE_CHANGED','The rendered control is no longer available. Processing stopped before clicking.');
+ return {x:box.x+box.width/2,y:box.y+box.height/2};
+}
+async function pressControl(page,el) {
+ const point=await controlPoint(el);await page.mouse.click(point.x,point.y);
+}
 async function clickControl(page, selector, match, kind, options={}) {
- const el=await firstControl(page,selector,match);
- if(!el) return false;
- try {
-  await inspected(page,options);
-  await options.beforeCheck?.(kind);
-  await el.click();
-  return true;
- } finally {await el.dispose();}
+ const probe=await firstControl(page,selector,match);
+ if(!probe)return false;
+ await probe.dispose();
+ await inspected(page,options);
+ await options.beforeCheck?.(kind);
+ // The activity permit can wait while LinkedIn hydrates its navigation. Never
+ // retain a DOM handle across that wait; reacquire the visible control instead.
+ for(let attempt=0;attempt<2;attempt++) {
+  const el=await firstControl(page,selector,match);
+  if(!el)return false;
+  try {await pressControl(page,el);return true;}
+  catch(error){if(!detachedControl(error)||attempt===1)throw error;}
+  finally {await el.dispose().catch(()=>{});}
+ }
+ return false;
 }
 async function openProfile(page, person, options={}) {
  const expected=profileUrl(person);
@@ -75,10 +99,31 @@ async function openProfile(page, person, options={}) {
  await options.beforeCheck?.('profile_page');
  const response=await page.goto(expected,{waitUntil:'domcontentloaded',timeout:45000});
  await inspected(page,options,response);
- await page.waitForSelector('main h1',{timeout:12000});
- const state=await inspected(page,options);
- if(profileUrl(state.url)!==expected) throw problem('PROFILE_IDENTITY','LinkedIn opened a different profile. No facts were assigned to the requested person.');
- return state;
+ if([404,410].includes(response?.status?.()))throw problem('PROFILE_UNAVAILABLE','The queued profile is no longer available. No profile facts were assigned.');
+ // Navigation's DOMContentLoaded can precede the rendered member card. Use
+ // the SAME identity check for readiness and extraction, including visibility,
+ // rather than waking on a heading whose photo/self link is still hydrating.
+ // This only observes the current page: no navigation retry or extra request.
+ const deadline=Date.now()+12000;
+ do {
+  const state=await inspected(page,options);
+  if(profileUrl(state.url)!==expected)throw problem('PROFILE_REDIRECT','The queued URL redirected to another profile. No facts were assigned to the requested person.');
+  try{parseProfile(state,person,options.accountId);return state;}
+  catch(error){if(error.failure?.code!=='PROFILE_IDENTITY')throw error;}
+  await new Promise(resolve=>setTimeout(resolve,250));
+ }while(Date.now()<deadline);
+ throw problem('PAGE_CHANGED','The LinkedIn profile heading did not load in the supported layout. Processing paused; queued profiles are retained.');
+}
+async function profileDiagnostics(page) {
+ // Bounded rendered structure only: no session state, cookies, input values,
+ // scripts, hidden application data or network responses are inspected.
+ const structure=await page.evaluate(()=>{
+  const visible=n=>!!n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden';
+  return {path:location.pathname,title:document.title,
+   headings:[...document.querySelectorAll('h1,h2,h3,[role="heading"]')].filter(visible).slice(0,30).map(n=>({tag:n.tagName,role:n.getAttribute('role'),level:n.getAttribute('aria-level'),text:(n.innerText||'').trim().slice(0,180),parents:[n.parentElement,n.parentElement?.parentElement,n.parentElement?.parentElement?.parentElement].filter(Boolean).map(p=>({tag:p.tagName,role:p.getAttribute('role'),view:p.getAttribute('data-view-name'),class:p.className}))})),
+   landmarks:[...document.querySelectorAll('main,[role="main"]')].map(n=>({tag:n.tagName,role:n.getAttribute('role'),text:(n.innerText||'').slice(0,12000)}))};
+ });
+ return structure;
 }
 function signedInIdentity(state, now=new Date().toISOString()) {
  const $=cheerio.load(state.html), identities=[];
@@ -86,7 +131,9 @@ function signedInIdentity(state, now=new Date().toISOString()) {
  // or the profile currently being inspected.
  const scopes=$('.feed-identity-module,.profile-card:has(a[href*="/me/"]),.profile-card:has(a[href*="/dashboard/"]),[data-view-name="identity-self-profile"],.global-nav__me,[data-view-name="nav-settings__dropdown"]');
  scopes.each((_i,node)=>{
-  const scope=$(node), links=scope.find('a[href]').toArray().filter(n=>profileUrl($(n).attr('href')));
+  // LinkedIn also renders identity-self-profile on the profile link itself.
+  // find() only visits descendants, so excluding that anchor loses the viewer.
+  const scope=$(node), links=scope.find('a[href]').addBack('a[href]').toArray().filter(n=>profileUrl($(n).attr('href')));
   const urls=[...new Set(links.map(n=>profileUrl($(n).attr('href'))))];
   if(urls.length!==1)return;
   const link=links.find(n=>!/^view profile$/i.test(text($(n).text())) && text($(n).text()));
@@ -99,44 +146,131 @@ function signedInIdentity(state, now=new Date().toISOString()) {
  return urls.length===1?identities[0]:null;
 }
 async function readSignedInIdentity(page,options={}) {
+ // Manual sign-in observes the page the user is using. It must not click the
+ // Me menu repeatedly, navigate, or interpret an unfinished feed as a failure.
+ if(options.passive)return signedInIdentity(await inspected(page,options))||await readAccountMenuIdentity(page);
  await page.waitForSelector('nav,header,.feed-identity-module,.profile-card',{timeout:12000});
  let identity=signedInIdentity(await inspected(page,options));
  if(identity)return identity;
- const opened=await clickControl(page,'button.global-nav__primary-link-me-menu-trigger,.global-nav__me button,button[aria-label="Me"]',()=>true,'identity',options);
+ const meSelector='button.global-nav__primary-link-me-menu-trigger,.global-nav__me button,button[aria-label="Me"],header button,nav button,[role="navigation"] button,[role="banner"] button';
+ const meControl=info=>/^(?:Me|Vous|Yo|Ich|Eu|Io)$/i.test(text(info.label));
+ const opened=await clickControl(page,meSelector,meControl,'identity',options);
  if(!opened)return null;
- await page.waitForSelector('.global-nav__me a[href*="/in/"],[data-view-name="nav-settings__dropdown"] a[href*="/in/"]',{timeout:6000}).catch(()=>{});
- identity=signedInIdentity(await inspected(page,options));
- // Close the menu through its actual button so it cannot cover later controls.
- const control=await firstControl(page,'button.global-nav__primary-link-me-menu-trigger,.global-nav__me button,button[aria-label="Me"]');
- if(control)try{await control.click();}finally{await control.dispose();}
+ // Account menus can render in a portal with generated classes. Observe the
+ // opened menu for a bounded time without clicking again or navigating.
+ const deadline=Date.now()+6000;
+ do {
+  identity=signedInIdentity(await inspected(page,options))||await readAccountMenuIdentity(page);
+  if(identity)break;
+  await new Promise(resolve=>setTimeout(resolve,200));
+ }while(Date.now()<deadline);
+ // A manual window stays on the revealed identity for the user to review.
+ if(!options.leaveMenuOpen) {
+  const control=await firstControl(page,meSelector,meControl);
+  if(control)try{await pressControl(page,control);}catch(error){if(!detachedControl(error))throw error;}finally{await control.dispose().catch(()=>{});}
+ }
  return identity;
 }
-function section($, label) {
- return $('main section').toArray().map(n=>$(n)).find(n=>{
-  const heading=n.find('h2').first(),title=text(heading.find('[aria-hidden="true"]').first().text()||heading.text());
-  return n.find('#'+label.toLowerCase().replace(/ /g,'_')).length||title.toLowerCase()===label.toLowerCase();
+
+async function readAccountMenuIdentity(page) {
+ // Only called after opening the real navigation Me control. Modern LinkedIn
+ // uses generated classes and puts this account card in an unlabelled portal.
+ // Require its explicit View profile link and a single member in that card.
+ const candidate=await page.evaluate(()=>{
+  const visible=n=>!!n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden';
+  const clean=s=>(s||'').replace(/\s+/g,' ').trim();
+  const member=n=>{try{const u=new URL(n.href);return u.protocol==='https:'&&u.hostname==='www.linkedin.com'&&/^\/in\/[^/]+\/?$/.test(u.pathname)?u.origin+u.pathname.replace(/\/$/,'')+'/':null;}catch{return null;}};
+  const generic=/^(?:Me|Vous|Yo|Ich|Eu|Io|View profile|View my profile|Voir le profil|Ver perfil|Profil anzeigen|Account|Profile|Manage|Settings|Sign out)$/i;
+  const me=[...document.querySelectorAll('header button,nav button,[role="navigation"] button,[role="banner"] button')].some(n=>visible(n)&&/^(?:Me|Vous|Yo|Ich|Eu|Io)$/i.test(clean(n.getAttribute('aria-label')||n.innerText)));
+  if(!me)return null;
+  const viewLinks=[...document.querySelectorAll('a[href*="/in/"]')].filter(n=>visible(n)&&/^(?:View (?:my )?profile|Voir le profil|Ver perfil|Profil anzeigen)$/i.test(clean(n.innerText||n.getAttribute('aria-label'))));
+  const identities=[];
+  for(const view of viewLinks) {
+   const url=member(view);if(!url)continue;
+   let card=view.parentElement,cardName='';
+   for(let depth=0;card&&depth<6&&!['BODY','MAIN','HTML'].includes(card.tagName);depth++,card=card.parentElement) {
+    const links=[...card.querySelectorAll('a[href*="/in/"]')].filter(visible),urls=[...new Set(links.map(member).filter(Boolean))];
+    if(urls.length!==1||urls[0]!==url)break;
+    // Sign out is an account control, never text in a post or a suggestion.
+    const accountControl=[...card.querySelectorAll('a,button')].some(n=>visible(n)&&/^(?:Sign out|Log out|Se déconnecter|Cerrar sesión|Abmelden)$/i.test(clean(n.innerText||n.getAttribute('aria-label'))));
+    const named=links.map(n=>clean(n.querySelector('h2,h3,strong,p')?.innerText||n.innerText)).find(s=>s&&!generic.test(s));
+    const heading=[...card.querySelectorAll('h2,h3')].filter(visible).map(n=>clean(n.innerText)).find(s=>s&&!generic.test(s));
+    const photo=[...card.querySelectorAll('img[alt]')].filter(visible).map(n=>clean(n.alt).replace(/^(?:profile (?:photo|picture) of|photo of)\s+/i,'')).find(s=>s&&!generic.test(s)&&!/^profile (?:photo|picture)$/i.test(s));
+    const paragraph=card.querySelector('img')?[...card.querySelectorAll('p')].filter(visible).map(n=>clean(n.innerText)).find(s=>s&&!generic.test(s)):null;
+    cardName=cardName||heading||named||photo||paragraph||'';
+    if(accountControl&&cardName){identities.push({name:cardName,profileUrl:url});break;}
+   }
+  }
+  const urls=[...new Set(identities.map(i=>i.profileUrl))];
+  return urls.length===1?identities[0]:null;
+ });
+ return cleanIdentity(candidate&&{...candidate,checkedAt:new Date().toISOString()});
+}
+
+// Bounded structural diagnostics for a manual sign-in that cannot identify the
+// viewer. No cookies, form values, auth URLs, feed text or credentials are read.
+async function signInDiagnostics(page) {
+ return page.evaluate(()=>{
+  const visible=n=>!!n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden';
+  const info=n=>({tag:n.tagName,class:n.className,role:n.getAttribute('role'),view:n.getAttribute('data-view-name'),label:n.getAttribute('aria-label')});
+  return {
+   path:location.pathname,
+   controls:[...document.querySelectorAll('header button,nav button,[role="navigation"] button,[role="banner"] button')].filter(visible).slice(0,24).map(n=>({...info(n),text:(n.innerText||'').trim().slice(0,80)})),
+   profileLinks:[...document.querySelectorAll('a[href*="/in/"]')].filter(visible).slice(0,30).map(n=>({
+    ...info(n),ancestors:[n.parentElement,n.parentElement?.parentElement,n.parentElement?.parentElement?.parentElement].filter(Boolean).map(info),
+   })),
+  };
  });
 }
+function section($, label) {
+ return $(':is(main,[role="main"]) section').toArray().reverse().map(n=>$(n)).find(n=>{
+  const heading=n.find('h2,[role="heading"]').filter((_i,h)=>$(h).closest('section')[0]===n[0]).first(),title=text(heading.find('[aria-hidden="true"]').first().text()||heading.text());
+  return n.find('#'+label.toLowerCase().replace(/ /g,'_')).filter((_i,h)=>$(h).closest('section')[0]===n[0]).length||title.toLowerCase()===label.toLowerCase();
+ });
+}
+function profileCard($,expected) {
+ const roots=$(':is(main,[role="main"])'), legacy=roots.find('h1');
+ if(legacy.length===1&&text(legacy.text())) {
+  const top=legacy.closest('section').length?legacy.closest('section'):legacy.parent().parent();
+  if(top.find('.text-body-medium,[data-view-name="profile-card-headline"],a[href*="/overlay/contact-info"],.dist-value,.pv-text-details__left-panel').length)return {heading:legacy,top};
+ }
+ const matches=[];
+ roots.find('a[href*="/overlay/contact-info"]').each((_i,link)=>{
+  let url;try{url=new URL($(link).attr('href'),expected);}catch{return;}
+  if(!/\/overlay\/contact-info\/?$/.test(url.pathname)||profileUrl(url.origin+url.pathname.replace(/\/overlay\/contact-info\/?$/,''))!==expected)return;
+  const top=$(link).closest('section');if(!top.length||matches.some(m=>m.top[0]===top[0]))return;
+  const headings=top.find('h2,[role="heading"][aria-level="1"]').filter((_i,h)=>$(h).closest('section')[0]===top[0]&&text($(h).text()));
+  const ownLink=top.find('a[href]').toArray().some(n=>{try{return profileUrl(new URL($(n).attr('href'),expected).href)===expected;}catch{return false;}});
+  if(headings.length===1&&ownLink)matches.push({heading:headings.first(),top});
+ });
+ return matches.length===1?matches[0]:null;
+}
 function parseProfile(state,person,accountId='',now=new Date().toISOString()) {
- const expected=profileUrl(person), $=cheerio.load(state.html), heading=$('main h1');
- if(!expected||profileUrl(state.url)!==expected||heading.length!==1||!text(heading.text()))throw problem('PROFILE_IDENTITY','The rendered page did not confirm the requested LinkedIn profile.');
- const top=heading.closest('section').length?heading.closest('section'):heading.parent().parent();
- if(!top.find('.text-body-medium,[data-view-name="profile-card-headline"],a[href*="/overlay/contact-info"],.dist-value,.pv-text-details__left-panel').length)throw problem('PROFILE_IDENTITY','A profile heading was present, but its rendered identity card was not confirmed.');
+ const expected=profileUrl(person), $=cheerio.load(state.html),card=expected&&profileUrl(state.url)===expected&&profileCard($,expected);
+ if(!card)throw problem('PROFILE_IDENTITY','The rendered page did not confirm the requested LinkedIn profile.');
+ const {heading,top}=card;
+ if(/^(?:profile (?:not found|unavailable)|page not found|something went wrong)$/i.test(text(heading.text())))throw problem('PROFILE_IDENTITY','The page shows an unavailable profile, not a confirmed member.');
  const name=text(heading.text()), parts=name.split(' '), about=section($,'About'), featured=section($,'Featured');
- const summary=about?text(about.find('.inline-show-more-text,.pv-shared-text-with-see-more,.display-flex.ph5.pv3').first().text()||about.clone().find('h2,button').remove().end().text()):'';
+ const summary=about?text(about.find('.inline-show-more-text,.pv-shared-text-with-see-more,.display-flex.ph5.pv3').first().text()||about.find('p').toArray().map(n=>$(n).text()).join(' ')||about.clone().find('h2,button').remove().end().text()):'';
  const websites=[];
  for(const area of [about,featured]) if(area)area.find('a[href]').each((_i,n)=>{const u=externalUrl($(n).attr('href'));if(u&&!websites.includes(u))websites.push(u);});
  const distance=text(top.find('.dist-value,.distance-badge,[aria-label*="degree connection"]').first().text());
  const connection=/^1st$|1st degree/i.test(distance)?'CONNECTED':/^2nd$|^3rd$|[23](?:nd|rd) degree/i.test(distance)?'NOT_CONNECTED':top.find('button').toArray().some(n=>/^pending$/i.test(text($(n).text())))?'PENDING':'UNKNOWN';
- return {url:expected,firstName:parts[0],lastName:parts.slice(1).join(' '),headline:text(top.find('.text-body-medium.break-words,.text-body-medium,[data-view-name="profile-card-headline"]').first().text()),
-  about:summary,profileLocation:text(top.find('.pv-text-details__left-panel.mt2 .text-body-small,.text-body-small.inline.t-black--light.break-words,[data-view-name="profile-card-location"]').first().text()),
+ // In the generated-class layout the headline is a direct paragraph in the
+ // nearest name container; location is the next paragraph. Do not read the
+ // outer Primary content section or recommended members' paragraphs.
+ const nameBlock=heading.parentsUntil(top).toArray().map(n=>$(n)).find(n=>n.children('p').length);
+ const headline=text(top.find('.text-body-medium.break-words,.text-body-medium,[data-view-name="profile-card-headline"]').first().text()||nameBlock?.children('p').first().text());
+ const location=text(top.find('.pv-text-details__left-panel.mt2 .text-body-small,.text-body-small.inline.t-black--light.break-words,[data-view-name="profile-card-location"]').first().text()||nameBlock?.find('p').filter((_i,n)=>!$(n).find('a').length&&$(n).parent()[0]!==nameBlock[0]&&text($(n).text())!=='·').first().text());
+ return {url:expected,firstName:parts[0],lastName:parts.slice(1).join(' '),headline,
+  about:summary,profileLocation:location,
   profileIdentityConfirmed:true,websites,website:websites[0]||'',websiteSource:websites.length?'visible_profile':'',emails:[],emailSource:'',primaryEmail:'',
   linkedinContact:{accountId,connection,openProfile:'UNKNOWN',checkedAt:now,source:'WORKER',note:'Connection status read from the matching rendered profile. Free messaging is not inferred from a Message button or Premium badge.'},
   activityStatus:'Unknown',lastActivityAt:null,latestPostText:'',status:'PENDING',logs:['Profile identity confirmed from the rendered page.'],
   linkedinAccountId:accountId,linkedinCapture:{version:2,stage:'profile',complete:false,checkedAt:now}};
 }
 function parseContact(state,person) {
- const $=cheerio.load(state.html), modal=$('[role="dialog"]');
+ const $=cheerio.load(state.html), modal=$('dialog,[role="dialog"]');
  let url;try{url=new URL(state.url);}catch{}
  if(!modal.length||!url||profileUrl(url.origin+url.pathname.replace(/\/overlay\/contact-info\/?$/,''))!==profileUrl(person))return null;
  const emails=[],websites=[];
@@ -156,9 +290,9 @@ async function readActivity(page,person,options={}) {
  const routes=$('main a[href]').toArray().map(n=>activityRoute(new URL($(n).attr('href'),state.url).href,person)).filter(Boolean);
  if(!routes.length)return null;
  if(!await clickControl(page,'main a[href*="/recent-activity/"]',n=>routes.includes(n.href),'activity_page',options))return null;
- await page.waitForFunction(()=>/\/recent-activity\//.test(location.pathname),{timeout:12000});
+ await page.waitForFunction(()=>/\/recent-activity\//.test(location.pathname),{timeout:12000,polling:250});
  await inspected(page,options);
- await page.waitForFunction(()=>document.querySelector('main [data-urn*="urn:li:activity"],main .feed-shared-update-v2')||[...document.querySelectorAll('main h2')].some(n=>n.textContent.trim()==='Feed post')||/nothing to see for now/i.test(document.querySelector('main')?.innerText||''),{timeout:10000}).catch(()=>{});
+ await page.waitForFunction(()=>document.querySelector('main [data-urn*="urn:li:activity"],main .feed-shared-update-v2')||[...document.querySelectorAll('main h2')].some(n=>n.textContent.trim()==='Feed post')||/nothing to see for now/i.test(document.querySelector('main')?.innerText||''),{timeout:10000,polling:250}).catch(()=>{});
  const activity=await inspected(page,options);
  return {...extractActivityPage(activity.html,{profileUrl:person,pageUrl:activity.url,now:options.now}),activityCheck:{httpStatus:200,retryable:false}};
 }
@@ -171,11 +305,14 @@ async function captureProfile(page,person,options={}) {
   const $=cheerio.load(state.html);
   if(section($,'About')&&$('main a[href*="/recent-activity/"]').length)break;
   await options.beforeCheck?.('profile');
-  await page.mouse.move(600,500);await page.mouse.wheel({deltaY:650});
+  // A minimized Chrome window may never acknowledge wheel input. Scroll the
+  // rendered document directly; this still runs its ordinary scroll/lazy-load
+  // handlers, without a compositor-dependent pointer command or navigation.
+  await page.evaluate(()=>window.scrollBy({top:650,behavior:'instant'}));
   await page.waitForFunction(()=>{
    const about=document.querySelector('main #about')?.closest('section'),activity=document.querySelector('main a[href*="/recent-activity/"]');
    return about?.getClientRects().length&&activity?.getClientRects().length;
-  },{timeout:2000}).catch(()=>{});
+  },{timeout:2000,polling:250}).catch(()=>{});
   state=await inspected(page,options);
   if(profileUrl(state.url)!==profileUrl(person))throw problem('PROFILE_IDENTITY','The page changed while loading profile sections. Processing stopped.');
  }
@@ -197,15 +334,15 @@ async function captureProfile(page,person,options={}) {
   try{const u=new URL(n.href);return profileUrl(u.origin+u.pathname.replace(/\/overlay\/contact-info\/?$/,''))===profileUrl(person);}catch{return false;}
  },'contact',options);
  if(contactOpened) {
-  await page.waitForSelector('[role="dialog"]',{timeout:8000});
+  await page.waitForFunction(()=>[...document.querySelectorAll('dialog,[role="dialog"]')].some(n=>n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden'),{timeout:8000,polling:250});
   const contact=parseContact(await inspected(page,options),person);
   if(!contact)throw problem('PAGE_CHANGED','The contact panel could not be associated with the requested profile. Saved profile facts are retained.');
   result.emails=contact.emails;result.emailSource=contact.emails.length?'linkedin':'';
   result.websites=[...new Set([...contact.websites,...result.websites])];result.website=result.websites[0]||'';
   if(contact.websites.length)result.websiteSource='contact_modal';
-  const closed=await clickControl(page,'[role="dialog"] button[aria-label*="Dismiss"],[role="dialog"] button[aria-label*="Close"],[role="dialog"] button.artdeco-modal__dismiss',()=>true,'contact',options);
+  const closed=await clickControl(page,':is(dialog,[role="dialog"]) button[aria-label*="Dismiss"],:is(dialog,[role="dialog"]) button[aria-label*="Close"],:is(dialog,[role="dialog"]) button.artdeco-modal__dismiss',()=>true,'contact',options);
   if(!closed)throw problem('PAGE_CHANGED','The contact panel could not be closed. Processing stopped before another action.');
-  await page.waitForFunction(()=>![...document.querySelectorAll('[role="dialog"]')].some(n=>n.getClientRects().length),{timeout:8000});
+  await page.waitForFunction(()=>![...document.querySelectorAll('dialog,[role="dialog"]')].some(n=>n.getClientRects().length),{timeout:8000,polling:250});
  }else if(!resumeContact)result.logs.push('No rendered contact-info control was available. No contact details were guessed.');
  result.linkedinCapture.stage='contact';await options.onCheckpoint?.(result);
  const activity=await readActivity(page,person,options);
@@ -215,4 +352,4 @@ async function captureProfile(page,person,options={}) {
  await options.onCheckpoint?.(result);
  return result;
 }
-module.exports={snapshot,inspected,firstControl,clickControl,signedInIdentity,readSignedInIdentity,parseProfile,parseContact,openProfile,readActivity,captureProfile,externalUrl};
+module.exports={snapshot,inspected,firstControl,controlPoint,pressControl,clickControl,signedInIdentity,readSignedInIdentity,signInDiagnostics,profileDiagnostics,parseProfile,parseContact,openProfile,readActivity,captureProfile,externalUrl};
