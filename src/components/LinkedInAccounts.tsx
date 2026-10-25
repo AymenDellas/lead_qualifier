@@ -11,6 +11,10 @@ async function readSettings(): Promise<WorkerSettings> {
  return response.json();
 }
 function statusLabel(a:WorkerAccount) {
+ if(a.startupStage==='FAILED')return 'Start failed';
+ if(a.status==='DAILY_LIMIT_REACHED')return 'Daily limit reached';
+ if(a.status==='recovering')return 'Recovering';
+ if(a.status==='waiting_browser')return 'Waiting for browser';
  if(a.logoutPending)return a.status==='paused'?'Sign-out needs attention':'Signing out';
  if(a.signedOut)return 'Signed out';
  if(a.online&&a.status==='awaiting_login')return 'Complete sign-in in Chrome';
@@ -22,7 +26,7 @@ function statusLabel(a:WorkerAccount) {
  return a.status==='paused'?'Needs attention':'Offline';
 }
 async function updateAccount(id:string,action:AccountAction):Promise<WorkerSettings> {
- const response=await fetch('/api/linkedin-accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,action,minutes:60})});
+ const response=await fetch('/api/linkedin-accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,action})});
  const value=await response.json();if(!response.ok)throw new Error(value.error||'Could not update account.');
  return value;
 }
@@ -30,8 +34,8 @@ function actionNotice(action:AccountAction) {
  return action==='login'?'Session requested. Complete any sign-in or review in Chrome on the worker computer.':action==='start'?'Batch requested.':action==='pause'?'Processing paused. Your Chrome session and queued work are saved.':'Sign-out requested.';
 }
 function AccountReason({account:a}:{account:WorkerAccount}) {
- const reasons=[...new Set([a.attentionReason,a.reason].filter(Boolean))];
- return <>{reasons.map(reason=><p key={reason} className={`text-xs leading-relaxed break-words ${a.attentionReason?'text-[var(--bad)]':'text-[var(--text-dim)]'}`}>{reason}</p>)}
+ const reasons=[...new Set([a.attentionReason,a.startupReason,a.reason].filter(Boolean))];
+ return <>{a.startupStage&&<p className="text-xs text-[var(--text-faint)]">{a.startupStage}{a.failedStage?` · Failed at ${a.failedStage}`:''}</p>}{a.startupAction&&<p className="text-xs text-[var(--bad)]">{a.startupAction}</p>}{reasons.map(reason=><p key={reason} className={`text-xs leading-relaxed break-words ${a.attentionReason?'text-[var(--bad)]':'text-[var(--text-dim)]'}`}>{reason}</p>)}
   {a.nextEligibleAt&&<p className="text-xs text-[var(--text-dim)]">Next eligible {new Date(a.nextEligibleAt).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}.</p>}
  </>;
 }
@@ -134,7 +138,7 @@ function SupervisorControls({status,error,busy,onStart}:{status:SupervisorStatus
     {starting?<Loader2 className="w-3.5 h-3.5 animate-spin"/>:<Power className="w-3.5 h-3.5"/>}{starting?'Starting…':'Start workers'}
    </button>}
   </div>
-  {status?.message&&status.state!=='online'&&<p className="field-hint">{status.message}</p>}
+  {status?.message&&status.state!=='online'&&<p className="field-hint">{status.stage&&`${status.stage} · `}{status.message} {status.action}</p>}
   {error&&<p role="alert" className="text-sm text-[var(--bad)]">{error}</p>}
  </div>;
 }
@@ -213,7 +217,7 @@ function AccountEditor({initial,liveAccounts,workerControls,workerOnline,onClose
 function AccountActions({account:a,disabled,pauseDisabled=disabled,busy,pendingAction,workerOnline,hasCapacity,advanced=false,onAction}:{account:WorkerAccount;disabled:boolean;pauseDisabled?:boolean;busy:boolean;pendingAction?:AccountAction;workerOnline:boolean;hasCapacity:boolean;advanced?:boolean;onAction:(action:AccountAction)=>void}) {
  const needsSignIn=!!a.attentionReason||!a.connectedAt||a.signedOut;
  const signingIn=a.online&&a.status==='awaiting_login';
- const openingSignIn=a.loginPending||a.online&&a.status==='starting'&&!a.processingEnabled;
+ const openingSignIn=a.startupStage!=='FAILED'&&(a.loginPending||a.online&&a.status==='starting'&&!a.processingEnabled);
  const canStartProcessing=!disabled&&workerOnline&&hasCapacity&&a.enabled&&!!a.connectedAt&&!a.signedOut&&!a.attentionReason&&!openingSignIn&&!signingIn&&!a.logoutPending&&(!a.online||a.sessionReady||a.browserOpen===false);
  return <div className="space-y-2">
   <div className="flex flex-wrap gap-2">
@@ -226,7 +230,7 @@ function AccountActions({account:a,disabled,pauseDisabled=disabled,busy,pendingA
   {workerOnline&&!hasCapacity&&!a.processingEnabled&&<p className="text-xs text-[var(--text-dim)]">Set a processing slot in Manage accounts to start a batch.</p>}
   {workerOnline&&!a.enabled&&<p className="text-xs text-[var(--text-dim)]">Enable this account in Manage accounts to start a batch.</p>}
   {!needsSignIn&&!a.processingEnabled&&a.browserOpen===false&&<p className="text-xs leading-relaxed text-[var(--text-dim)]">Start batch reopens your saved Chrome session.</p>}
-  {a.processingEnabled&&a.processingUntil?<p className="text-xs text-[var(--text-faint)]">1h session · Ends {new Date(a.processingUntil).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</p>:<p className="text-xs text-[var(--text-faint)]">1h session</p>}
+  <p className="text-xs text-[var(--text-faint)]">Processing continues until paused, the daily cap, or an account review.</p>
  </div>;
 }
 function AccountHistory({id,updatedAt}:{id:string;updatedAt:string|null}) {

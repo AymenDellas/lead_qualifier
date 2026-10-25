@@ -119,6 +119,10 @@ function createResearchRunner(options){
  function processJob(job){return telemetry.withLead(job,()=>processJobInner(job));}
  async function processJobInner(job){
   if(!queue.fullCapture(job.resumeResult))throw new Error('Public research requires a complete captured profile.');
+  if(job.websiteContinuation&&job.resumeResult.status==='QUALIFIED'){
+   const result={...job.resumeResult,status:'SKIPPED',previousDecision:'QUALIFIED',logs:[...(job.resumeResult.logs||[]),'Qualification was already decided; redundant remaining crawl skipped.']};
+   await core.complete(pool,job.jobId,owner,result);return {jobId:job.jobId,result,deferred:false};
+  }
   if(job.prospecting&&!await (options.discoveryStore||require('./coach-prospecting-store.cjs')).runIsActive(pool,job.prospecting.runId)) {
    const result={...job.resumeResult,status:'CANCELLED',logs:[...(job.resumeResult.logs||[]),'Prospecting was stopped; no website research was started.']};
    await core.complete(pool,job.jobId,owner,result);return {jobId:job.jobId,result,deferred:false};

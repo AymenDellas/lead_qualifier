@@ -14,12 +14,18 @@ async function isProcessOwner(pid,script) {
    if(!output)return false;
    command=process.platform==='win32'?JSON.parse(output):output;
   }
-  return normalize(command).includes(normalize(path.resolve(script)));
+  const scripts=Array.isArray(script)?script:[script],normalized=normalize(command);
+  if(scripts.some(file=>normalized.includes(normalize(path.resolve(file)))))return true;
+  // A relative Node entry point has unknown cwd. Never misclassify that live
+  // process as dead and erase its lock (the previous code did exactly that).
+  if(scripts.some(file=>normalized.includes(normalize(path.basename(file)))))return null;
+  return false;
  }catch{return null;} // Unknown ownership never authorizes deletion or termination.
 }
-async function clearUnownedProcessLock(file,script) {
+async function clearUnownedProcessLock(file,script,{staleMs=0,now=Date.now}={}) {
  let original,saved;try{original=fs.readFileSync(file,'utf8');saved=JSON.parse(original);}catch{return;}
  if(await isProcessOwner(saved.pid,script)!==false)return;
+ if(now()-Number(saved.heartbeatAt||saved.startedAt||fs.statSync(file).mtimeMs)<staleMs)return;
  if(fs.readFileSync(file,'utf8')===original)fs.unlinkSync(file);
 }
 module.exports={isProcessOwner,clearUnownedProcessLock};

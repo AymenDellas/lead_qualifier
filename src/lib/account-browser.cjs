@@ -225,7 +225,7 @@ function createAccountBrowser({ root, account, onDisconnect, puppeteer, fs = req
         return task;
     }
 
-    return { open, close, isOpen, background: () => windowState('background'), minimize: () => windowState('background'), reveal: () => windowState('normal'), get: () => isOpen() ? entry.surface : null };
+    return { open, close, isOpen, profileDirectory:directory, background: () => windowState('background'), minimize: () => windowState('background'), reveal: () => windowState('normal'), get: () => isOpen() ? entry.surface : null };
 }
 
 module.exports = { createAccountBrowser };

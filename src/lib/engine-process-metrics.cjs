@@ -2,7 +2,7 @@
 const fs=require('node:fs/promises'),{execFile}=require('node:child_process'),{performance}=require('node:perf_hooks');
 function descendants(rows,root){
  const ids=new Set([root]);let changed=true;
- while(changed){changed=false;for(const row of rows)if(ids.has(row.ppid)&&!ids.has(row.pid)){ids.add(row.pid);changed=true;}}
+ while(changed){changed=false;for(const row of rows)if(ids.has(row.ppid)&&!ids.has(row.pid)&&!/^powershell(?:\.exe)?$/i.test(row.name)){ids.add(row.pid);changed=true;}}
  return rows.filter(row=>ids.has(row.pid)&&!/^powershell(?:\.exe)?$/i.test(row.name));
 }
 async function processRows(){
@@ -40,16 +40,18 @@ function createSampler({pid=process.pid,read=processRows,now=Date.now}={}){
   const chrome=rows.filter(row=>/chrome|chromium/i.test(row.name)),mb=bytes=>Math.round(bytes/1048576);
   const treeRssMB=mb(rows.reduce((sum,row)=>sum+row.rss,0));peakMB=Math.max(peakMB,treeRssMB);peakCpuPercent=Math.max(peakCpuPercent,cpuPercent||0);
   previous={at,byPid};
-  return {pid,treeRssMB,chromeRssMB:mb(chrome.reduce((sum,row)=>sum+row.rss,0)),nodeRssMB:mb(rows.find(row=>row.pid===pid)?.rss||0),
+  const chromeIds=new Set(chrome.map(row=>row.pid));
+  const chromeRoots=chrome.filter(row=>!chromeIds.has(row.ppid)).map(root=>{const family=descendants(rows,root.pid);return {pid:root.pid,rssMB:mb(family.reduce((sum,row)=>sum+row.rss,0)),processes:family.length};});
+  return {pid,treeRssMB,chromeRoots,chromeRssMB:mb(chrome.reduce((sum,row)=>sum+row.rss,0)),nodeRssMB:mb(rows.find(row=>row.pid===pid)?.rss||0),
    processes:rows.length,chromeProcesses:chrome.length,cpuPercent,peakTreeRssMB:peakMB,peakCpuPercent,
    cpuAccounting:'one core = 100%; sampled surviving processes',cpuMs:treeCpu,sampleMs:performance.now()-clock};
  };
 }
-function startResourceMonitor({pool,owner,queryStats,intervalMs=15000,log=()=>{}}){
+function startResourceMonitor({pool,owner,queryStats,intervalMs=15000,log=()=>{},onSample=()=>{}}){
  const telemetry=require('./engine-telemetry.cjs'),sample=createSampler();let running=false,closed=false,active=null;
  async function tick(){
   if(running||closed)return;running=true;
-  try{const data={...await sample(),...telemetry.queryRates(queryStats)};
+  try{const data={...await sample(),...telemetry.queryRates(queryStats)};onSample(data);
    await telemetry.ensure(pool);await pool.query(`INSERT INTO compel_engine_resources(owner,pid,data) VALUES($1,$2,$3::jsonb)
     ON CONFLICT(owner) DO UPDATE SET data=EXCLUDED.data,seen_at=NOW()`,[owner,process.pid,JSON.stringify(data)]);
   }catch(error){log('Process measurement unavailable: '+error.message);}finally{running=false;}

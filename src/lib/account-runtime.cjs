@@ -18,12 +18,13 @@ function createAccountRuntime(options) {
  const now=options.now||Date.now;
  const log=options.log||(()=>{}),onStatus=options.onStatus||(()=>{});
  let stopped=false,identity=null,manual=null,signal=null,surface=null,watched=null,closing=null,browserAttempted=false;
- let status={status:'idle',reason:'Connect this account to open its saved browser.',runtimeVersion,sessionReady:false,browserOpen:false,accountId};
+ let status={status:'idle',startupStage:'AGENT_ACK',reason:'Agent acknowledged this account. Waiting for work or manual connection.',runtimeVersion,sessionReady:false,browserOpen:false,accountId};
+ let startupFailures=0,recoveringJob=false;
  let handledStart=null,handledLogin=null,handledLogout=null,handlingSignal=null,activeVersion=null,signalGeneration=0,pageGeneration=0,prefetched=null,jobsStarted=0,pendingKinds={};
  const saves=require('./bounded-work.cjs').createBoundedQueue({capacity:options.saveQueueCapacity||6,onError:(error,metadata)=>{
   const reason='PostgreSQL save failed: '+error.message;
   publish('paused',{reason,reasonCode:'DB_SAVE_FAILED',startupStage:'FAILED',failedStage:'DB_SAVE',jobId:metadata?.jobId});
-  log(reason);void core.pauseProcessing(pool,accountId,reason,false,owner,metadata?.version).catch(()=>{});
+  log(reason);options.onSaveError?.(error);
  }});
  async function save(task,jobId){
   const trace=telemetry.current(),version=activeVersion;
@@ -47,7 +48,9 @@ function createAccountRuntime(options) {
  }
  function publish(state,extra={}) {
   status={...status,status:state,reason:'',reasonCode:null,manualResumeRequired:false,url:'',jobId:null,phase:null,runId:null,nextEligibleAt:null,...extra,runtimeVersion,
+   ...(state==='processing'?{startupStage:'PROCESSING'}:{}),
    browserOpen:browserOwner.isOpen(),sessionReady:!!identity&&browserOwner.isOpen(),signedIn:identity,updatedAt:new Date(now()).toISOString()};
+  status.controlVersion=activeVersion;
   onStatus({...status});return status;
  }
  async function account(){return core.readRuntimeAccount(pool,accountId);}
@@ -57,8 +60,8 @@ function createAccountRuntime(options) {
  }
  async function handleSignal(value) {
   if(stopped)return;
-  // A late asset/API response is never enough to declare an account restricted.
-  // Only the main page URL/status and its explicit visible account notice enter here.
+  // A LinkedIn restriction response or rendered security notice stops all
+  // automated work for this account until manual review confirms its identity.
   signal=value?.failure||value;signalGeneration++;identity=null;
   publish('paused',{reason:signal.reason,manualResumeRequired:true,reasonCode:signal.code});
   if(handlingSignal)return handlingSignal;
@@ -86,11 +89,12 @@ function createAccountRuntime(options) {
    check(frame.url());
   }});
   page.on?.('response',response=>{
-   try{if(response.request().isNavigationRequest()&&response.frame()===page.mainFrame())check(response.url(),response.status());}catch{/* Target replaced during navigation. */}
+   try{if([401,403,429,999].includes(response.status())||response.request().isNavigationRequest()&&response.frame()===page.mainFrame())check(response.url(),response.status());}catch{/* Target replaced during navigation. */}
   });
   page.on?.('close',()=>disconnected(new Error('The account tab was closed. Use Open session to reopen it.')));
  }
  async function open() {
+  publish('starting',{startupStage:'BROWSER_STARTING',reason:'Opening this account’s persistent Chrome profile.'});
   browserAttempted=true;
   surface=await browserOwner.open();watch(surface.page);return surface;
  }
@@ -112,6 +116,7 @@ function createAccountRuntime(options) {
   else {
    const action=await (core.recordLinkedInAction||core.reserveLinkedInCheck)(pool,accountId,owner,kind,manualCheck?{manual:true}:{manual:false,version:activeVersion});
    if(action?.stopped)throw controlError(action.reason||'Processing is paused.');
+   if(!manualCheck)await assertActive();
   }
  }
  async function inspect(manualMode=false) {
@@ -123,9 +128,10 @@ function createAccountRuntime(options) {
  async function connect(a) {
   if(a.login_token===handledLogin)return;
   handledLogin=a.login_token;
+  activeVersion=a.control_version||null;
   const consumed=await core.consumeLoginRequest(pool,accountId,a.login_token);
   if(!consumed)return;
-  manual={deadline:now()+600000,menuAttempted:false};signal=null;identity=null;
+  manual={menuAttempted:false};signal=null;identity=null;
   publish('starting',{reason:'Opening this account’s saved browser. Processing stays paused.'});
   const wasOpen=browserOwner.isOpen();
   if(!wasOpen&&browserAttempted)await browserOwner.close();
@@ -133,22 +139,19 @@ function createAccountRuntime(options) {
   await setWindowVisibility(true);
   if(wasOpen) {
    await surface.page.bringToFront?.();
+   if(surface.page.url?.()==='about:blank')await surface.page.goto('https://www.linkedin.com/feed/',{waitUntil:'domcontentloaded',timeout:30000});
   } else {
    // The human explicitly requested connection. Do not submit any credentials,
    // retry navigation, or clear the account's saved cookies/profile.
    try{await surface.page.goto('https://www.linkedin.com/feed/',{waitUntil:'domcontentloaded',timeout:30000});}
    catch(error){if(!browserOwner.isOpen())throw error;log('Connection page is available for manual review: '+error.message);}
   }
-  publish('awaiting_login',{reason:'Complete sign-in or review in the open account browser. Then return here; processing remains paused.'});
+  publish('awaiting_login',{startupStage:'SESSION_REVIEW',reason:'Complete sign-in or review in the open account browser. Then return here; processing remains paused.'});
  }
  async function observeManual(a) {
   if(!browserOwner.isOpen()) {
    manual=null;identity=null;
    publish('paused',{reason:'The account browser was closed. Connect again when you are ready.',reasonCode:'BROWSER_CLOSED'});return;
-  }
-  if(now()>manual.deadline) {
-   manual=null;
-   publish('paused',{reason:'Connection needs your review. The browser stays open; use Open session to check it again.',reasonCode:'CONNECTION_REVIEW'});return;
   }
   try {
    // Manual review can clear a hold only after the human returns to a confirmed
@@ -176,21 +179,21 @@ function createAccountRuntime(options) {
     publish('paused',{reason,manualResumeRequired:true,reasonCode:signal?.code||'ACCOUNT_REVIEW'});return;
    }
    identity=found;manual=null;signal=null;
-   publish('idle',{reason:'Connected. Start the batch when you are ready.'});log('Account connected; the same browser remains open and idle.');
+   publish('idle',{startupStage:'SESSION_VERIFIED',reason:'Connected. Start the batch when you are ready.'});log('Account connected; the same browser remains open and idle.');
   }catch(error){
    if(error.failure?.stage==='linkedin'){await handleSignal(error.failure);return;}
    if(!transient(error))publish('awaiting_login',{reason:'Account identity is not confirmed yet. Check the open browser; no batch has started.'});
   }
  }
  async function prepareProcessing(a) {
-  if(identity&&browserOwner.isOpen())return true;
+  if(identity&&browserOwner.isOpen()){publish('ready',{startupStage:'SESSION_VERIFIED',reason:'Verified session reused.'});return true;}
   const startToken=a.processing_token||a.control_version||String(a.processing_until);
   if(handledStart===startToken)return false;
-  handledStart=startToken;signal=null;
+  signal=null;
   publish('starting',{reason:'Opening the saved session and checking the signed-in member.'});
-  await permit('identity');
   if(!browserOwner.isOpen()&&browserAttempted)await browserOwner.close(); // explicit Start permits reopening, never an automatic retry
   await open();
+  await permit('identity');
   await assertActive();
   await surface.page.goto('https://www.linkedin.com/feed/',{waitUntil:'domcontentloaded',timeout:30000});
   await inspect();
@@ -199,12 +202,20 @@ function createAccountRuntime(options) {
   if(!a.confirmed_identity||!sameMember(a.confirmed_identity,found)) {
    await handleSignal(sessionFailure({code:'ACCOUNT_MISMATCH',reason:'The saved session does not match the connected account. Review it before processing.'}));return false;
   }
-  await assertActive();identity=found;publish('ready',{reason:'Connected. Looking for queued work.'});return true;
+  await assertActive();identity=found;handledStart=startToken;startupFailures=0;publish('ready',{startupStage:'SESSION_VERIFIED',reason:'Signed-in member verified. Processing queued work.'});return true;
  }
  async function recoverJob(job,error,capture) {
-  const failure=error.failure||{stage:'linkedin',code:'PAGE_CHANGED',reason:'The LinkedIn page could not be read. Review the open browser before resuming.',retryable:false};
+  if(stopped){await core.releaseClaim?.(pool,job.jobId,owner);return;}
+  const crashed=!error.failure&&/target closed|session closed|page crashed|connection closed|protocol error|navigation timeout|browser.*(?:closed|disconnect)/i.test(error.message);
+  const failure=error.failure||(crashed?{stage:'linkedin',code:'BROWSER_CRASH',reason:'Chrome failed during profile reading; saved checkpoint retained.',retryable:true}:{stage:'linkedin',code:'PAGE_CHANGED',reason:'The LinkedIn page could not be read. Review the saved evidence.',retryable:false});
   const result={...(capture||job.resumeResult||{}),url:job.linkedinUrl,status:failure.retryable===false?'REVIEW':'ERROR',failure,
    logs:[...(capture?.logs||[]),'Profile reading stopped: '+error.message]};
+  if(crashed&&(job.retryCount||0)<2){
+   await core.defer(pool,job.jobId,owner,result,new Date(now()).toISOString());
+   await browserOwner.close();identity=null;surface=null;handledStart=null;
+   publish('recovering',{startupStage:'BROWSER_STARTING',reason:'Chrome will reopen and resume this profile from its checkpoint (bounded attempt '+((job.retryCount||0)+1)+'/2).'});return;
+  }
+  if(crashed){result.status='REVIEW';result.failure.retryable=false;result.failure.reason='Chrome retry attempts exhausted. Review the saved evidence.';}
   if(['PROFILE_REDIRECT','PROFILE_UNAVAILABLE'].includes(failure.code)) {
    await core.complete(pool,job.jobId,owner,result);
    publish('ready',{reason:'Skipped an unavailable or redirected profile URL. Continuing with the saved queue.'});
@@ -220,9 +231,7 @@ function createAccountRuntime(options) {
    else publish('idle',{reason:failure.reason});
   } else {
    await core.complete(pool,job.jobId,owner,result);
-   await core.pauseProcessing(pool,accountId,failure.reason,false,owner,activeVersion);
-   publish('paused',{reason:failure.reason,reasonCode:failure.code});
-   await setWindowVisibility(true);
+   publish('ready',{reason:'Saved for review: '+failure.reason,reasonCode:failure.code});
   }
  }
  function processJob(job) {
@@ -251,10 +260,11 @@ function createAccountRuntime(options) {
    await flushStatistics(job.jobId);
    await save(async()=>{await researchQueue.handoff(pool,job.jobId,owner,completeCapture);options.wakeResearch?.();log('Captured profile handed to public research: '+job.jobId);},job.jobId);
    publish('ready',{reason:'Profile captured. Saving and public research continue separately.'});
-  }catch(error){const checkpoint=captured;await flushStatistics(job.jobId);await save(()=>recoverJob(job,error,checkpoint),job.jobId);}
+  }catch(error){const checkpoint=captured;recoveringJob=true;await flushStatistics(job.jobId);await save(async()=>{try{await recoverJob(job,error,checkpoint);}finally{recoveringJob=false;}},job.jobId);}
  }
  async function tick() {
   if(stopped)return;
+  if(recoveringJob)await saves.idle();
   const a=await account();
   if(!a){await close();return;}
   if(a.logout_token) {
@@ -279,15 +289,14 @@ function createAccountRuntime(options) {
    if(status.status==='paused'&&status.reasonCode)return; // retain actionable failures until an explicit recovery
    publish('idle',{reason:browserOwner.isOpen()?'Connected. The batch is paused; your browser stays open.':'The saved session is closed. Start the batch to reopen it, or use Open session.'});return;
   }
+  let claimedJob=null,claimedRun=null;
   try {
    if(a.control_version!==activeVersion&&saves.error){await saves.idle();saves.clearError();}
    activeVersion=a.control_version||null;
-   if(!await prepareProcessing(a))return;
-   await assertActive();
-   await setWindowVisibility(false);
    await assertActive();
    const run=await discoveryStore.claimSource?.(pool,accountId,owner);
    if(run) {
+    claimedRun=run;if(!await prepareProcessing(a)){await discoveryStore.releaseSource?.(pool,run.id,owner);return;}await setWindowVisibility(false);
     publish('processing',{phase:'PROSPECT_DISCOVERY',runId:run.id,reason:'Collecting the requested prospect list.'});
     const result=await prospecting.discover(surface.page,run,{pool,owner,log,beforeCheck:async kind=>{
      if(!await discoveryStore.runIsActive(pool,run.id))throw controlError('The prospecting run was stopped.');
@@ -305,15 +314,26 @@ function createAccountRuntime(options) {
     await core.pauseProcessing(pool,accountId,reason,false,owner,activeVersion);publish('paused',{reason,reasonCode:'PROFILE_BUDGET'});return;
    }
    if(reservation?.job){
+    claimedJob=reservation.job;
+    if(!researchQueue.fullCapture(reservation.job.resumeResult)){if(!await prepareProcessing(a)){await core.releaseClaim?.(pool,reservation.job.jobId,owner);return;}await setWindowVisibility(false);}
     await processJob(reservation.job);
    }
    else publish('ready',{reason:'No profiles waiting for LinkedIn capture. Website research may still be running.'});
   }catch(error){
+   if(claimedJob)await core.releaseClaim?.(pool,claimedJob.jobId,owner);
+   if(claimedRun)await discoveryStore.releaseSource?.(pool,claimedRun.id,owner);
+   if(stopped)return;
    if(error.failure?.stage==='linkedin')await handleSignal(error.failure);
+   else if(error.code==='BROWSER_CAPACITY'){handledStart=null;publish('waiting_browser',{startupStage:'BROWSER_STARTING',reason:error.message,reasonCode:error.code});}
+   else if(saves.error){publish('recovering',{startupStage:'FAILED',failedStage:'DB_SAVE',reason:saves.error.message,reasonCode:'DB_SAVE_FAILED'});}
+   else if(!error.failure&&++startupFailures<3){
+    handledStart=null;identity=null;surface=null;await browserOwner.close().catch(()=>{});
+    publish('recovering',{startupStage:'FAILED',failedStage:'BROWSER_STARTING',reason:error.message,reasonCode:error.code||'BROWSER_START_FAILED',action:'Retrying automatically, attempt '+startupFailures+'/3. Check Chrome/profile ownership if it persists.'});
+   }
    else {
     const reason=error.failure?.reason||'The account session stopped: '+error.message;
     await core.pauseProcessing(pool,accountId,reason,false,owner,activeVersion);
-    publish('paused',{reason,reasonCode:error.failure?.code||'SESSION_ERROR'});
+    publish('paused',{startupStage:error.failure?.stage==='control'?'AGENT_ACK':'FAILED',failedStage:'BROWSER_STARTING',reason,reasonCode:error.failure?.code||error.code||'SESSION_ERROR',action:'Review the local Chrome profile and worker log, then Start again.'});
     if(error.failure?.stage!=='control')await setWindowVisibility(true);
    }
   }
@@ -330,10 +350,12 @@ function createAccountRuntime(options) {
  }
  function disconnected(error) {
   identity=null;surface=null;
-  publish('paused',{reason:error?.message||'The account browser closed. Reopen it explicitly to continue.',reasonCode:'BROWSER_CLOSED'});
-  void core.pauseProcessing(pool,accountId,status.reason,false,owner).catch(e=>log('Could not save browser stop: '+e.message));
+  handledStart=null;
+  publish(manual||signal?'paused':'recovering',{startupStage:manual||signal?'SESSION_REVIEW':'BROWSER_STARTING',reason:error?.message||'Chrome disconnected. The current job can resume from its checkpoint.',reasonCode:'BROWSER_CLOSED'});
  }
- return {tick,permit,handleSignal,close,disconnected,flush:()=>flushStatistics(status.jobId),drain:()=>saves.idle(),snapshot:()=>({...status,jobsStarted,pendingSaves:saves.size})};
+ async function recycle(reason){await saves.idle();await browserOwner.close();identity=null;surface=null;handledStart=null;publish('ready',{reason:'Chrome closed: '+reason+'. Saved sign-in is retained.'});}
+ async function recoverSaves(){await saves.idle();await releasePrefetch();await core.releaseCaptureClaims?.(pool,accountId,owner);saves.clearError();recoveringJob=false;publish('ready',{reason:'Save queue recovered. Pending profiles resume from PostgreSQL checkpoints.'});}
+ return {tick,permit,handleSignal,close,disconnected,recycle,recoverSaves,waitForBrowser:reason=>publish('waiting_browser',{startupStage:'BROWSER_STARTING',reason}),requestStop:()=>{stopped=true;},flush:()=>flushStatistics(status.jobId),drain:()=>saves.idle(),snapshot:()=>({...status,jobsStarted,pendingSaves:saves.size,controlVersion:activeVersion,saveError:saves.error?.message||null,prospectingVersion:'COACH_EVIDENCE_V1'})};
 }
 
 module.exports={createAccountRuntime,runtimeVersion};

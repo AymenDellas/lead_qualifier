@@ -20,14 +20,14 @@ export async function PUT(request: Request) {
 export async function POST(request: Request) {
  await requireWorkerAdmin();
  try {
-  const {id,action,minutes} = await request.json();
+  const {id,action} = await request.json();
   if (typeof id !== 'string' || !/^(?:legacy-\d+|[a-f0-9-]{36})$/.test(id)) throw new Error('Invalid account.');
   if (action==='logout') {
    await requestLogout(pool,id);
    return NextResponse.json(await settings(pool));
   }
   if(action==='start'){
-   await startProcessing(pool,id,minutes??60);
+   await startProcessing(pool,id);
    return NextResponse.json(await settings(pool));
   }
   if(action==='pause'){

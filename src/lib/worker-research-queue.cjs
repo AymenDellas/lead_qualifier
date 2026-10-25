@@ -22,7 +22,7 @@ async function migrate(pool){
  await pool.query(`WITH recoverable AS (
   SELECT id,COALESCE(checkpoint,result) AS capture
   FROM compel_worker_jobs WHERE lane='capture' AND
-   (status='pending' OR status='processing' AND lease_until<NOW())
+   status='pending'
    AND ${completeSql('(COALESCE(checkpoint,result))')} FOR UPDATE SKIP LOCKED
  ) UPDATE compel_worker_jobs j SET lane='research',status='pending',checkpoint=r.capture,
   owner=NULL,account_id=NULL,lease_until=NULL FROM recoverable r WHERE j.id=r.id`);
@@ -45,7 +45,7 @@ async function claim(pool,owner){
  await ensure(pool);await migrate(pool);
  const rows=await pool.query(`WITH next AS (
   SELECT id FROM compel_worker_jobs WHERE lane='research' AND
-   (status='pending' AND (retry_at IS NULL OR retry_at<=NOW()) OR status='processing' AND lease_until<NOW())
+   (status='pending' AND (retry_at IS NULL OR retry_at<=NOW()))
    AND ${completeSql('checkpoint')}
    ORDER BY created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1
  ) UPDATE compel_worker_jobs j SET status='processing',owner=$1,account_id=NULL,lease_until=NOW()+interval '15 minutes'

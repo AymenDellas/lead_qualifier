@@ -3,7 +3,7 @@ export type ActivityCategory='profile'|'contact'|'activity'|'discovery'|'identit
 export type ActivityLimits=Record<ActivityCategory,{hourly:number;daily:number}>;
 export type WorkingHours={timezone:string;days:number[];start:string;end:string};
 export type ActivityUsage={daily:number;hourly:number;actions:Record<ActivityCategory,{daily:number;hourly:number}>};
-export type WorkerAccount = { id: string; label: string; email: string; enabled: boolean; dailyLimit: number; hasPassword: boolean; dailyCount: number; dailyRequests?:number; dailyCachedProfiles?:number; requestKinds?:Record<string,number>; status: string; reason: string; runtimeVersion?:string;sessionReady?:boolean;browserOpen?:boolean;nextEligibleAt?:string|null; online: boolean; prospectingReady?:boolean; loginPending: boolean; logoutPending?:boolean; signedOut?:boolean; updatedAt: string | null; signedIn?:LinkedInIdentity|null; processingEnabled?:boolean;processingUntil?:string|null;connectedAt?:string|null;attentionReason?:string;dailyRequestLimit?:number;requestIntervalSeconds?:number;activityLimits?:ActivityLimits;workingHours?:WorkingHours|null;activityUsage?:ActivityUsage };
+export type WorkerAccount = { startupStage?:string|null;failedStage?:string|null;startupReason?:string;startupAction?:string; id: string; label: string; email: string; enabled: boolean; dailyLimit: number; hasPassword: boolean; dailyCount: number; dailyRequests?:number; dailyCachedProfiles?:number; requestKinds?:Record<string,number>; status: string; reason: string; runtimeVersion?:string;sessionReady?:boolean;browserOpen?:boolean;nextEligibleAt?:string|null; online: boolean; prospectingReady?:boolean; loginPending: boolean; logoutPending?:boolean; signedOut?:boolean; updatedAt: string | null; signedIn?:LinkedInIdentity|null; processingEnabled?:boolean;processingUntil?:string|null;connectedAt?:string|null;attentionReason?:string;dailyRequestLimit?:number;requestIntervalSeconds?:number;activityLimits?:ActivityLimits;workingHours?:WorkingHours|null;activityUsage?:ActivityUsage };
 export type WorkerAccountEvent={id:string;kind:string;message:string;createdAt:string};
 export type WorkerSettings = { revision: number; activeCount: number; accounts: WorkerAccount[]; supervisorOnline?:boolean };
 export function ensure(pool: unknown): Promise<void>;
@@ -11,7 +11,7 @@ export function settings(pool: unknown): Promise<WorkerSettings>;
 export function saveSettings(pool: unknown, body: unknown): Promise<WorkerSettings>;
 export function requestLogin(pool: unknown, id: string): Promise<void>;
 export function requestLogout(pool: unknown, id: string): Promise<void>;
-export function startProcessing(pool:unknown,id:string,minutes?:number):Promise<void>;
+export function startProcessing(pool:unknown,id:string):Promise<void>;
 export function pauseProcessing(pool:unknown,id:string,reason?:string,attention?:boolean,owner?:string|null):Promise<void>;
 export function accountEvents(pool:unknown,id:string):Promise<WorkerAccountEvent[]>;
 export function retryFailed(pool:unknown):Promise<{queuedCount:number;researchOnly:number;scrapeCount:number}>;

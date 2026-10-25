@@ -239,8 +239,8 @@ async function activeAccount(c, id, owner) {
     await c.query(
       `SELECT a.* FROM compel_linkedin_accounts a JOIN compel_worker_sessions s ON s.account_id=a.id
  WHERE a.id=$1 AND a.enabled AND NOT a.archived AND a.signed_out_at IS NULL AND a.logout_requested_at IS NULL AND s.owner=$2 AND s.lease_until>NOW()
- AND a.processing_enabled IS TRUE AND a.processing_until>NOW() AND a.connected_at IS NOT NULL AND a.attention_reason=''
- AND a.id IN(SELECT id FROM compel_linkedin_accounts WHERE enabled AND NOT archived AND signed_out_at IS NULL AND logout_requested_at IS NULL AND processing_enabled IS TRUE AND processing_until>NOW() AND connected_at IS NOT NULL AND attention_reason='' ORDER BY position,id LIMIT(SELECT active_count FROM compel_worker_config WHERE id=1)) FOR SHARE OF a`,
+ AND a.processing_enabled IS TRUE AND a.connected_at IS NOT NULL AND a.attention_reason=''
+ AND (SELECT active_count FROM compel_worker_config WHERE id=1)>0 FOR SHARE OF a`,
       [id, owner],
     )
   ).rows[0];

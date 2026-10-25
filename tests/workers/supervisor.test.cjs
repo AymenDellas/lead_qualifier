@@ -1,73 +1,42 @@
 'use strict';
-const {test}=require('node:test'),assert=require('node:assert/strict');
-const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),{EventEmitter}=require('node:events');
-const source=fs.readFileSync(path.resolve(__dirname,'../../scripts/linkedin-worker-supervisor.cjs'),'utf8');
-
-function supervisor(selectedIds=['one'],savedStatus={status:'offline'}) {
- const accounts=[{id:'one',label:'Account 1',changed_at:'version-1',archived:false,processing_enabled:true,login_requested_at:null},
-  {id:'two',label:'Account 2',changed_at:'version-1',archived:false,processing_enabled:true,login_requested_at:'request-1'}];
- const launches=[],errors=[];
- const pool={query:async(sql,values)=>({rows:sql.startsWith('UPDATE')?[]:sql.startsWith('SELECT status')?[{status:savedStatus}]:accounts.filter(a=>!a.archived&&(a.login_requested_at||a.logout_requested_at||values[0].includes(a.id)))}),end:async()=>{}};
- const modules={
-  'node:fs':{readFileSync:()=>'',mkdirSync(){},existsSync:()=>false},'node:path':path,
-  'node:child_process':{fork:(_file,args)=>{
-   const child=new EventEmitter();child.connected=true;child.pid=100+launches.length;child.args=args;
-   child.send=()=>{child.stopped=true;queueMicrotask(()=>child.emit('exit',0));};
-   launches.push(child);return child;
-  },execFileSync:()=>assert.fail('No force termination expected')},
-  pg:{Pool:class{constructor(){return pool;}}},
-  '../src/lib/linkedin-workers.cjs':{expireLoginRequests:async()=>{},selectedAccounts:async()=>accounts.filter(a=>!a.archived&&!a.logout_requested_at&&!a.signed_out_at&&a.processing_enabled&&selectedIds.includes(a.id)),pauseProcessing:async(_pool,id)=>{accounts.find(a=>a.id===id).processing_enabled=false;}},
- };
- const context=vm.createContext({__dirname:path.resolve(__dirname,'../../scripts'),require:name=>modules[name],
-  process:{env:{},on(){},platform:'win32'},console:{log(){},error:(...args)=>errors.push(args)},
-  setTimeout,clearTimeout,clearInterval,Date});
- const functions=vm.runInContext(source.slice(0,source.lastIndexOf('\nmain().catch'))+'\n({tick,children})',context);
- return {...functions,accounts,launches,errors};
+const {test}=require('node:test'),assert=require('node:assert/strict'),path=require('node:path'),os=require('node:os');
+const {createAgent}=require('../../src/lib/compel-agent.cjs');
+function fixture(options={}){
+ let time=100000,reads=0,acquires=0;
+ const accounts=[{id:'one',enabled:true,authorized:false,attention_reason:'',control_version:'1'}],runtimes=[];
+ const agent=createAgent({root:process.cwd(),pool:{query:async()=>({})},owner:'test-agent',now:()=>time,
+  readControl:async()=>{reads++;return {active_count:1,accounts};},acquireAccount:async()=>{acquires++;return true;},
+  core:{releaseSession:async()=>{}},onStage:()=>{},onHeartbeat:()=>{},
+  runner:{runOnce:async()=>null,close:async()=>{}},
+  createBrowser:()=>({profileDirectory:path.join(os.tmpdir(),'compel-agent-fixture-unused'),isOpen:()=>false,close:async()=>{}}),
+  createRuntime:()=>{const state={jobsStarted:0,status:'ready'},runtime={state,ticks:0,recycles:[],stopped:false,tick:async()=>{runtime.ticks++;if(options.work)state.jobsStarted++;},snapshot:()=>state,requestStop:()=>{runtime.stopped=true;},close:async()=>{},recycle:async reason=>runtime.recycles.push(reason)};runtimes.push(runtime);return runtime;},
+  ...options,
+ });
+ const settle=()=>new Promise(resolve=>setImmediate(resolve));
+ return {agent,accounts,runtimes,settle,get reads(){return reads;},get acquires(){return acquires;},advance:ms=>{time+=ms;}};
 }
-async function exited(child) { child.emit('exit',0); await new Promise(resolve=>queueMicrotask(resolve)); }
-
-test('consuming a sign-in request keeps an unselected manual browser alive until it finishes',async()=>{
- const s=supervisor();await s.tick();assert.equal(s.launches.length,2);
- const manual=s.launches.find(child=>child.args.includes('two'));
- assert.ok(manual.args.includes('--check-login'));
- s.accounts[1].login_requested_at=null;
- await s.tick();assert.equal(manual.stopped,undefined);assert.equal(s.launches.length,2);
- await exited(manual);await s.tick();
- assert.equal(s.launches.length,2,'an unselected account stays signed in without starting a worker');
- assert.deepEqual(s.errors,[]);
+test('one persistent agent creates account runtimes only for authorized work or explicit connection',async()=>{
+ const f=fixture();await f.agent.step();await f.settle();assert.equal(f.acquires,0);
+ f.accounts[0].authorized=true;f.agent.wake();await f.agent.step();await f.settle();assert.equal(f.acquires,1);assert.equal(f.runtimes[0].ticks,1);
+ f.accounts[0].authorized=false;f.agent.wake();await f.agent.step();await f.settle();assert.equal(f.acquires,1,'pause keeps the runtime in this process');
+ await f.agent.close();assert.equal(f.runtimes[0].stopped,true);
 });
-
-test('successful sign-in leaves the account idle until processing is explicitly authorized',async()=>{
- const s=supervisor(['one','two']);await s.tick();
- const manual=s.launches.find(child=>child.args.includes('two'));
- s.accounts[1].login_requested_at=null;s.accounts[1].processing_enabled=false;await exited(manual);await s.tick();
- assert.equal(s.launches.length,2,'connecting must not start processing');
- s.accounts[1].processing_enabled=true;s.accounts[1].changed_at='version-2';await s.tick();
- assert.equal(s.launches.length,3);
- const normal=s.launches[2];assert.deepEqual([...normal.args],['--account','two']);
- await s.tick();await s.tick();assert.equal(s.launches.length,3);
- assert.deepEqual(s.errors,[]);
+test('review holds survive startup; explicit manual review can acquire its runtime',async()=>{
+ const f=fixture();f.accounts[0].authorized=true;f.accounts[0].attention_reason='Security warning';
+ await f.agent.step();assert.equal(f.acquires,0);
+ f.accounts[0].login_token='manual-review';f.agent.wake();await f.agent.step();await f.settle();assert.equal(f.acquires,1);assert.equal(f.accounts[0].attention_reason,'Security warning');await f.agent.close();
 });
-
-test('removing an account still stops its manual browser after the request has been consumed',async()=>{
- const s=supervisor();await s.tick();
- const manual=s.launches.find(child=>child.args.includes('two'));
- s.accounts[1].login_requested_at=null;s.accounts[1].archived=true;
- await s.tick();assert.equal(manual.stopped,true);assert.equal(s.launches.length,2);
- assert.deepEqual(s.errors,[]);
+test('unverified lease failure shows its stage and exact action and waits for an explicit new command',async()=>{
+ let tries=0;const f=fixture({acquireAccount:async()=>{tries++;throw Error('Old owner cannot be verified');}});f.accounts[0].authorized=true;
+ await f.agent.step();assert.equal(f.agent.stages.one.startupStage,'FAILED');assert.match(f.agent.stages.one.reason,/cannot be verified/);assert.ok(f.agent.stages.one.action);
+ f.agent.wake();await f.agent.step();assert.equal(tries,1);f.accounts[0].control_version='2';f.agent.wake();await f.agent.step();assert.equal(tries,2);await f.agent.close();
 });
-test('sign-out stops the normal browser before opening the same profile solely for logout',async()=>{
- const s=supervisor(['one']);await s.tick();const normal=s.launches[0];
- s.accounts[0].logout_requested_at='logout-1';s.accounts[0].changed_at='version-2';
- await s.tick();
- assert.equal(normal.stopped,true);
- assert.deepEqual([...s.launches.at(-1).args],['--account','one','--logout']);
- const logout=s.launches.at(-1);await s.tick();assert.equal(logout.stopped,undefined);
- s.accounts[0].logout_requested_at=null;s.accounts[0].signed_out_at='done';await exited(logout);await s.tick();
- assert.equal(s.launches.length,3,'a signed-out account must not auto-login');assert.deepEqual(s.errors,[]);
+test('idle database reads back off and notifications wake the same process',async()=>{
+ const f=fixture();await f.agent.step();await f.settle();const reads=f.reads;f.advance(2000);await f.agent.step();assert.equal(f.reads,reads);
+ f.agent.wake();await f.agent.step();assert.equal(f.reads,reads+1);await f.agent.close();
 });
-
-test('a supervisor restart preserves a manual LinkedIn pause until sign-in is explicitly requested',async()=>{
- const s=supervisor(['one'],{status:'paused',reason:'LinkedIn requires attention.',manualResumeRequired:true});await s.tick();assert.equal(s.launches.filter(c=>c.args.includes('one')).length,0);
- s.accounts[0].login_requested_at='new-manual-request';await s.tick();const manual=s.launches.find(c=>c.args.includes('one'));assert.ok(manual.args.includes('--login'));assert.deepEqual(s.errors,[]);
+test('more than 50 jobs continue without a manual restart or new account process',async()=>{
+ const f=fixture({work:true});f.accounts[0].authorized=true;
+ for(let i=0;i<65;i++){f.agent.wake();await f.agent.step();await f.settle();}
+ assert.equal(f.acquires,1);assert.equal(f.runtimes[0].state.jobsStarted,65);await f.agent.close();
 });

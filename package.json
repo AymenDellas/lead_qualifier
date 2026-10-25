@@ -9,15 +9,16 @@
     "lint": "next lint",
     "backup": "node scripts/backup-db.mjs",
     "check-env": "node scripts/check-env.mjs",
-    "worker": "node scripts/linkedin-worker-supervisor.cjs",
-    "worker:single": "node worker.cjs",
+    "worker": "node --max-old-space-size=384 worker.cjs",
+    "worker:single": "node --max-old-space-size=384 worker.cjs",
     "test:workers": "node --test tests/workers/*.test.cjs",
     "case-study-worker": "node case-study-worker.cjs",
     "test:copy-studio": "node scripts/copy-studio-tests.mjs",
     "test:copy-studio:browser": "playwright test -c playwright.copy-studio.config.ts",
     "test:qev": "node --test scripts/check-quickemailverification.cjs tests/email-verification/*.test.cjs",
     "test:projects": "tsx --test tests/projects/workspace.test.ts tests/projects/actions.test.cjs",
-    "test:prospecting": "node --test tests/coach-prospecting/*.test.cjs"
+    "test:prospecting": "node --test tests/coach-prospecting/*.test.cjs",
+    "worker:stop": "node worker.cjs --stop"
   },
   "dependencies": {
     "@qwen-code/qwen-code": "0.24.6",

@@ -2,7 +2,6 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const puppeteer=require('puppeteer');
 const reader=require('../../src/lib/linkedin-browser-page.cjs');
-const policy=require('../../src/lib/linkedin-activity-policy.cjs');
 const person='https://www.linkedin.com/in/fixture-coach/';
 const profile=`<!doctype html><html><body><nav><a href="/in/unrelated/">Somebody else</a></nav><main>
  <section><h1>Fixture Coach</h1><div class="text-body-medium break-words">Career coach for experienced professionals</div><div class="text-body-small inline t-black--light break-words">Vancouver, Canada</div><p>2,345 followers</p><p>500+ connections</p><span class="dist-value">1st</span><span>Premium</span><button>Message</button><a id="contact" href="/in/fixture-coach/overlay/contact-info/">Contact info</a></section>
@@ -251,21 +250,4 @@ test('a recent matching-author preview avoids the activity page and profile retu
   assert.deepEqual(result.emails,['coach@fixture-coach.test']);assert.equal(requests.length,1);
   assert.ok(!steps.includes('activity_page'));
  },()=>({status:200,contentType:'text/html',body:html}));
-});
-test('working hours respect weekdays, overnight ranges and daylight-saving transitions without starting activity',()=>{
- const hours=policy.validateHours({timezone:'America/New_York',days:[1],start:'22:00',end:'02:00'});
- assert.equal(policy.hoursAllowed(hours,Date.parse('2026-10-20T02:30:00Z')),true,'Monday 22:30');
- assert.equal(policy.hoursAllowed(hours,Date.parse('2026-10-20T05:30:00Z')),true,'Tuesday 01:30 from Monday overnight');
- assert.equal(policy.hoursAllowed(hours,Date.parse('2026-10-20T06:00:00Z')),false);
- const dst=policy.validateHours({timezone:'America/New_York',days:[0],start:'01:00',end:'02:00'});
- for(const time of ['2026-11-01T05:30:00Z','2026-11-01T06:30:00Z'])assert.equal(policy.hoursAllowed(dst,Date.parse(time)),true,'Both instances of the repeated DST hour');
- assert.throws(()=>policy.validateHours({...hours,timezone:'Invalid/Zone'}),/time zone/);assert.throws(()=>policy.validateHours({...hours,days:[]}),/working day/);
-});
-test('activity windows span UTC midnight, share profile kinds and expire at their actual timestamps',()=>{
- const now=Date.parse('2026-10-22T00:05:00Z'),events=[1,2,3].map(n=>({created_at:new Date(now-n*60000).toISOString(),data:{kind:'profile_page'}}));
- events.push({created_at:new Date(now-25*3600000).toISOString(),data:{kind:'profile_page'}});
- const limits={profile:{hourly:3,daily:5}};
- assert.equal(policy.windowUsage(events,now).daily,3);assert.equal(policy.actionWait(events,'profile',limits,now),3420001);
- assert.equal(policy.actionWait(events,'contact',limits,now),0);
- assert.throws(()=>policy.validateLimits({profile:{hourly:4,daily:3}}),/cannot exceed/);
 });

@@ -206,3 +206,13 @@ No library or queue migration was made. Bounded saves/HTTP slots, overlapping cl
 public idle close, and recovery tests pass (16 focused tests; 21 including telemetry).
 Typecheck passes. Phase 3 regression: 50 intentional missing-follower REVIEW results,
 zero changes to the original evaluator with only that new gate isolated.
+# Phase 4: persistent agent and recovery
+
+The measured 5,573 MiB service peak justified replacing the supervisor/account/public-worker process tree with one persistent agent and one shared pool. LinkedIn browser capacity defaults to one; public rendering remains separate and on demand. Chrome automatically recycles after 10 captured jobs or a sampled 1,536 MiB browser-tree threshold, and closes after 30 seconds idle. These are resource controls, never LinkedIn interaction limits or timed gaps between leads. A 384 MiB Node heap default leaves room for Chrome on an 8 GB PC.
+
+Queue polling backs off from 2 to 30 seconds with PostgreSQL NOTIFY wakeups. Processing intent survives a restart. Every capture action still checks pause, ownership, command version and reactive security holds. Browser crashes resume checkpoints within two retries; exhausted attempts become REVIEW. Startup errors publish an exact stage and action. PID/profile lock recovery requires verified dead ownership plus heartbeat expiry. Expired leases alone cannot steal a running job.
+
+Removed after repository-wide reader checks: `account-supervisor.cjs` (child spawning), `scripts/public-research-worker.cjs` (separate public process), `worker-legacy-import.cjs` (automatic disk queue import), and `linkedin-activity-policy.cjs` (unused hourly/rolling/schedule gates). The former supervisor entry point is a five-line agent compatibility launcher. Qualification no longer writes folder queue/results. The existing finder-progress consumer still uses `queue-results`, so its directory and all user data remain intact. The obsolete child-supervisor tests were replaced with persistent-agent tests; obsolete throttle tests were removed.
+
+Validation: 21 agent/coordinator/process/launcher/resource tests and 21 manual-sign-in/race/pipeline tests passed; TypeScript passed. Regression phase 4 replayed all 50 frozen records: each changes to REVIEW solely because stored followers are missing; the full per-lead delta is in ignored `data/engine-v2/regression-phase-4.json`. The diagnostic replay with the follower gate satisfied has zero other changes. Existing stored qualified leads are grandfathered until explicitly selected for recheck.
+
