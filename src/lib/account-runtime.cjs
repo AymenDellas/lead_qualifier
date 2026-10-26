@@ -21,7 +21,7 @@ function createAccountRuntime(options) {
  let status={status:'idle',startupStage:'AGENT_ACK',reason:'Agent acknowledged this account. Waiting for work or manual connection.',runtimeVersion,sessionReady:false,browserOpen:false,accountId};
  let startupFailures=0,recoveringJob=false;
  let handledStart=null,handledLogin=null,handledLogout=null,handlingSignal=null,activeVersion=null,signalGeneration=0,pageGeneration=0,jobsStarted=0,pendingKinds={};
- const saves=require('./bounded-work.cjs').createBoundedQueue({capacity:options.saveQueueCapacity||6,onError:(error,metadata)=>{
+ const saves=(options.createSaveQueue||require('./bounded-work.cjs').createBoundedQueue)({capacity:options.saveQueueCapacity||6,onError:(error,metadata)=>{
   const reason='PostgreSQL save failed: '+error.message;
   publish('paused',{reason,reasonCode:'DB_SAVE_FAILED',startupStage:'FAILED',failedStage:'DB_SAVE',jobId:metadata?.jobId});
   log(reason);options.onSaveError?.(error);

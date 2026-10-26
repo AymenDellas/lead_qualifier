@@ -178,7 +178,9 @@ function validateSettings(body) {
  });
  const enabled = accounts.filter(a => a.enabled).length;
  if (!Number.isInteger(body.activeCount) || body.activeCount < 0 || body.activeCount > enabled) throw new Error('Choose a number of running accounts between 0 and the number enabled.');
- return { accounts, activeCount: body.activeCount, revision: body.revision };
+ // active_count is the global processing switch, not a subset of accounts.
+ // Older saved values such as 1 enable every available account concurrently.
+ return { accounts, activeCount: body.activeCount>0?enabled:0, revision: body.revision };
 }
 async function settings(pool) {
  await ensure(pool);
@@ -190,7 +192,7 @@ async function settings(pool) {
   LEFT JOIN compel_worker_usage u ON u.account_id=a.id AND u.day=compel_worker_day()
   LEFT JOIN (SELECT account_id,count(*)::int AS used FROM compel_worker_account_profiles WHERE day=compel_worker_day() GROUP BY account_id) p ON p.account_id=a.id
   WHERE a.archived IS FALSE ORDER BY a.position,a.id`)).rows;
- return { resources:config.agent_status?.resources||null,dailyDay:config.daily_day,defaultDailyLimit:daily.defaultLimit(),revision: config.revision, supervisorOnline:!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000, activeCount: Math.min(config.active_count, rows.filter(a => a.enabled).length), accounts: rows.map(a => ({
+ return { resources:config.agent_status?.resources||null,browserLimit:config.agent_status?.browserCapacity||10,dailyDay:config.daily_day,defaultDailyLimit:daily.defaultLimit(),revision: config.revision, supervisorOnline:!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000, activeCount: config.active_count>0?rows.filter(a => a.enabled).length:0, accounts: rows.map(a => ({
   id:a.id,label:a.label,email:a.email,enabled:a.enabled,dailyLimit:a.daily_limit,hasPassword:a.has_password,
   dailyCount:a.daily_count,dailyTimezone:config.daily_timezone,dailyResumeAt:a.daily_count>=a.daily_limit?config.resume_at:null,status:a.status?.status || 'offline',reason:a.status?.reason || '',
   runtimeVersion:a.status?.runtimeVersion||'',sessionReady:!!a.status?.sessionReady,browserOpen:!!a.status?.browserOpen,nextEligibleAt:a.status?.nextEligibleAt||(a.daily_count>=a.daily_limit?config.resume_at:null),

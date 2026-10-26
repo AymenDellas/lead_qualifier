@@ -51,3 +51,39 @@ test('profile interval waits keep the saved browser alive and do not spin or hol
  f.agent.wake();await f.agent.step();await f.settle();assert.equal(recycles,0,'the 30-second idle threshold must not relaunch Chrome between every profile');
  await f.agent.close();
 });
+test('all eligible accounts capture simultaneously while slow work, pauses and review holds remain account-scoped',async()=>{
+ let release;const gate=new Promise(resolve=>{release=resolve;}),started=[],completed=[];
+ const f=fixture({createBrowser:({account})=>{let open=false;return {profileDirectory:path.join(os.tmpdir(),'compel-parallel-'+account.id),isOpen:()=>open,
+  open:async()=>{open=true;return {browser:{process:()=>null}};},close:async()=>{open=false;}};},
+  createRuntime:({accountId,browserOwner})=>{const state={status:'ready',jobsStarted:0};return {snapshot:()=>state,requestStop:()=>{},close:()=>browserOwner.close(),recycle:()=>browserOwner.close(),tick:async()=>{
+   await browserOwner.open();started.push(accountId);await gate;state.jobsStarted++;completed.push(accountId);
+  }};}});
+ f.accounts.splice(0,1,...['one','two','three'].map(id=>({id,enabled:true,authorized:true,attention_reason:'',control_version:'1'})),
+  {id:'held',enabled:true,authorized:true,attention_reason:'Security review',control_version:'1'},
+  {id:'paused',enabled:true,authorized:false,attention_reason:'',control_version:'1'});
+ try{
+  await f.agent.step();await f.settle();assert.deepEqual(started.sort(),['one','three','two']);
+  assert.equal(f.agent.coordinator.reserved.size,3);assert.equal(completed.length,0,'no account must wait for another profile to finish');
+  assert.equal(f.agent.entries.has('held'),false);assert.equal(f.agent.entries.has('paused'),false);
+  release();await f.settle();assert.equal(completed.length,3);
+ }finally{release();await f.agent.close();}
+});
+test('a manual request does not recycle other account browsers when there is free capacity',async()=>{
+ const recycles=[];
+ const f=fixture({createBrowser:({account})=>{let open=false;return {profileDirectory:path.join(os.tmpdir(),'compel-free-slot-'+account.id),isOpen:()=>open,
+  open:async()=>{open=true;return {browser:{process:()=>null}};},close:async()=>{open=false;}};},
+  createRuntime:({accountId,browserOwner})=>({snapshot:()=>({status:'ready',jobsStarted:0}),requestStop:()=>{},close:()=>browserOwner.close(),
+   tick:()=>browserOwner.open(),recycle:async reason=>{recycles.push({accountId,reason});await browserOwner.close();}})});
+ f.accounts[0].authorized=true;f.accounts.push({id:'two',enabled:true,authorized:false,attention_reason:'',login_token:'manual',control_version:'1'});
+ try{await f.agent.step();await f.settle();assert.equal(f.agent.coordinator.reserved.size,2);assert.deepEqual(recycles,[]);}finally{await f.agent.close();}
+});
+test('a slow account statistics flush cannot postpone other accounts lease heartbeats',async()=>{
+ let release;const gate=new Promise(resolve=>{release=resolve;}),heartbeats=[];
+ const f=fixture({core:{releaseSession:async()=>{},heartbeat:async(_pool,id)=>heartbeats.push(id)},
+  createRuntime:({accountId})=>({tick:async()=>{},snapshot:()=>({status:'ready'}),flush:()=>accountId==='one'?gate:Promise.resolve(),requestStop:()=>{},close:async()=>{}})});
+ f.accounts[0].authorized=true;f.accounts.push({id:'two',enabled:true,authorized:true,attention_reason:'',control_version:'1'});
+ try{
+  await f.agent.step();await f.settle();const pending=f.agent.heartbeat();await f.settle();
+  assert.deepEqual(heartbeats.sort(),['one','two']);release();await pending;
+ }finally{release();await f.agent.close();}
+});

@@ -37,6 +37,12 @@ test('only actual LinkedIn person URLs are accepted and normalized for deduplica
  assert.equal(core.profileUrl('https://uk.linkedin.com/in/Ava/?trk=test'),'https://www.linkedin.com/in/ava/');
  for(const value of ['https://linkedin.com.attacker.test/in/ava','https://attacker.test/linkedin.com/in/ava','https://linkedin.com/company/acme','http://linkedin.com/in/ava','https://user:password@linkedin.com/in/ava'])assert.equal(core.profileUrl(value),null);
 });
+test('a positive legacy active count enables every available account; zero remains a global pause',()=>{
+ const accounts=[1,2,3].map(n=>({label:'Account '+n,email:`parallel-${n}@example.test`,enabled:true,dailyLimit:300}));
+ assert.equal(core.validateSettings({revision:0,activeCount:1,accounts}).activeCount,3);
+ assert.equal(core.validateSettings({revision:0,activeCount:0,accounts}).activeCount,0);
+ accounts[0].enabled=false;assert.equal(core.validateSettings({revision:0,activeCount:1,accounts}).activeCount,2);
+});
 test('database JSON preserves emoji and handles malformed browser text',()=>{
  const value=JSON.parse(core.json({text:'Hello 😀\ud83d text\u0000'}));
  assert.equal(value.text,'Hello 😀� text');

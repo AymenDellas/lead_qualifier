@@ -11,7 +11,7 @@ async function recoverSingletons(directory,{now=Date.now,processOwner=isProcessO
  if(!browserDead||!old.closedAt&&(!agentDead||now()-Number(old.heartbeatAt)<30000))throw problem('BROWSER_PROFILE_IN_USE','Chrome profile is owned by a live or unverified process. Close its owned window or wait for the dead owner heartbeat to expire; saved sign-in is retained.');
  for(const name of locks){const file=path.resolve(directory,name);if(path.dirname(file)!==path.resolve(directory))throw Error('Invalid Chrome lock path.');fs.unlinkSync(file);}
 }
-function createBrowserCoordinator({max=1,owner,log=()=>{}}){
+function createBrowserCoordinator({max=10,owner,log=()=>{}}){
  if(!Number.isInteger(max)||max<1||max>10)throw Error('MAX_ACTIVE_BROWSERS must be 1–10.');
  const reserved=new Set(),entries=new Map();
  function wrap(id,inner){

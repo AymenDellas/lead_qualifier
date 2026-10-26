@@ -11,9 +11,10 @@ const READ_CONTROL=`SELECT c.active_count,c.agent_stop_requested,
 function integer(value,fallback,min=1,max=Infinity){const n=value==null||value===''?fallback:Number(value);if(!Number.isInteger(n)||n<min||n>max)throw Error('Invalid agent resource configuration.');return n;}
 function createAgent(options){
  const {root,pool,owner}=options,core=options.core||defaultCore,now=options.now||Date.now,log=options.log||console.log;
- const maxBrowsers=integer(options.maxBrowsers??process.env.MAX_ACTIVE_BROWSERS,1,1,10),maxJobs=integer(options.recycleJobs??process.env.CHROME_RECYCLE_JOBS,10),
+ const maxBrowsers=integer(options.maxBrowsers??process.env.MAX_ACTIVE_BROWSERS,10,1,10),maxJobs=integer(options.recycleJobs??process.env.CHROME_RECYCLE_JOBS,10),
   memoryLimit=integer(options.recycleMB??process.env.CHROME_RECYCLE_RSS_MB,1536),idleMs=integer(options.idleMs??process.env.LINKEDIN_BROWSER_IDLE_MS,30000,0);
  const entries=new Map(),stages={},failures=new Map(),coordinator=createBrowserCoordinator({max:maxBrowsers,owner,log});
+ const saves=require('./bounded-work.cjs').createSavePool({capacity:6});
  const makeRuntime=options.createRuntime||createAccountRuntime,makeBrowser=options.createBrowser||createAccountBrowser;
  const runner=options.runner||createResearchRunner({pool,owner:owner+'/research',log});
  const readControl=options.readControl||(async()=> (await pool.query(READ_CONTROL)).rows[0]);
@@ -39,7 +40,7 @@ function createAgent(options){
   const entry={account,owner:accountOwner,browser:null,runtime:null,task:null,closing:null,due:0,backoff:2000,lastWorkAt:now(),jobs:0,lastJobs:0};
   const inner=makeBrowser({root,account,profileRoot:process.env.WORKER_PROFILE_ROOT||path.join(localState,'Compel','worker-profiles'),onDisconnect:error=>{entry.runtime?.disconnected(error);entry.due=0;notify();}});
   entry.browser=coordinator.wrap(account.id,inner);
-  entry.runtime=makeRuntime({pool,accountId:account.id,owner:accountOwner,core,browserOwner:entry.browser,log,wakeResearch,
+  entry.runtime=makeRuntime({pool,accountId:account.id,owner:accountOwner,core,browserOwner:entry.browser,log,wakeResearch,createSaveQueue:saves.scope,
    onStatus:value=>stage(account.id,{...value,controlVersion:value.controlVersion||account.control_version}),
   });
   entries.set(account.id,entry);stage(account.id,{startupStage:'AGENT_ACK',reason:'Agent acknowledged the request.',controlVersion:account.control_version});return entry;
@@ -80,7 +81,7 @@ function createAgent(options){
   }else if(worked)entry.saveFailures=0;
   if(worked){entry.lastWorkAt=now();entry.jobs+=(state.jobsStarted||0)-before;}
   const manual=['awaiting_login','SESSION_REVIEW'].includes(state.status)||state.startupStage==='SESSION_REVIEW'||state.manualResumeRequired;
-  const needsManual=[...entries.values()].some(other=>other!==entry&&(other.account.login_token||other.account.logout_token));
+  const needsManual=coordinator.reserved.size>=maxBrowsers&&[...entries.values()].some(other=>other!==entry&&!coordinator.reserved.has(other.account.id)&&(other.account.login_token||other.account.logout_token));
   if(entry.browser.isOpen()&&state.manualResumeRequired&&entry.browser.isHeadless?.()){
    await entry.runtime.recycle('Account review required. Use Open session for visible manual review.');
   }else if(entry.browser.isOpen()&&!manual&&(entry.jobs>=maxJobs||memory(entry)>memoryLimit||needsManual||!worked&&state.reasonCode!=='PROFILE_INTERVAL'&&now()-entry.lastWorkAt>=idleMs)){
@@ -123,12 +124,14 @@ function createAgent(options){
  async function heartbeat(){
   if(heartbeatTask)return heartbeatTask;
   heartbeatTask=(async()=>{
-   const state={stage:'AGENT_ACK',accounts:stages,resources:resource};
+   const state={stage:'AGENT_ACK',accounts:stages,resources:resource,browserCapacity:maxBrowsers,
+    openAccountBrowsers:coordinator.reserved.size,pendingSaves:saves.size,saveCapacity:saves.capacity};
    if(options.onHeartbeat)await options.onHeartbeat(state);else if(await registry.heartbeat(pool,owner,state))stopped=true;
-   for(const entry of [...entries.values()])if(!entry.closing){
-    entry.browser.heartbeat?.();await entry.runtime.flush?.();
+   await Promise.all([...entries.values()].filter(entry=>!entry.closing).map(async entry=>{
+    entry.browser.heartbeat?.();
     await core.heartbeat(pool,entry.account.id,entry.owner,{...entry.runtime.snapshot(),memoryMB:memory(entry),agentPid:process.pid,agentHost:registry.hostId,agentOwner:owner});
-   }
+    await entry.runtime.flush?.();
+   }));
    await researchQueue.heartbeat(pool,owner+'/research');
   })().finally(()=>{heartbeatTask=null;notify();});return heartbeatTask;
  }
@@ -141,7 +144,7 @@ function createAgent(options){
   stopped=true;clearInterval(heartbeatTimer);notify();
   for(const entry of entries.values())entry.runtime.requestStop?.();
   await Promise.allSettled([...entries.values()].map(retire));await Promise.allSettled(research.map(l=>l.task).filter(Boolean));
-  await runner.close();await researchQueue.release(pool,owner+'/research');await heartbeatTask?.catch(()=>{});
+  await saves.close();await runner.close();await researchQueue.release(pool,owner+'/research');await heartbeatTask?.catch(()=>{});
  }
  return {step,start,heartbeat,wait,wake,close,stop:()=>{stopped=true;notify();},setResources:value=>{resource=value;},entries,stages,coordinator,get stopped(){return stopped;},get failure(){return failure;}};
 }

@@ -178,8 +178,8 @@ function AccountEditor({initial,liveAccounts,workerControls,workerOnline,onClose
     {workerControls}
     <div className="flex flex-wrap items-center gap-3">
      <label htmlFor="active-accounts" className="field-label">Allow account processing</label>
-     <select id="active-accounts" className="field !w-auto min-w-20" value={activeCount>0?Math.max(1,Math.min(activeCount,enabled)):0} onChange={e=>setActiveCount(Number(e.target.value))} disabled={saving}>
-      <option value={0}>Pause all</option><option value={Math.max(1,Math.min(activeCount,enabled))}>Enabled · one browser by default</option>
+     <select id="active-accounts" className="field !w-auto min-w-20" value={activeCount>0?enabled:0} onChange={e=>setActiveCount(Number(e.target.value))} disabled={saving}>
+      <option value={0}>Pause all</option>{enabled>0&&<option value={enabled}>{(initial.browserLimit||10)<enabled?`Enabled · up to ${initial.browserLimit} accounts at once`:'Enabled · accounts run simultaneously'}</option>}
      </select>
     </div>
     <p className="field-hint">Connect and Start batch are also available in the main panel. Changing settings does not start processing.</p>

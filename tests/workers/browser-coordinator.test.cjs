@@ -2,7 +2,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const {createBrowserCoordinator,recoverSingletons}=require('../../src/lib/browser-coordinator.cjs');
 test('one LinkedIn browser is reserved atomically, released after close, and retained on failed close',async()=>{
- const manager=createBrowserCoordinator({owner:'fixture'});let open=false,fail=false;
+ const manager=createBrowserCoordinator({owner:'fixture',max:1});let open=false,fail=false;
  const inner={profileDirectory:os.tmpdir(),isOpen:()=>open,open:async()=>{open=true;return {browser:{process:()=>null}};},close:async()=>{if(fail)throw Error('still alive');open=false;}};
  const a=manager.wrap('one',inner),b=manager.wrap('two',{...inner,isOpen:()=>false});
  await a.open();await assert.rejects(b.open(),e=>e.code==='BROWSER_CAPACITY');assert.equal(manager.reserved.size,1);

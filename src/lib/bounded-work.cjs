@@ -29,4 +29,26 @@ function createLimiter(concurrency=3,capacity=96){
  const queue=createBoundedQueue({concurrency,capacity});
  return async task=>(await queue.submit(task)).done;
 }
-module.exports={createBoundedQueue,createLimiter};
+// One admission/memory bound across account lanes. A failed save belongs only
+// to its account; clearing that error must never clear another account's error.
+function createSavePool({capacity=6}={}){
+ const queue=createBoundedQueue({capacity});
+ function scope({onError=()=>{}}={}){
+  let pending=0,closed=false,lastError=null;const waiters=[];
+  function complete(){pending--;if(!pending)for(const resolve of waiters.splice(0))resolve();}
+  async function submit(run,metadata){
+   if(closed)throw Error('Save queue is closed.');pending++;
+   try{
+    const receipt=await queue.submit(async()=>{
+     try{return await run();}catch(error){lastError=error;try{Promise.resolve(onError(error,metadata)).catch(()=>{});}catch{}throw error;}
+    },metadata);
+    receipt.done.then(complete,complete);return receipt;
+   }catch(error){complete();throw error;}
+  }
+  const idle=()=>pending?new Promise(resolve=>waiters.push(resolve)):Promise.resolve();
+  return {submit,idle,close:async()=>{closed=true;await idle();},clearError:()=>{lastError=null;},
+   get error(){return lastError;},get size(){return pending;},capacity};
+ }
+ return {scope,close:queue.close,get size(){return queue.size;},capacity};
+}
+module.exports={createBoundedQueue,createLimiter,createSavePool};
