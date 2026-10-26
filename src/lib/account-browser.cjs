@@ -54,7 +54,7 @@ function createAccountBrowser({ root, account, onDisconnect, puppeteer, fs = req
     if (!Number.isFinite(closeTimeoutMs) || closeTimeoutMs < 1) throw new TypeError('closeTimeoutMs must be positive.');
     const directory = profilePath(root, account, fs, profileRoot);
     const profileKey = process.platform === 'win32' ? directory.toLowerCase() : directory;
-    let entry = null, opening = null, closing = null, windowTask = Promise.resolve();
+    let entry = null, opening = null, closing = null, windowTask = Promise.resolve(), accountDriver = null;
 
     function release(value) {
         if (profileOwners.get(profileKey) === value) profileOwners.delete(profileKey);
@@ -124,7 +124,7 @@ function createAccountBrowser({ root, account, onDisconnect, puppeteer, fs = req
         opening = (async () => {
             try {
                 fs.mkdirSync(directory, { recursive: true });
-                const imported = puppeteer || require('puppeteer'),driver=imported.default||imported;
+                const imported = puppeteer || (accountDriver ||= require('./account-browser-driver.cjs').createAccountDriver()),driver=imported.default||imported;
                 // Resolve Puppeteer's pinned full Chrome for Testing, even when
                 // an old executable override points at installed system Chrome.
                 const executablePath=driver.browserVersion&&driver.configuration?.cacheDirectory

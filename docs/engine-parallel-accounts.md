@@ -6,6 +6,8 @@ The existing single Node agent schedules each account's task independently. A sl
 
 Legacy `active_count` is treated consistently as a global allow/pause switch: zero pauses globally; a positive saved value enables all available accounts. Settings return/save the full enabled count while allowed, so a legacy value of 1 no longer hides other accounts in dashboard totals. Availability remains separate from authorization: settings saves, manual sign-in and an agent restart do not start paused accounts. Resume starts eligible accounts; a security hold, sign-out or explicit account pause still wins.
 
+The later [Voyager restoration](engine-voyager-restore.md) changes the reader/wrapper and raises the job-count recycle default below from 10 to 50. The concurrency, memory guards and verification results in this document describe the preceding phase.
+
 ## Resource and recovery bounds
 
 One agent and its five-connection pool remain. Across all account lanes, checkpoint/result saves share one serial queue with six admitted items. Account scopes keep their own errors, drains and recovery: an error in one scope is not cleared by another account, and closing one scope does not close the others. Each account can have one capture awaiting admission, so backpressure remains bounded by the account limit. Ordered saves and owner fences are retained.

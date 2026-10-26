@@ -11,7 +11,7 @@ const transient=error=>/detached|execution context|context was destroyed|cannot 
 function createAccountRuntime(options) {
  const {pool,accountId,owner,browserOwner}=options;
  const core=options.core||require('./linkedin-workers.cjs');
- const reader=options.reader||require('./linkedin-browser-page.cjs');
+ const reader=options.reader||require('./linkedin-voyager-reader.cjs');
  const discoveryStore=options.discoveryStore||require('./coach-prospecting-store.cjs');
  const prospecting=options.prospecting||require('./coach-prospecting-worker.cjs');
  const researchQueue=options.researchQueue||require('./worker-research-queue.cjs');
@@ -212,12 +212,14 @@ function createAccountRuntime(options) {
   const failure=error.failure||(crashed?{stage:'linkedin',code:'BROWSER_CRASH',reason:'Chrome failed during profile reading; saved checkpoint retained.',retryable:true}:{stage:'linkedin',code:'PAGE_CHANGED',reason:'The LinkedIn page could not be read. Review the saved evidence.',retryable:false});
   const result={...(capture||job.resumeResult||{}),url:job.linkedinUrl,status:failure.retryable===false?'REVIEW':'ERROR',failure,
    logs:[...(capture?.logs||[]),'Profile reading stopped: '+error.message]};
-  if(crashed&&(job.retryCount||0)<2){
+  const transport=failure.code==='VOYAGER_TRANSPORT'&&failure.retryable===true;
+  if((crashed||transport)&&(job.retryCount||0)<2){
    await core.defer(pool,job.jobId,owner,result,new Date(now()).toISOString());
-   await browserOwner.close();identity=null;surface=null;handledStart=null;
-   publish('recovering',{startupStage:'BROWSER_STARTING',reason:'Chrome will reopen and resume this profile from its checkpoint (bounded attempt '+((job.retryCount||0)+1)+'/2).'});return;
+   if(crashed){await browserOwner.close();identity=null;surface=null;handledStart=null;}
+   publish('recovering',{startupStage:crashed?'BROWSER_STARTING':'SESSION_VERIFIED',reason:transport?'Voyager transport failed; the saved profile checkpoint will resume (bounded attempt '+((job.retryCount||0)+1)+'/2).':'Chrome will reopen and resume this profile from its checkpoint (bounded attempt '+((job.retryCount||0)+1)+'/2).'});return;
   }
   if(crashed){result.status='REVIEW';result.failure.retryable=false;result.failure.reason='Chrome retry attempts exhausted. Review the saved evidence.';}
+  if(transport){result.status='REVIEW';result.failure.retryable=false;result.failure.reason='Voyager transport retry attempts exhausted. Review the saved evidence.';}
   if(result.status==='REVIEW'&&failure.stage!=='control'&&!['LINKEDIN_AUTH','LINKEDIN_RATE_LIMIT','ACCOUNT_MISMATCH'].includes(failure.code)&&!job.prospecting&&job.nativePostProcess&&core.saveCaptureReview){
    const saved=await core.saveCaptureReview(pool,{job,owner,capture:result,failure:result.failure});result.crmSaved=true;result.crmLeadId=saved.id;
   }
@@ -366,7 +368,7 @@ function createAccountRuntime(options) {
  }
  async function recycle(reason){const hold=status.manualResumeRequired?{reason:status.reason,reasonCode:status.reasonCode,manualResumeRequired:true,startupStage:'SESSION_REVIEW'}:null;const limit=status.status==='DAILY_LIMIT_REACHED'?{reason:status.reason,nextEligibleAt:status.nextEligibleAt,startupStage:'DAILY_LIMIT_REACHED'}:null;await saves.idle();watched=null;await browserOwner.close();identity=null;surface=null;handledStart=null;publish(hold?'paused':limit?'DAILY_LIMIT_REACHED':'ready',hold||limit||{reason:'Chrome closed: '+reason+'. Saved sign-in is retained.'});}
  async function recoverSaves(){await saves.idle();await releasePendingClaims();await core.releaseCaptureClaims?.(pool,accountId,owner);saves.clearError();recoveringJob=false;publish('ready',{reason:'Save queue recovered. Pending profiles resume from PostgreSQL checkpoints.'});}
- return {tick,permit,handleSignal,close,disconnected,recycle,recoverSaves,waitForBrowser:reason=>publish('waiting_browser',{startupStage:'BROWSER_STARTING',reason}),requestStop:()=>{stopped=true;},flush:()=>flushStatistics(status.jobId),drain:()=>saves.idle(),snapshot:()=>({...status,jobsStarted,pendingSaves:saves.size,controlVersion:activeVersion,saveError:saves.error?.message||null,prospectingVersion:'COACH_EVIDENCE_V1'})};
+ return {tick,permit,handleSignal,close,disconnected,recycle,recoverSaves,waitForBrowser:reason=>publish('waiting_browser',{startupStage:'BROWSER_STARTING',reason}),requestStop:()=>{stopped=true;},flush:()=>flushStatistics(status.jobId),drain:()=>saves.idle(),snapshot:()=>({...status,readerMode:reader.READER||'RENDERED',jobsStarted,pendingSaves:saves.size,controlVersion:activeVersion,saveError:saves.error?.message||null,prospectingVersion:'COACH_EVIDENCE_V1'})};
 }
 
 module.exports={createAccountRuntime,runtimeVersion};

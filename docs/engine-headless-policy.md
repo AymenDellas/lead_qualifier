@@ -18,10 +18,12 @@ If the pinned browser is missing, startup reports CHROME_FOR_TESTING_MISSING wit
 the command to install it; it does not silently fall back to system Chrome.
 
 There is no browser window or visible automation banner during headless work.
-Visible Chrome for Testing can still display automation/testing infobars. Browser
-automation flags, user-agent/WebDriver signals and security warnings are not
-suppressed or spoofed. Changing window visibility is not evidence that account
-restrictions have been prevented.
+Visible Chrome for Testing may display automation/testing infobars. On 2026-10-26
+the user authorized the earlier Puppeteer-extra/stealth wrapper and targeted
+Voyager reader; see [the restoration](engine-voyager-restore.md). That supersedes
+the original plain-browser fingerprint behavior. Security warnings still stop
+processing. Neither the wrapper nor window visibility establishes protection
+from account restrictions.
 
 PostgreSQL `next_profile_at` records the next permitted profile start per account.
 The same account-row lock protects both daily reservations and profile-start

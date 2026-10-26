@@ -11,7 +11,7 @@ const READ_CONTROL=`SELECT c.active_count,c.agent_stop_requested,
 function integer(value,fallback,min=1,max=Infinity){const n=value==null||value===''?fallback:Number(value);if(!Number.isInteger(n)||n<min||n>max)throw Error('Invalid agent resource configuration.');return n;}
 function createAgent(options){
  const {root,pool,owner}=options,core=options.core||defaultCore,now=options.now||Date.now,log=options.log||console.log;
- const maxBrowsers=integer(options.maxBrowsers??process.env.MAX_ACTIVE_BROWSERS,10,1,10),maxJobs=integer(options.recycleJobs??process.env.CHROME_RECYCLE_JOBS,10),
+ const maxBrowsers=integer(options.maxBrowsers??process.env.MAX_ACTIVE_BROWSERS,10,1,10),maxJobs=integer(options.recycleJobs??process.env.CHROME_RECYCLE_JOBS,50),
   memoryLimit=integer(options.recycleMB??process.env.CHROME_RECYCLE_RSS_MB,1536),idleMs=integer(options.idleMs??process.env.LINKEDIN_BROWSER_IDLE_MS,30000,0);
  const entries=new Map(),stages={},failures=new Map(),coordinator=createBrowserCoordinator({max:maxBrowsers,owner,log});
  const saves=require('./bounded-work.cjs').createSavePool({capacity:6});
@@ -124,7 +124,7 @@ function createAgent(options){
  async function heartbeat(){
   if(heartbeatTask)return heartbeatTask;
   heartbeatTask=(async()=>{
-   const state={stage:'AGENT_ACK',accounts:stages,resources:resource,browserCapacity:maxBrowsers,
+   const state={stage:'AGENT_ACK',accounts:stages,resources:resource,browserCapacity:maxBrowsers,readerMode:'VOYAGER_V1',browserDriver:'PUPPETEER_EXTRA_STEALTH',recycleJobs:maxJobs,
     openAccountBrowsers:coordinator.reserved.size,pendingSaves:saves.size,saveCapacity:saves.capacity};
    if(options.onHeartbeat)await options.onHeartbeat(state);else if(await registry.heartbeat(pool,owner,state))stopped=true;
    await Promise.all([...entries.values()].filter(entry=>!entry.closing).map(async entry=>{
