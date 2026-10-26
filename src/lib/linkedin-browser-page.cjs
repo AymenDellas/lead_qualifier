@@ -96,8 +96,8 @@ async function clickControl(page, selector, match, kind, options={}) {
  await probe.dispose();
  await inspectNotice(page,options);
  await options.beforeCheck?.(kind);
- // The activity permit can wait while LinkedIn hydrates its navigation. Never
- // retain a DOM handle across that wait; reacquire the visible control instead.
+ // Ownership checks can yield while LinkedIn hydrates its navigation. Never
+ // retain a DOM handle across that check; reacquire the visible control instead.
  for(let attempt=0;attempt<2;attempt++) {
   const el=await firstControl(page,selector,match);
   if(!el)return false;
@@ -254,10 +254,13 @@ async function signInDiagnostics(page) {
   };
  });
 }
+const sectionLabels={About:['About','À propos','Acerca de','Sobre','Info','Informazioni','نبذة','نبذة عن'],Featured:['Featured','À la une','Destacado','Destaques','Im Fokus','In primo piano','مميز'],Activity:['Activity','Activité','Actividad','Atividades','Aktivitäten','Attività','النشاط']};
+const sectionKey=value=>text(value).normalize('NFKD').replace(/\p{M}/gu,'').toLowerCase();
 function section($, label) {
+ const names=(sectionLabels[label]||[label]).map(sectionKey);
  return $(':is(main,[role="main"]) section').toArray().reverse().map(n=>$(n)).find(n=>{
   const heading=n.find('h2,[role="heading"]').filter((_i,h)=>$(h).closest('section')[0]===n[0]).first(),title=text(heading.find('[aria-hidden="true"]').first().text()||heading.text());
-  return n.find('#'+label.toLowerCase().replace(/ /g,'_')).filter((_i,h)=>$(h).closest('section')[0]===n[0]).length||title.toLowerCase()===label.toLowerCase();
+  return n.find('#'+label.toLowerCase().replace(/ /g,'_')).filter((_i,h)=>$(h).closest('section')[0]===n[0]).length||names.includes(sectionKey(title));
  });
 }
 function profileCard($,expected) {
@@ -292,8 +295,17 @@ function parseProfile(state,person,accountId='',now=new Date().toISOString()) {
  // nearest name container; location is the next paragraph. Do not read the
  // outer Primary content section or recommended members' paragraphs.
  const nameBlock=heading.parentsUntil(top).toArray().map(n=>$(n)).find(n=>n.children('p').length);
- const headline=text(top.find('.text-body-medium.break-words,.text-body-medium,[data-view-name="profile-card-headline"]').first().text()||nameBlock?.children('p').first().text());
- const location=text(top.find('.pv-text-details__left-panel.mt2 .text-body-small,.text-body-small.inline.t-black--light.break-words,[data-view-name="profile-card-location"]').first().text()||nameBlock?.find('p').filter((_i,n)=>!$(n).find('a').length&&$(n).parent()[0]!==nameBlock[0]&&text($(n).text())!=='·').first().text());
+ const ownField=(_i,node)=>{
+  if($(node).closest('aside,[role="complementary"],article,[role="article"]').length)return false;
+  for(const parent of [node,...$(node).parentsUntil(top).toArray()]){
+   if(parent===top[0]||$(parent).find(heading[0]).length)break;
+   const members=$(parent).find('a[href]').toArray().map(a=>{try{const u=new URL($(a).attr('href'),expected);return /^\/(?:in|company)\/[^/]+\/?$/.test(u.pathname)?u.href:null;}catch{return null;}}).filter(Boolean);
+   if(members.length&&!members.some(url=>profileUrl(url)===expected))return false;
+  }
+  return true;
+ };
+ const headline=text(top.find('.text-body-medium.break-words,.text-body-medium,[data-view-name="profile-card-headline"]').filter(ownField).first().text()||nameBlock?.children('p').filter(ownField).first().text());
+ const location=text(top.find('.pv-text-details__left-panel.mt2 .text-body-small,.text-body-small.inline.t-black--light.break-words,[data-view-name="profile-card-location"]').filter(ownField).first().text()||nameBlock?.find('p').filter(ownField).filter((_i,n)=>!$(n).find('a').length&&$(n).parent()[0]!==nameBlock[0]&&text($(n).text())!=='·').first().text());
  const audience=profileAudience($,top,expected,now);
  return {url:expected,firstName:parts[0],lastName:parts.slice(1).join(' '),headline,...audience,
   about:summary,profileLocation:location,
@@ -303,14 +315,39 @@ function parseProfile(state,person,accountId='',now=new Date().toISOString()) {
   linkedinAccountId:accountId,linkedinCapture:{version:2,stage:'profile',complete:false,checkedAt:now}};
 }
 function profileAudience($,top,person,now){
- const activity=section($,'Activity'),areas=[top];
- if(activity?.find('a[href*="/recent-activity/"]').toArray().some(a=>{try{return new URL($(a).attr('href'),person).pathname.startsWith(new URL(person).pathname+'recent-activity/');}catch{return false;}}))areas.push(activity);
+ const activity=section($,'Activity'),areas=[{area:top,activity:false}];
+ if(activity?.find('a[href*="/recent-activity/"]').toArray().some(a=>{try{return new URL($(a).attr('href'),person).pathname.startsWith(new URL(person).pathname+'recent-activity/');}catch{return false;}}))areas.push({area:activity,activity:true});
+ const numeric='[\\d٠-٩۰-۹][\\d٠-٩۰-۹.,٬٫ \\u00a0\\u202f]*[kKmM]?\\+?';
+ const allLabels='(?:'+followerPolicy.LABELS.followers+'|'+followerPolicy.LABELS.connections+')';
+ const widget=new RegExp(numeric+'\\s*'+allLabels+'(?![\\p{L}\\p{N}])','giu');
  const pick=kind=>{
   const values=new Map();let unparseable='';
-  for(const area of areas)area.find('p,li,span,a').each((_i,node)=>{
-   const raw=text($(node).text());if(raw.length>100||!new RegExp('(?:'+followerPolicy.LABELS[kind]+')$','iu').test(raw))return;
-   const record=followerPolicy.audienceRecord(raw,kind);if(record.count!==null)values.set(record.count,record);else if(!unparseable)unparseable=raw;
-  });
+  for(const entry of areas){
+   const nodes=entry.area.find('*').toArray(),boundary=entry.activity?nodes.findIndex(n=>$(n).is('article,[role="article"],[data-urn*="urn:li:activity"],.feed-shared-update-v2')||$(n).is('h2')&&!sectionLabels.Activity.map(sectionKey).includes(sectionKey($(n).text()))):-1;
+   const ownHeading=entry.area.find('h1,h2,[role="heading"]').first()[0];
+   entry.area.find('p,li,span,a,div,button,[aria-label]').each((_i,node)=>{
+    if(boundary>=0&&nodes.indexOf(node)>=boundary)return;
+    if($(node).closest('aside,[role="complementary"],article,[role="article"]').length)return;
+    // A suggested member/company card may be nested inside this section in
+    // generated layouts. Its audience is not the owner's audience.
+    for(const parent of [node,...$(node).parentsUntil(entry.area).toArray()]){
+     if(parent===entry.area[0]||ownHeading&&(parent===ownHeading||$(parent).find(ownHeading).length))break;
+     const profiles=$(parent).find('a[href]').addBack('a[href]').toArray().map(a=>{try{const u=new URL($(a).attr('href'),person);return u.origin==='https://www.linkedin.com'&&/^\/(?:in|company)\/[^/]+\/?$/.test(u.pathname)?u.href:null;}catch{return null;}}).filter(Boolean);
+     if(profiles.length&&!profiles.some(url=>profileUrl(url)===profileUrl(person)))return;
+    }
+    for(const raw of [text($(node).text()),text($(node).attr('aria-label'))].filter(Boolean)){
+     if(raw.length>200)continue;
+     const clean=raw.replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,'');
+     const direct=followerPolicy.audienceRecord(raw,kind);
+     if(direct.count!==null){values.set(direct.count,direct);continue;}
+     const matches=[...clean.matchAll(widget)],residue=clean.replace(widget,'').replace(/[\s·•|,;/+\-–—]/g,'');
+     // Split only a complete audience widget; prose such as "I help 2K
+     // followers" and other people's post text are never follower evidence.
+     if(matches.length&&!residue)for(const match of matches){const record=followerPolicy.audienceRecord(match[0],kind);if(record.count!==null)values.set(record.count,record);}
+     else if(!unparseable&&new RegExp('(?:'+followerPolicy.LABELS[kind]+')$','iu').test(clean))unparseable=raw;
+    }
+   });
+  }
   const records=[...values.values()],chosen=records.length===1?records[0]:{count:null,rawText:records.map(r=>r.rawText).join(' | ')||unparseable};
   return {...chosen,checkedAt:now,...(kind==='followers'?{threshold:followerPolicy.minFollowers()}:{})};
  };
@@ -334,7 +371,7 @@ async function readActivity(page,person,options={}) {
  return telemetry.span('linkedin.activity',()=>readActivityInner(page,person,options));
 }
 async function readActivityInner(page,person,options={}) {
- const {activityRoute,extractActivityPage}=require('./linkedin-activity-page.cjs');
+ const {activityRoute,extractActivityPage,POST_HEADING}=require('./linkedin-activity-page.cjs');
  if(profileUrl(page.url())!==profileUrl(person))await openProfile(page,person,options);
  const state=await inspected(page,options),$=cheerio.load(state.html);
  const routes=$('main a[href]').toArray().map(n=>activityRoute(new URL($(n).attr('href'),state.url).href,person)).filter(Boolean);
@@ -342,7 +379,7 @@ async function readActivityInner(page,person,options={}) {
  if(!await clickControl(page,'main a[href*="/recent-activity/"]',n=>routes.includes(n.href),'activity_page',options))return null;
  await page.waitForFunction(()=>/\/recent-activity\//.test(location.pathname),{timeout:12000,polling:'mutation'});
  await inspectNotice(page,options);
- await page.waitForFunction(()=>document.querySelector('main [data-urn*="urn:li:activity"],main .feed-shared-update-v2')||[...document.querySelectorAll('main h2')].some(n=>n.textContent.trim()==='Feed post')||/nothing to see for now/i.test(document.querySelector('main')?.innerText||''),{timeout:10000,polling:'mutation'}).catch(()=>{});
+ await page.waitForFunction(pattern=>document.querySelector('main [data-urn*="urn:li:activity"],main .feed-shared-update-v2,main article header,main [role="article"] header')||[...document.querySelectorAll('main h2')].some(n=>new RegExp(pattern,'iu').test(n.textContent.trim()))||/nothing to see for now/i.test(document.querySelector('main')?.innerText||''),{timeout:10000,polling:'mutation'},POST_HEADING).catch(()=>{});
  const activity=await inspected(page,options);
  return {...extractActivityPage(activity.html,{profileUrl:person,pageUrl:activity.url,now:options.now}),activityCheck:{httpStatus:200,retryable:false}};
 }
@@ -350,20 +387,50 @@ async function captureProfile(page,person,options={}) {
  const unwatch=telemetry.observePage(page);
  try {
  let state=await telemetry.span('linkedin.profile',()=>openProfile(page,person,options));
- let initial=state.profile||parseProfile(state,person,options.accountId);
- if(initial.followers.count===null&&!initial.followers.rawText){
-  await page.waitForFunction(()=>[...document.querySelectorAll('main p,main li,main span')].some(n=>n.getClientRects().length&&/^\s*[\d.,\s]+[kKmM]?\s+(followers?|abonnés|seguidores)\s*$/i.test(n.textContent)),{timeout:1500,polling:'mutation'}).catch(()=>{});
-  state=await inspected(page,options);initial=parseProfile(state,person,options.accountId);
- }
- const saved=options.resume,capturedAt=Date.parse(saved?.linkedinCapture?.checkedAt);
- const resumeValid=saved?.linkedinCapture?.version===2&&saved.profileIdentityConfirmed&&profileUrl(saved.url)===profileUrl(person)&&saved.linkedinAccountId===options.accountId&&Number.isFinite(capturedAt)&&Date.now()-capturedAt>=0&&Date.now()-capturedAt<86400000;
  const finish=async(value,stage='complete')=>{
   value.linkedinCapture={...value.linkedinCapture,stage,complete:true};value.linkedinCapturedAt=new Date().toISOString();
   await options.onCheckpoint?.(value);return value;
  };
+ const rejectOutside=profile=>options.requireTargetLocation&&require('./discovery-location-evidence.cjs').parsePersonLocation(profile.profileLocation||'').status==='OUTSIDE_TARGET'
+  ?finish({...profile,status:'REJECTED',decisionStage:'location',reasonCode:'LOCATION_OUTSIDE_TARGET'},'location_decided'):null;
+ let initial=state.profile||parseProfile(state,person,options.accountId);
+ if(options.requireTargetLocation)initial.targetLocationRequired=true;
+ const outside=rejectOutside(initial);if(outside)return await outside;
+ if(initial.followers.count===null&&!initial.followers.rawText){
+  await options.beforeCheck?.('profile');
+  await page.evaluate(()=>window.scrollBy({top:650,behavior:'instant'}));
+  await page.waitForFunction(({labels,person})=>{
+   const canonical=value=>{try{const u=new URL(value,location.href);return u.origin==='https://www.linkedin.com'&&/^\/in\/[^/]+\/?$/.test(u.pathname)?u.origin+u.pathname.toLowerCase().replace(/\/?$/,'/'):null;}catch{return null;}};
+   const label=new RegExp('^[\\d٠-٩۰-۹][\\d٠-٩۰-۹.,٬٫ \\u00a0\\u202f]*[kKmM]?\\s*(?:'+labels+')$','iu');
+   const ownRoot=document.querySelector('main h1')?.closest('section');
+   const roots=[...document.querySelectorAll('main section')].filter(root=>root===ownRoot||[...root.querySelectorAll('a[href*="/recent-activity/"]')].some(a=>canonical(a.href.replace(/\/recent-activity\/.*$/,'/'))===person));
+   for(const root of roots)for(const n of root.querySelectorAll('p,li,span,a,div,button,[aria-label]')){
+    if(!n.getClientRects().length||n.closest('aside,[role="complementary"],article,[role="article"],[data-urn*="urn:li:activity"],.feed-shared-update-v2'))continue;
+    let foreign=false;
+    for(let parent=n;parent&&parent!==root;parent=parent.parentElement){
+     if(parent.querySelector('h1'))break;
+     const members=[...parent.querySelectorAll('a[href]')].filter(a=>{try{return /^\/(in|company)\/[^/]+\/?$/.test(new URL(a.href).pathname);}catch{return false;}});
+     if(members.length&&!members.some(a=>canonical(a.href)===person)){foreign=true;break;}
+    }
+    if(foreign)continue;
+    if([n.innerText,n.getAttribute('aria-label')].some(value=>value&&value.length<200&&label.test(value.normalize('NFKC').replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u064b-\u065f\u0670]/g,'').trim())))return true;
+   }
+   return false;
+  },{timeout:2000,polling:'mutation'},{labels:followerPolicy.LABELS.followers,person:profileUrl(person)}).catch(()=>{});
+  state=await inspected(page,options);initial=parseProfile(state,person,options.accountId);
+  if(options.requireTargetLocation)initial.targetLocationRequired=true;
+  const outside=rejectOutside(initial);if(outside)return await outside;
+ }
+ const saved=options.resume,capturedAt=Date.parse(saved?.linkedinCapture?.checkedAt);
+ const resumeValid=saved?.linkedinCapture?.version===2&&saved.profileIdentityConfirmed&&profileUrl(saved.url)===profileUrl(person)&&saved.linkedinAccountId===options.accountId&&Number.isFinite(capturedAt)&&Date.now()-capturedAt>=0&&Date.now()-capturedAt<86400000;
  const followerGate=followerPolicy.followersDecision(initial.followers,followerPolicy.minFollowers());
  if(followerGate.status!=='CONTINUE')return finish({...initial,status:followerGate.status,decisionStage:'followers',reasonCode:followerGate.reason,
   ...(followerGate.status==='REVIEW'?{failure:{stage:'qualification',code:followerGate.reason,reason:'Follower count is not confirmed on the rendered profile. Review the saved evidence.',retryable:false}}:{})},'followers_decided');
+ if(options.requireTargetLocation){
+  const location=require('./discovery-location-evidence.cjs').parsePersonLocation(initial.profileLocation||'');
+  if(location.status!=='CONFIRMED')return finish({...initial,status:location.status==='OUTSIDE_TARGET'?'REJECTED':'REVIEW',decisionStage:'location',reasonCode:location.status==='OUTSIDE_TARGET'?'LOCATION_OUTSIDE_TARGET':'LOCATION_UNCONFIRMED',
+   ...(location.status==='OUTSIDE_TARGET'?{}:{failure:{stage:'qualification',code:'LOCATION_UNCONFIRMED',reason:'The rendered profile did not confirm a UK, US or Canada location. Review the saved location evidence.',retryable:false}})},'location_decided');
+ }
  if(!resumeValid)await options.onCheckpoint?.(initial);
  // Some LinkedIn layouts hydrate About/Activity only when their section is
  // approached. Limit scrolling to this profile and count every attempt.
@@ -382,6 +449,7 @@ async function captureProfile(page,person,options={}) {
   if(profileUrl(state.url)!==profileUrl(person))throw problem('PROFILE_IDENTITY','The page changed while loading profile sections. Processing stopped.');
  }
  const capturedProfile=parseProfile(state,person,options.accountId);
+ if(options.requireTargetLocation)capturedProfile.targetLocationRequired=true;
  if(resumeValid){capturedProfile.about||=saved.about||'';capturedProfile.websites=[...new Set([...(saved.websites||[]),...capturedProfile.websites])];}
  // A dated matching-author preview already proves recent activity. Older or
  // undated preview cards do not establish inactivity and use the observed feed.
@@ -408,6 +476,7 @@ async function captureProfile(page,person,options={}) {
  // invitation, or other account-changing controls while qualifying a lead.
  if(await clickControl(page,'main section:has(#about) button.inline-show-more-text__button,main section:has(#about) button[aria-label*="see more"]',()=>true,'profile',options))state=await inspected(page,options);
  const result={...parseProfile(state,person,options.accountId),...activity,followers:initial.followers,connections:initial.connections};
+ if(options.requireTargetLocation)result.targetLocationRequired=true;
  result.about||=capturedProfile.about;
  result.websites=[...new Set([...capturedProfile.websites,...result.websites])];result.website=result.websites[0]||'';
  result.websiteSource||=capturedProfile.websiteSource;

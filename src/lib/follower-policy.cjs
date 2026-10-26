@@ -1,6 +1,6 @@
 'use strict';
-const DEFAULT_MIN_FOLLOWERS=1000;
-const LABELS={followers:'followers?|abonn[ée]s?|seguidores?|volgers|seguaci|follower(?:innen)?|follower:innen|متابع(?:ون|ين|ًا|اً)?|팔로워|フォロワー',
+const DEFAULT_MIN_FOLLOWERS=500;
+const LABELS={followers:'followers?|abonn[ée]s?|seguidores?|volgers|seguaci|follower(?:innen)?|follower:innen|(?:من\\s+)?(?:ال)?متابع(?:ون|ين|ًا|اً)?|팔로워|フォロワー',
  connections:'connections?|relations?|conexiones|contatti|connecties|kontakte|زميل(?:ا|اً|ًا)?|اتصالات'};
 function digits(value){return String(value||'').replace(/[٠-٩]/g,d=>String(d.charCodeAt(0)-1632)).replace(/[۰-۹]/g,d=>String(d.charCodeAt(0)-1776)).replace(/٬/g,',').replace(/٫/g,'.');}
 function parseAudienceCount(value,{lowerBound=false}={}){
@@ -23,8 +23,9 @@ function parseAudienceCount(value,{lowerBound=false}={}){
 }
 function audienceRecord(value,kind='followers'){
  const rawText=String(value||'').replace(/\s+/g,' ').trim().slice(0,200);
+ const parseText=rawText.normalize('NFKC').replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u064b-\u065f\u0670]/g,'');
  const expression=new RegExp('^([\\d٠-٩۰-۹.,٬٫ \\u00a0\\u202f]+[kKmM]?'+(kind==='connections'?'\\+?':'')+')\\s*(?:'+LABELS[kind]+')$','iu');
- const match=rawText.match(expression);
+ const match=parseText.match(expression);
  return {rawText,count:match?parseAudienceCount(match[1],{lowerBound:kind==='connections'}):null};
 }
 function parseFollowerCount(value){

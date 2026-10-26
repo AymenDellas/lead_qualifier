@@ -56,6 +56,7 @@ async function saveWorkerResearch(pool, input) {
 async function saveCaptureReview(pool,{job,owner,capture,failure}){
  const research=validateResearch({...emptyResearch(capture),...capture.prospectQualification?.research,version:1,researchedAt:new Date().toISOString(),engine:'rules',
   linkedinUrl:job.linkedinUrl,profileIdentityConfirmed:capture.profileIdentityConfirmed===true,headline:capture.headline||'',about:capture.about||'',
+  targetLocationRequired:true,profileLocation:capture.profileLocation||capture.prospectQualification?.research?.profileLocation||'',
   followers:capture.followers||null,connections:capture.connections||null,lastActivityAt:capture.lastActivityAt||null,activityEvidence:capture.activityEvidence||null,
   limitations:[...(capture.prospectQualification?.research?.limitations||[]),failure.code+': '+failure.reason]});
  return saveWorkerResearch(pool,{linkedinUrl:job.linkedinUrl,jobId:job.jobId,owner,research,reviewRequired:true});

@@ -26,7 +26,7 @@ test('stored pre-v2 qualified records remain unchecked until an explicit fresh r
 });
 test('an early follower rejection remains REJECTED through the public lane and CRM, with activity intentionally unread',async()=>{
  const {createResearchRunner}=require('../../src/lib/worker-research-runner.cjs');let saved;
- const r=research(1000);r.activityStatus='Unknown';r.lastActivityAt=null;r.contacts=[];
+ const r=research(500);r.activityStatus='Unknown';r.lastActivityAt=null;r.contacts=[];
  const runner=createResearchRunner({pool:{query:async()=>({rows:[]})},owner:'fixture',core:{complete:async()=>{}},
   researchProspect:async()=>r,saveWorkerResearch:async(_pool,input)=>{saved=input;const assessment=q.assessProspect(input.research);return {id:'crm',assessment,pipelineStatus:q.pipelineForAssessment(assessment)};},launch:async()=>assert.fail('Followers must not start a website browser.')});
  const {result}=await runner.process({jobId:'early-reject',linkedinUrl:person,nativePostProcess:true,resumeResult:{url:person,profileIdentityConfirmed:true,followers:r.followers,decisionStage:'followers',linkedinCapture:{complete:true},emails:[]}});

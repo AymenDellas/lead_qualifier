@@ -6,10 +6,10 @@ export type ProspectEvidence = { url: string; excerpt: string; source: 'WEBSITE'
 export type ProspectFact = { state: FactState; value: string; reason: string; evidence: ProspectEvidence[] };
 export type ProspectReview = { facts: Partial<Record<FactKey, { state: FactState; note: string; url?: string }>>; segment?: string; contactOwnership?: string; contactEmail?: string; note?: string; reviewedAt?: string };
 export type ProspectResearch = {
-    followers?:AudienceEvidence|null;connections?:AudienceEvidence|null;
+    followers?:AudienceEvidence|null;connections?:AudienceEvidence|null;targetLocationRequired?:boolean;
     version: number; researchedAt: string; engine: 'rules' | 'ai' | 'manual'; profileIdentityConfirmed: boolean;
     headline: string; about: string; profileLocation: string; latestPostText: string; lastActivityAt: string | null; activityStatus: 'Active' | 'Inactive' | 'Unknown'; linkedinUrl: string;
-    activityEvidence?: {version:1; endpoint:string; profileUrn:string; profileUrl:string; checkedAt:string; feedElements:number; unresolved:number; selected:ActivityRecord|null; records:ActivityRecord[]; reason:string}|null;
+    activityEvidence?: {version:1|2;ignoredForeign?:number; endpoint:string; profileUrn:string; profileUrl:string; checkedAt:string; feedElements:number; unresolved:number; selected:ActivityRecord|null; records:ActivityRecord[]; reason:string}|null;
     website: string; websiteStatus: 'OWNED' | 'PROFILE_PLATFORM' | 'UNCONFIRMED' | 'NONE';
     segments: ProspectSegment[]; segment: ProspectSegment; facts: Record<FactKey, ProspectFact>;
     pages: { url: string; label: string; status: 'inspected' | 'blocked' | 'skipped'; note: string; attempts?: number; retryable?: boolean; contactPage?: boolean; hasDescription?: boolean }[]; limitations: string[];
@@ -21,13 +21,13 @@ export type ActivityRecord={postUrn:string;authorUrn:string;at:string;method:str
 export type ProspectAssessment = {
     version: number; researchedAt: string; tier: ProspectTier; segment: ProspectSegment; segments: ProspectSegment[]; score: number;
     businessFit: 'MATCH' | 'POTENTIAL' | 'OUTSIDE_ICP' | 'UNKNOWN'; readiness: 'READY_TO_APPROACH' | 'EARLY' | 'NEEDS_REVIEW'; engagementReady: boolean;
-    qualification: {policy: 'EMAIL_ACTIVITY_V1'|'EMAIL_ACTIVITY_FOLLOWERS_V2'; qualified: boolean; activity: 'RECENT' | 'INACTIVE' | 'UNKNOWN'; activityAgeDays: number | null; attributableEmail: boolean; needsRetry: boolean; needsAttention?: boolean;followers?:string;followersReason?:string|null;followersThreshold?:number};
+    qualification: {policy: 'EMAIL_ACTIVITY_V1'|'EMAIL_ACTIVITY_FOLLOWERS_V2'|'EMAIL_ACTIVITY_FOLLOWERS_LOCATION_V3'; qualified: boolean; activity: 'RECENT' | 'INACTIVE' | 'UNKNOWN'; activityAgeDays: number | null; attributableEmail: boolean; needsRetry: boolean; needsAttention?: boolean;followers?:string;followersReason?:string|null;followersThreshold?:number;location?:string;locationReason?:string|null;locationCountry?:string|null};
     contact: { channel: 'EMAIL_READY' | 'EMAIL_NEEDS_VERIFICATION' | 'LINKEDIN_ONLY' | 'UNAVAILABLE' | 'OWNERSHIP_UNCLEAR'; ownership: string; email: string };
     blockers: string[]; unknowns: string[]; cautions: string[]; nextAction: string; research: ProspectResearch; baseResearch: ProspectResearch;
 };
 /** Evidence required by CRM contact gates; full research is unnecessary for lists. */
 export type ProspectContactAssessment = Pick<ProspectAssessment, 'version' | 'score' | 'contact'> & {
-    research: Pick<ProspectResearch, 'profileIdentityConfirmed' | 'lastActivityAt' | 'followers' | 'connections'>;
+    research: Pick<ProspectResearch, 'profileIdentityConfirmed' | 'lastActivityAt' | 'followers' | 'connections'> & Partial<Pick<ProspectResearch,'profileLocation'|'targetLocationRequired'>>;
 };
 export const VERSION: number;
 export const QUALIFICATION_VERSION:number;

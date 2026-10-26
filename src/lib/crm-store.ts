@@ -60,7 +60,9 @@ export function crmLead(lead: LeadRecord): CrmLead {
             const value = assessProspect(lead.prospect_assessment.baseResearch || lead.prospect_assessment.research,
                 { review: lead.prospect_review, email: lead.email, emailProven: hasFreshSmtpProof(lead),legacyFollowersUnchecked:(lead.prospect_assessment.version||1)<2&&!lead.prospect_assessment.research.followers });
             assessment = { version: value.version, score: value.score, contact: value.contact,
-                research: { profileIdentityConfirmed: value.research.profileIdentityConfirmed, lastActivityAt: value.research.lastActivityAt,followers:value.research.followers,connections:value.research.connections } };
+                research: { profileIdentityConfirmed: value.research.profileIdentityConfirmed, lastActivityAt: value.research.lastActivityAt,
+                    followers:value.research.followers,connections:value.research.connections,
+                    targetLocationRequired:value.research.targetLocationRequired,profileLocation:value.research.profileLocation } };
         } catch { /* Match the existing assessmentForLead fallback for invalid research. */ }
     }
     const { prospect_review: _review, ...record } = lead;

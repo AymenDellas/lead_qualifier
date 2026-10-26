@@ -22,6 +22,16 @@ test('reuse is based on capture age, identity and source account; recently compl
  assert.equal(core.reusableLinkedInProfile({checkpoint:noTime},person,'one',now),null);
 });
 
+test('old follower-only cache stops cannot prevent newly eligible profiles from continuing',()=>{
+ const row={account_id:'one',result:capture({decisionStage:'followers',followers:{count:700,rawText:'700 followers',threshold:1000}})};
+ assert.equal(core.reusableLinkedInProfile(row,person,'one',now),null);
+ row.result.followers={count:null,rawText:'\u200f1,119\u200f من المتابعين',threshold:1000};
+ assert.equal(core.reusableLinkedInProfile(row,person,'one',now),null);
+ row.result.followers={count:200,rawText:'200 followers',threshold:1000};
+ assert.equal(core.reusableLinkedInProfile(row,person,'one',now).followers.count,200);
+ delete row.result.decisionStage;row.result.followers.count=700;
+ assert.equal(core.reusableLinkedInProfile(row,person,'one',now).followers.count,700,'complete website captures remain reusable');
+});
 function readFixture(statuses,allowance={}){
  const counted=[],calls=[],holds=[],sleeps=[];
  const runtime=createAccountRuntime({pool:{},accountId:'one',owner:'owner',now:()=>now,

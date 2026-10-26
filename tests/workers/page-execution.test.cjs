@@ -232,13 +232,13 @@ test('lazy profile sections are read after bounded browser scrolling; generic er
  assert.match(reader.parseProfile({url:person,html:accessible},person).about,/I help leaders change careers/,'Duplicated screen-reader headings still identify the About section');
 });
 test('follower decisions stop after identity with one page and retain separate connection evidence',async()=>{
- for(const [label,status,reason,count]of [['900 followers','REJECTED','FOLLOWERS_BELOW_MIN',900],['1,000 followers','REJECTED','FOLLOWERS_BELOW_MIN',1000],['many followers','REVIEW','FOLLOWERS_UNPARSEABLE',null],['','REVIEW','FOLLOWERS_NOT_SHOWN',null]]){
+ for(const [label,status,reason,count]of [['499 followers','REJECTED','FOLLOWERS_BELOW_MIN',499],['500 followers','REJECTED','FOLLOWERS_BELOW_MIN',500],['many followers','REVIEW','FOLLOWERS_UNPARSEABLE',null],['','REVIEW','FOLLOWERS_NOT_SHOWN',null]]){
   const html=profile.replace('<p>2,345 followers</p>',label?'<p>'+label+'</p>':'');
   await fixture(async(page,requests)=>{
    const steps=[],result=await reader.captureProfile(page,person,{beforeCheck:async kind=>steps.push(kind)});
    assert.equal(result.status,status);assert.equal(result.reasonCode,reason);assert.equal(result.followers.count,count);
    assert.equal(result.connections.count,500);assert.equal(result.linkedinCapture.complete,true);
-   assert.deepEqual(steps,['profile_page']);assert.equal(requests.length,1);assert.deepEqual(result.emails,[]);
+   assert.deepEqual(steps,label?['profile_page']:['profile_page','profile']);assert.equal(requests.length,1);assert.deepEqual(result.emails,[]);
   },()=>({status:200,contentType:'text/html',body:html}));
  }
 });

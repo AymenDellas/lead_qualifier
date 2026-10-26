@@ -2,8 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {pool} from '../../src/lib/pg_setup';
 import {getCrmLeads,getCrmPage,setCrmContacted,crmLead} from '../../src/lib/crm-store';
-import {prospect} from '../prospects/fixtures.cjs';
-import {hasQualifiedEmail} from '../../src/lib/prospect-qualification.cjs';
+import {prospect,research} from '../prospects/fixtures.cjs';
+import {hasQualifiedEmail,assessProspect} from '../../src/lib/prospect-qualification.cjs';
 
 // Explicit opt-in only. Every application query is pinned to this connection
 // with pg_temp-only resolution, so it cannot read or change real lead records.
@@ -25,6 +25,8 @@ test('Postgres projection, paging and contact batches preserve evidence atomical
   const originals=new Map<string,ReturnType<typeof prospect>>();
   for(const id of ['manual','platform','hunter','dm','queued','empty-facts']){
    const value=prospect(id);
+   const locations:Record<string,string>={manual:'Toronto, Canada',platform:'Paris, France',hunter:'London'};
+   if(locations[id])value.prospect_assessment=assessProspect(research({targetLocationRequired:true,profileLocation:locations[id],lastActivityAt:new Date().toISOString()}),{email:value.email,emailProven:true});
    if(id==='empty-facts')value.prospect_assessment={research:{...value.prospect_assessment.research,facts:{},profileIdentityConfirmed:false}};
    originals.set(id,value);
    await client.query(`INSERT INTO leads(id,linkedin_url,email,pipeline_status,contacted,contacted_source,linkedin_dm_at,created_at,
@@ -36,6 +38,9 @@ test('Postgres projection, paging and contact batches preserve evidence atomical
   await client.query(`INSERT INTO case_study_prospects VALUES('h','http://uk.linkedin.com/in/CRM-REVIEW-HUNTER/?tracking=review','{}')`);
   const initial=await getCrmLeads();
   assert.equal(initial.length,6);assert.equal(initial.find(l=>l.id==='hunter')?.in_hunter,true);
+  assert.equal(hasQualifiedEmail(initial.find(l=>l.id==='manual')),true);
+  assert.equal(hasQualifiedEmail(initial.find(l=>l.id==='platform')),false);
+  assert.equal(hasQualifiedEmail(initial.find(l=>l.id==='hunter')),false);
   for(const lead of initial){
    const full=crmLead(originals.get(lead.id)!);
    assert.equal(lead.prospect_assessment?.score,full.prospect_assessment?.score);

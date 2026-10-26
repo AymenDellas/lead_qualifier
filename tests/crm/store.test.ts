@@ -26,6 +26,18 @@ test('current email and manual ownership reviews remain authoritative', () => {
     value.prospect_review.contactOwnership = 'UNCONFIRMED';
     assert.equal(hasQualifiedEmail(crmLead(value)), false);
 });
+test('compact CRM projection retains the rendered country gate and cannot unlock foreign or unknown locations', () => {
+    for (const [profileLocation, allowed] of [['Toronto, Ontario, Canada', true], ['Paris, France', false], ['London', false]] as const) {
+        const evidence = research({ targetLocationRequired: true, profileLocation, lastActivityAt: new Date().toISOString() });
+        const value = prospect('country-gate', { prospect_assessment: assessProspect(evidence, { email: 'ava@avamorgan.test', emailProven: true }) });
+        const compact = crmLead(value);
+        assert.equal(compact.prospect_assessment?.research.targetLocationRequired, true);
+        assert.equal(compact.prospect_assessment?.research.profileLocation, profileLocation);
+        assert.equal(hasQualifiedEmail(value), allowed);
+        assert.equal(hasQualifiedEmail(compact), allowed);
+        assert.equal(isQualifiedRecord(compact), isQualifiedRecord(value));
+    }
+});
 test('legacy labels are sanitized without writing to the database; suppression and bounce evidence remain', () => {
     for (const status of ['VALID','INVALID','RISKY']) {
         const value = prospect('legacy', { email_status: status, email_verification_method: null, email_verification_reason: null });

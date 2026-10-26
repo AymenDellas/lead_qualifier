@@ -39,6 +39,20 @@ test('saved profiles complete independently of account processing without openin
  assert.equal(f.job.resumeResult.status,'PENDING','saved checkpoint is not mutated');
  await f.runner.close();
 });
+test('resumed main-CRM evidence retains the current country and follower policy without reopening LinkedIn',async()=>{
+ const f=fixture({researchProspect:async()=>({...research(),profileLocation:'Toronto, Canada',followers:{count:700,rawText:'700 followers',threshold:1000}})});
+ const outcome=await f.runner.runOnce();
+ assert.equal(outcome.result.prospectQualification.research.targetLocationRequired,true);
+ assert.equal(outcome.result.prospectQualification.research.followers.threshold,500);
+ assert.equal(f.calls.save[0][1].research.targetLocationRequired,true);assert.equal(f.calls.launch.length,0);
+ await f.runner.close();
+});
+test('unconfirmed identity cannot reject a profile using someone else follower or location evidence',async()=>{
+ const f=fixture({researchProspect:async()=>({...research(),profileIdentityConfirmed:false}),
+  assessProspect:r=>({research:r,qualification:{followers:'REJECTED',followersReason:'FOLLOWERS_BELOW_MIN',location:'REJECTED'},contact:{email:''}}),pipelineForAssessment:()=> 'REVIEW'});
+ const outcome=await f.runner.runOnce();assert.equal(outcome.result.status,'REVIEW');assert.equal(outcome.result.failure.code,'PROFILE_IDENTITY');
+ await f.runner.close();
+});
 test('rendering uses a separate temporary public browser and retains the guarded renderer',async()=>{
  const f=fixture();f.options.researchProspect=async(_input,settings)=>{await settings.renderPage('https://fixture.example.test/');return research();};
  const runner=createResearchRunner(f.options);

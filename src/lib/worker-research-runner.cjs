@@ -144,6 +144,7 @@ function createResearchRunner(options){
    }
    const research=previousFailure?.stage==='crm'&&previousResearch?previousResearch:await researchProspect({
     ...result,linkedinUrl:result.url,knownWebsite,email:result.primaryEmail||result.emails?.[0]||'',
+    ...(!job.prospecting?{targetLocationRequired:true}:{}),
    },{ai:false,previousResearch,fetchPage,renderPage:renderer(),qualificationFirst:!job.prospecting,
     ...(job.prospecting?{maxPages:8,maxTimeMs:30000}:{}),
    });
@@ -156,6 +157,10 @@ function createResearchRunner(options){
     // finishProfile owns prospecting's CRM write. Do not also call nativeSave.
     result=await finishProspecting(pool,owner,job,result);
    }else{
+    // New/resumed main-CRM decisions use the requested current policy even
+    // when a complete website checkpoint predates it. No LinkedIn reread.
+    research.targetLocationRequired=true;
+    if(research.followers)research.followers.threshold=require('./follower-policy.cjs').minFollowers();
     result.website=research.website||'';
     result.emails=prioritizeEmails((research.contacts||[]).filter(c=>['PUBLISHED','DOMAIN_MATCH'].includes(c.ownership)).map(c=>c.address),result.firstName,qualification.hostOf(research.website));
     result.emails.sort((a,b)=>Number(research.contacts.find(c=>c.address===b)?.source==='linkedin')-Number(research.contacts.find(c=>c.address===a)?.source==='linkedin'));
@@ -165,8 +170,8 @@ function createResearchRunner(options){
     result.prospectQualification=telemetry.spanSync('qualification',()=>assessProspect(research,{email:result.primaryEmail}));
     const q=result.prospectQualification.qualification;
     const pipeline=pipelineForAssessment(result.prospectQualification);
-    result.status=q.followers==='REJECTED'?'REJECTED':pipeline==='QUALIFIED'?'QUALIFIED':pipeline==='REVIEW'||q.activity==='UNKNOWN'||!research.profileIdentityConfirmed||q.needsAttention?'REVIEW':q.needsRetry?'ERROR':'REJECTED';
-    if(result.status==='REVIEW')result.failure={stage:'qualification',code:q.followersReason||(!research.profileIdentityConfirmed?'PROFILE_IDENTITY':q.activity==='UNKNOWN'?'ACTIVITY_UNCONFIRMED':'CRAWL_INCOMPLETE'),reason:result.prospectQualification.nextAction,retryable:false};
+    result.status=!research.profileIdentityConfirmed?'REVIEW':q.followers==='REJECTED'||q.location==='REJECTED'?'REJECTED':pipeline==='QUALIFIED'?'QUALIFIED':pipeline==='REVIEW'||q.location==='REVIEW'||q.activity==='UNKNOWN'||q.needsAttention?'REVIEW':q.needsRetry?'ERROR':'REJECTED';
+    if(result.status==='REVIEW')result.failure={stage:'qualification',code:!research.profileIdentityConfirmed?'PROFILE_IDENTITY':q.followersReason||q.locationReason||(q.activity==='UNKNOWN'?'ACTIVITY_UNCONFIRMED':'CRAWL_INCOMPLETE'),reason:result.prospectQualification.nextAction,retryable:false};
     if(result.status==='ERROR'){
      result.failure=q.activity==='UNKNOWN'||!research.profileIdentityConfirmed
       ?{stage:'linkedin',code:research.profileIdentityConfirmed?'ACTIVITY_UNCONFIRMED':'PROFILE_IDENTITY',reason:research.activityEvidence?.reason||result.prospectQualification.blockers?.[0]||'Captured profile evidence needs manual review.',retryable:false}

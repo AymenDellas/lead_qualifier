@@ -448,7 +448,7 @@ async function researchProspect(input, options = {}) {
     const previousContacts=options.previousResearch?.contacts||[];
     const linkedinEmails=input.profileIdentityConfirmed&&input.emailSource==='linkedin'?(input.emails||[]).filter(e=>!isUnsafeContact(e)&&!previousContacts.some(c=>c.address===e.toLowerCase()&&c.source!=='linkedin')):[];
     const profileContacts=[...publishedProfileEmails(input),...linkedinEmails.map(address=>({address:address.toLowerCase(),source:'linkedin',url:input.linkedinUrl||input.url,ownership:'PUBLISHED'}))];
-    if(input.decisionStage==='followers'||input.decisionStage==='activity'){
+    if(['followers','location','activity'].includes(input.decisionStage)){
         research.contacts=profileContacts;deriveRules(input,research,sources,[]);return validateResearch(research);
     }
     if(options.qualificationFirst&&input.profileIdentityConfirmed&&activityAge>30&&Number.isFinite(activityAge)){

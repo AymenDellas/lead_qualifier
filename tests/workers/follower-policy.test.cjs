@@ -14,12 +14,14 @@ test('localized follower labels and number separators are explicit; unknown lang
  assert.equal(parseFollowerCount('1234 未知ラベル'),null);
 });
 test('strict greater-than threshold produces continue, rejection or review with evidence',()=>{
- assert.deepEqual(followersDecision({count:1001,rawText:'1,001 followers'}),{status:'CONTINUE',reason:null,threshold:1000});
- for(const count of [0,999,1000])assert.equal(followersDecision({count}).reason,'FOLLOWERS_BELOW_MIN');
- assert.deepEqual(followersDecision({count:null,rawText:''}),{status:'REVIEW',reason:'FOLLOWERS_NOT_SHOWN',threshold:1000});
+ assert.deepEqual(followersDecision({count:501,rawText:'501 followers'}),{status:'CONTINUE',reason:null,threshold:500});
+ for(const count of [0,499,500])assert.equal(followersDecision({count}).reason,'FOLLOWERS_BELOW_MIN');
+ assert.deepEqual(followersDecision({count:null,rawText:''}),{status:'REVIEW',reason:'FOLLOWERS_NOT_SHOWN',threshold:500});
  assert.equal(followersDecision({count:null,rawText:'followers'}).reason,'FOLLOWERS_UNPARSEABLE');
  assert.equal(followersDecision({count:1500},2000).status,'REJECTED');
  assert.equal(followersDecision({count:2001},2000).status,'CONTINUE');
- assert.equal(minFollowers({}),1000);assert.equal(minFollowers({MIN_FOLLOWERS:'1200'}),1200);assert.throws(()=>minFollowers({MIN_FOLLOWERS:'bad'}),/integer/);
+ assert.equal(minFollowers({}),500);assert.equal(minFollowers({MIN_FOLLOWERS:'1200'}),1200);assert.throws(()=>minFollowers({MIN_FOLLOWERS:'bad'}),/integer/);
  assert.equal(parseAudienceCount('10000000000000000000000000M'),null);
 });
+
+test('Arabic bidi count and label evidence reparses without changing the stored raw text',()=>{for(const [raw,count]of [['\u200f1,119\u200f من المتابعين',1119],['\u200f23,838\u200f من المتابعين',23838],['٥٠١ من المتابعين',501]]){const record=audienceRecord(raw);assert.equal(record.count,count);assert.equal(record.rawText,raw);assert.equal(followersDecision(record).status,'CONTINUE');}assert.equal(parseFollowerCount('٥٠٠ من المتابعين'),500);assert.equal(followersDecision({count:500}).status,'REJECTED');});

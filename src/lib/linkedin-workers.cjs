@@ -472,6 +472,14 @@ function reusableLinkedInProfile(row,url,accountId,now=Date.now()) {
   const at=Date.parse(value.linkedinCapturedAt||value.activityEvidence?.checkedAt||value.linkedinContact?.checkedAt);
   if(!Number.isFinite(at)||at>now||now-at>=24*60*60*1000)continue;
   const saved=structuredClone(value);saved.status='PENDING';
+  // An older follower-only stop has no downstream capture to reuse after a
+  // lower threshold/parser fix. A new job needs to continue the profile read;
+  // website/CRM checkpoints are unaffected by this completed-result cache rule.
+  if(saved.decisionStage==='followers'){
+   const policy=require('./follower-policy.cjs'),record=saved.followers;
+   const count=Number.isSafeInteger(record?.count)?record.count:policy.audienceRecord(record?.rawText).count;
+   if(policy.followersDecision({count},policy.minFollowers()).status==='CONTINUE')continue;
+  }
   if(sourceAccount!==accountId||saved.linkedinContact?.accountId!==accountId)delete saved.linkedinContact;
   for(const key of ['failure','crmSaved','crmLeadId','linkedinChecks','linkedinCacheHit'])delete saved[key];
   return saved;

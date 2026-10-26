@@ -251,7 +251,7 @@ function createAccountRuntime(options) {
    // visit. Partial captures always resume the matching account page first.
    if(!researchQueue.fullCapture(captured)) {
     captured=await reader.captureProfile(telemetry.pageActions(surface.page),job.linkedinUrl,{
-     accountId,requireRecentActivity:!job.prospecting,beforeCheck:async kind=>{
+     accountId,requireRecentActivity:!job.prospecting,requireTargetLocation:!job.prospecting,beforeCheck:async kind=>{
       if(job.prospecting&&!await discoveryStore.runIsActive(pool,job.prospecting.runId))throw controlError('The prospecting run was stopped. Captured evidence is retained.');
       await permit(kind);
       if(kind==='profile_page'&&core.reserveProfile){

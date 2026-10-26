@@ -21,11 +21,11 @@ test('missing, guessed or placeholder emails never qualify an active profile', (
         assert.equal(a.qualification.qualified, false); assert.equal(q.pipelineForAssessment(a), 'NOT_QUALIFIED');
     }
 });
-test('dated old activity is rejected; undated, unconfirmed or future activity is retryable', () => {
+test('dated old activity is rejected; undated, unconfirmed or future activity requires review', () => {
     for (const [lastActivityAt, activityStatus, expected] of [[new Date(Date.now()-31*86400000).toISOString(),'Inactive','INACTIVE'],[null,'Inactive','UNKNOWN'],[null,'Unknown','UNKNOWN'],[new Date(Date.now()+86400000).toISOString(),'Active','UNKNOWN']]) {
         const a = assess({ lastActivityAt, activityStatus });
         assert.equal(a.qualification.activity, expected); assert.equal(a.qualification.needsRetry, expected === 'UNKNOWN');
-        assert.equal(q.pipelineForAssessment(a), 'NOT_QUALIFIED');
+        assert.equal(q.pipelineForAssessment(a), expected === 'UNKNOWN' ? 'REVIEW' : 'NOT_QUALIFIED');
     }
 });
 test('saved old-policy assessments use actual activity and contact evidence instead of business tiers', () => {

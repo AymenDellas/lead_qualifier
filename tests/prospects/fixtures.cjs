@@ -2,7 +2,7 @@
 const { emptyResearch, makeFact, FACT_KEYS, assessProspect } = require('../../src/lib/prospect-qualification.cjs');
 const NOW = '2026-10-06T12:00:00.000Z';
 function research(overrides = {}) {
-    const value = emptyResearch({ linkedinUrl: 'https://www.linkedin.com/in/ava-morgan', headline: 'Independent Executive Coach | Founder', profileIdentityConfirmed: true }, NOW);
+    const value = emptyResearch({ linkedinUrl: 'https://www.linkedin.com/in/ava-morgan', headline: 'Independent Executive Coach | Founder', profileLocation: 'Toronto, Ontario, Canada', profileIdentityConfirmed: true }, NOW);
     value.followers={rawText:'2,000 followers',count:2000,checkedAt:NOW,threshold:1000};
     value.website = 'https://avamorgan.test'; value.websiteStatus = 'OWNED';
     value.lastActivityAt = NOW; value.activityStatus = 'Active';
