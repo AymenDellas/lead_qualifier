@@ -44,3 +44,21 @@ HTTP 401/403/429/999, redirects to account checks, login/authwall/checkpoint/cha
 Private verification reports and the fresh 50-record decided-lead snapshot live under ignored `data/engine-v2/voyager-restore/`. Stored evidence is replayed at its original snapshot clock, without LinkedIn. Fixture browser tests intercept all page requests and exercise real Chrome for Testing, three account profiles, manual/headless switching, one-tab API capture, transport limits and checkpoint recovery. These tests do not verify current live endpoint availability or account safety.
 
 Use `npm run worker` or the local dashboard's Start workers to run the agent. Start/Resume separately authorizes eligible account processing; existing holds remain. Vercel still cannot launch/control the worker. No schema/data deletion, credential change, account-limit reset or automatic legacy-lead requeue is part of this restoration.
+
+### Completed checks
+
+Implementation commit: `b41fc0b`. Verification completed on 26 October 2026:
+
+| Check | Result |
+| --- | --- |
+| Complete engine/worker/prospect suites | 370 passed, zero failures or skips |
+| CRM suite with real isolated PostgreSQL state | 14 passed |
+| TypeScript and lint on all changed engine/test files | Passed |
+| Repository lint | Existing five UI errors and seven warnings outside this change |
+| Production build | Passed; 43 route manifests, zero private runtime entries |
+| Fresh 50-record stored-evidence replay | Zero changed decisions, full qualification fields or blocker reasons; zero errors |
+| Updated agent startup | Online; `VOYAGER_V1`, `PUPPETEER_EXTRA_STEALTH`, recycle default 50, browser ceiling 10, shared save capacity six |
+| Account/queue preservation | All three accounts paused, both exact holds unchanged, all enabled/daily-limit/connection settings unchanged; 86 pending jobs retained |
+| Live LinkedIn compatibility, throughput and restriction comparison | Not run; accounts remain paused and held accounts were not accessed |
+
+These fixture and startup results establish the implemented behavior and recovery paths. They do not establish that the historical Voyager paths still return supported data for a live account, that fewer reviews will result, or that restrictions will stop. No before/after live performance improvement is claimed. Full private reports are `implementation-regression.json`, `final-regression.json` and `deployment-verification.json` in the ignored directory above.
