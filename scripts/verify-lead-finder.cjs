@@ -10,9 +10,9 @@ const { runDorkEngine, buildDiscoverySearchPlan, keptLeadTarget, queryBankSize, 
 const { createFinderProgressStore, finderRuntimeDirectory } = require('../src/lib/finder-progress.ts');
 
 // Real engine and scoring; all search responses are simulated. No API credits or CRM writes.
-const lead = (id, title = 'Executive Coach') => ({
+const lead = (id, title = 'Executive Coach', location = 'Austin, Texas, United States') => ({
     link: `https://www.linkedin.com/in/finder-test-${id}/`,
-    title: `Person ${id} - ${title} | LinkedIn`, snippet: '',
+    title: `Person ${id} - ${title} | LinkedIn`, snippet: `Location: ${location} · Experience: Independent practice`,
 });
 const config = (overrides = {}) => ({
     job_titles: ['Executive Coach'], locations: ['US'], kept_leads_target: 3,
@@ -32,14 +32,14 @@ async function simulatedSearch(responder, run) {
 
 test('3,000 means kept leads, and the engine continues after more than 3,000 scored', async () => {
     const writes = [], progress = [];
-    await simulatedSearch((_payload, page) => ({ results: Array.from({ length: 10 }, (_, rank) =>
-        lead(`${page}-${rank}`, rank % 2 ? 'Executive Coach' : 'Software Engineer')) }), async requests => {
+    await simulatedSearch((payload, page) => ({ results: Array.from({ length: 10 }, (_, rank) =>
+        lead(`${page}-${rank}`, rank % 2 ? 'Executive Coach' : 'Software Engineer',payload.q.includes('Canada')?'Toronto, Ontario, Canada':'Austin, Texas, United States')) }), async requests => {
         const result = await runDorkEngine(config({
             job_titles: ['Executive Coach', 'Career Coach', 'Business Coach'], locations: ['US', 'Canada'],
             kept_leads_target: 3000,
         }), 'simulated-key', p => progress.push(p), l => { writes.push(l); });
         assert.equal(result.stats.kept, 3000);
-        assert.equal(result.stats.scored, 6000);
+        assert.equal(result.stats.scored, 6000,JSON.stringify(result.stats));
         assert.equal(result.stats.rejected, 3000);
         assert.equal(result.stats.stopReason, 'target_reached');
         assert.equal(result.stats.targetReached, true);
@@ -101,12 +101,12 @@ test('country partitions retain requested titles, countries and original provena
 
 test('exhaustion reports a shortfall instead of claiming the kept target was met', async () => {
     await simulatedSearch(() => ({ results: [lead('only-profile')] }), async requests => {
-        const result = await runDorkEngine(config({ locations: ['London'], kept_leads_target: 3000 }), 'simulated-key');
+        const result = await runDorkEngine(config({ locations: ['US'], kept_leads_target: 3000 }), 'simulated-key');
         assert.equal(result.stats.kept, 1);
         assert.equal(result.stats.targetReached, false);
         assert.equal(result.stats.stopReason, 'search_exhausted');
-        assert.equal(result.stats.queriesCompleted, 35);
-        assert.equal(requests.length, 35);
+        assert.equal(result.stats.queriesCompleted, buildDiscoverySearchPlan(config()).length);
+        assert.equal(requests.length, buildDiscoverySearchPlan(config()).length);
     });
 });
 
@@ -229,6 +229,7 @@ function apiHarness({ failSave = false, progressFiles } = {}) {
         process: { env: { SERPER_API_KEY_1: 'simulated-key' }, cwd: () => taskDirectory },
         require: name => name === '@/lib/dorkEngine' ? require('../src/lib/dorkEngine.ts')
             : name === '@/lib/discovery-score' ? require('../src/lib/discovery-score.ts')
+            : name === '@/lib/discovery-location-evidence.cjs' ? require('../src/lib/discovery-location-evidence.cjs')
             : name === '@/lib/finder-progress' ? { createFinderProgressStore: () => progressStore }
             : name === '@/lib/db' ? { insertDiscoveryProvenance: async row => {
                 if (failSave) throw new Error('Simulated database failure');
@@ -242,7 +243,10 @@ function apiHarness({ failSave = false, progressFiles } = {}) {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
         })),
         completed: async jobId => {
-            for (let i = 0; i < 300; i++) {
+            // Full finite country expansion can exceed three seconds on an
+            // 8 GB Windows machine while local browser fixtures are running.
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
                 const data = await progressStore.read(jobId);
                 if (data && data.status !== 'running') return data;
                 await new Promise(resolve => setTimeout(resolve, 10));
@@ -255,7 +259,7 @@ function apiHarness({ failSave = false, progressFiles } = {}) {
 test('API preserves the kept target and exports the complete kept set beyond the 50-row preview', async () => {
     const api = apiHarness();
     await simulatedSearch((_payload, count) => ({ results: Array.from({ length: 10 }, (_, i) => lead(`${count}-${i}`)) }), async requests => {
-        const response = await api.post(config({ locations: ['London'], kept_leads_target: 70 }));
+        const response = await api.post(config({ locations: ['US'], kept_leads_target: 70 }));
         assert.equal(response.status, 200);
         const launched = await response.json();
         assert.equal(launched.target, 70);
@@ -374,13 +378,13 @@ test('a later successful progress save clears the persistence warning', async ()
 test('API reports exhaustion with the unmet kept target and actual completed query count', async () => {
     const api = apiHarness();
     await simulatedSearch(() => ({ results: [] }), async () => {
-        const response = await api.post(config({ locations: ['London'], kept_leads_target: 3000 }));
+        const response = await api.post(config({ locations: ['US'], kept_leads_target: 3000 }));
         const launched = await response.json();
         const finished = await api.completed(launched.jobId);
         assert.equal(finished.stopReason, 'search_exhausted');
         assert.equal(finished.targetReached, false);
         assert.equal(finished.remaining, 3000);
-        assert.equal(finished.queryIndex, 35);
+        assert.equal(finished.queryIndex, buildDiscoverySearchPlan(config()).length);
     });
 });
 
@@ -406,4 +410,35 @@ test('CRM write failure cannot be reported as a successfully kept target', async
         assert.equal(api.writes.length, 0);
         assert.equal(requests.length, 1);
     });
+});
+
+test('foreign, missing, market-only and conflicting locations never reach the Finder CRM writer',async()=>{
+ const api=apiHarness();
+ await simulatedSearch(()=>({results:[
+  {...lead('india'),snippet:'Location: Bengaluru, Karnataka, India · I coach US clients'},
+  {...lead('france'),snippet:'Paris, France · Executive Coach'},
+  {...lead('missing'),title:'Person - Executive Coach for US leaders | LinkedIn',snippet:'Serving clients in the United States'},
+  {...lead('employer'),snippet:'Microsoft United States · Executive Coach'},
+  {...lead('conflict'),attributes:{Location:'Toronto, Canada'},snippet:'Location: Austin, Texas, United States'},
+  lead('confirmed'),
+ ]}),async requests=>{
+  const response=await api.post(config({locations:['United States'],kept_leads_target:1}));assert.equal(response.status,200);
+  const finished=await api.completed((await response.json()).jobId);assert.equal(finished.status,'done');
+  assert.equal(api.writes.length,1);assert.match(api.writes[0].linkedin_url,/confirmed$/);
+  assert.equal(api.writes[0].location,'US');assert.equal(api.writes[0].discoveryLocation,'United States');
+  assert.equal(api.writes[0].locationEvidence.country,'US');assert.match(api.writes[0].locationEvidence.rawText,/Austin/);
+  assert.equal(finished.stats.rejectsByReason.LOCATION_OUTSIDE_TARGET,2);
+  assert.equal(finished.stats.rejectsByReason.LOCATION_NOT_SHOWN,2);
+  assert.equal(finished.stats.rejectsByReason.LOCATION_CONFLICT,1);assert.equal(requests.length,1);
+ });
+});
+
+test('unsupported and ambiguous Finder locations fail before spending search credits',async()=>{
+ const api=apiHarness();
+ await simulatedSearch(()=>{throw Error('Search must not run');},async requests=>{
+  for(const location of ['India','France','CA','London','America']){
+   const response=await api.post(config({locations:[location]}));assert.equal(response.status,400,location);assert.match((await response.json()).error,/UK, US and Canada/);
+  }
+  assert.equal(requests.length,0);
+ });
 });

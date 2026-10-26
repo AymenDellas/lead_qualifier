@@ -3,6 +3,7 @@ import { runDorkEngine, buildDiscoverySearchPlan, keptLeadTarget, SearchConfig, 
 import { DEFAULT_MIN_FIT_SCORE } from '@/lib/discovery-score';
 import { insertDiscoveryProvenance } from '@/lib/db';
 import { createFinderProgressStore } from '@/lib/finder-progress';
+import { canonicalDiscoveryTarget } from '@/lib/discovery-location-evidence.cjs';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,6 +43,7 @@ export async function POST(req: Request) {
         let target: number;
         try {
             target = keptLeadTarget(config);
+            if(config.locations.some(location=>!canonicalDiscoveryTarget(location)))throw new Error('Finder supports UK, US and Canada country targets only. Use the full country name instead of an ambiguous city or CA abbreviation.');
             if (!Number.isSafeInteger(config.max_pages_per_dork) || config.max_pages_per_dork! < 1 || config.max_pages_per_dork! > 10)
                 throw new Error('Pages per search must be a whole number from 1 to 10.');
             if (!Number.isFinite(config.min_fit_score) || config.min_fit_score! < 0 || config.min_fit_score! > 100)
@@ -110,7 +112,8 @@ export async function POST(req: Request) {
                                 query: lead.query,
                                 templateId: lead.templateId,
                                 niche: lead.niche,
-                                discoveryLocation: lead.location,
+                                discoveryLocation: lead.searchLocation,
+                                locationEvidence:lead.locationEvidence,
                                 page: lead.page,
                                 rank: lead.rank,
                                 title: lead.title,

@@ -76,6 +76,7 @@ export async function createSchema() {
             ALTER TABLE leads ADD COLUMN IF NOT EXISTS discovery_template_id VARCHAR(64);
             ALTER TABLE leads ADD COLUMN IF NOT EXISTS discovery_niche       VARCHAR(255);
             ALTER TABLE leads ADD COLUMN IF NOT EXISTS discovery_location    VARCHAR(255);
+            ALTER TABLE leads ADD COLUMN IF NOT EXISTS discovery_location_evidence JSONB;
             ALTER TABLE leads ADD COLUMN IF NOT EXISTS discovery_page        SMALLINT;
             ALTER TABLE leads ADD COLUMN IF NOT EXISTS discovery_rank        SMALLINT;
             ALTER TABLE leads ADD COLUMN IF NOT EXISTS discovery_title       TEXT;
@@ -160,6 +161,7 @@ const REQUIRED_COLUMNS = [
     'email_verification_score', 'email_verified_at', 'email_verification_expires_at',
     'discovery_query', 'discovery_template_id', 'discovery_niche', 'discovery_location',
     'discovery_page', 'discovery_rank', 'discovery_title', 'discovery_snippet',
+    'discovery_location_evidence',
     'discovery_run_id', 'discovered_at', 'discovery_seen_count',
     'fit_score', 'fit_reasons', 'scored_at',
     'prospect_assessment', 'prospect_review', 'prospect_researched_at',

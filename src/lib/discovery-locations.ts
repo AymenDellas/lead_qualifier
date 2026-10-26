@@ -28,5 +28,8 @@ export function countrySearchExpansion(location: string) {
     if (['canada', 'ca', 'can'].includes(key)) {
         return { country: 'CA', aliases: key === 'canada' ? [] : ['Canada'], constraint: '"Canada"', regions: CANADIAN_REGIONS };
     }
+    if(['uk','gb','gbr','unitedkingdom','greatbritain','britain','england','scotland','wales','northernireland'].includes(key)){
+        return {country:'UK',aliases:['UK','United Kingdom','Great Britain'].filter(alias=>alias.toLowerCase().replace(/[^a-z]/g,'')!==key),constraint:'("United Kingdom" OR "Great Britain")',regions:[]};
+    }
     return null;
 }

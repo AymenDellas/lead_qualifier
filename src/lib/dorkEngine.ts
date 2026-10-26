@@ -1,5 +1,6 @@
 import { normaliseLinkedinUrl } from './utils';
 import { countrySearchExpansion } from './discovery-locations';
+import { assessDiscoveryLocation, canonicalDiscoveryTarget, type DiscoveryLocationEvidence } from './discovery-location-evidence.cjs';
 import {
   scoreDiscoveryResult,
   DEFAULT_MIN_FIT_SCORE,
@@ -35,6 +36,9 @@ interface NicheSignals {
 export interface DiscoveredLead {
   url: string;
   location: string;
+  /** Requested search target, kept separately from the person's evidenced country. */
+  searchLocation: string;
+  locationEvidence: DiscoveryLocationEvidence;
   templateId: string;
   query: string;
   niche: string;
@@ -121,10 +125,8 @@ const NEGATIVE_KEYWORDS = [
 ];
 
 
-// LOCATION_ALIASES and expandLocation were deleted here. They built a large
-// city/state expansion for every location, passed it into isResultRelevant as
-// `locationVariants`, and that parameter was never read: geo filtering is done by
-// Google, because the location string is already in the dork.
+// Query geography controls search coverage; it is never evidence of where the
+// person lives. Every organic result passes the explicit location gate below.
 
 
 // ═════════════════════════════════════════════════════════════════
@@ -298,11 +300,14 @@ export function buildDiscoverySearchPlan(config: SearchConfig): DiscoveryQuery[]
   for (const title of config.job_titles) {
     const countries = new Set<string>();
     for (const loc of config.locations) {
+      const targetCountry=canonicalDiscoveryTarget(loc);
+      if(!targetCountry)throw new Error('Finder supports UK, US and Canada country targets only. Use the full country name instead of an ambiguous city or CA abbreviation.');
       const expansion = countrySearchExpansion(loc);
-      const countryKey = expansion?.country || loc.toLowerCase().trim();
+      const countryKey = targetCountry;
       if (countries.has(countryKey)) continue;
       countries.add(countryKey);
-      for (const t of buildQueryBank(title, loc, negString)) {
+      const countryTerm=targetCountry==='US'?'United States':targetCountry==='UK'?'United Kingdom':'Canada';
+      for (const t of buildQueryBank(title, countryTerm, negString)) {
         add(countryQueries, { templateId: t.id, query: t.query, location: loc, niche: title, searchPhase: 'country', searchArea: loc });
       }
       if (!expansion) continue;
@@ -412,9 +417,8 @@ function extractHeadlineFromGoogleTitle(googleTitle: string): string | null {
 /**
  * Scores one SERP result.
  *
- * Location is deliberately not re-checked: the dork already contains the location
- * string, so Google has done the geo filtering, and a second pass over free-text
- * location strings only ever throws away good leads.
+ * Location is gated separately using person-location evidence, before scoring.
+ * A query keyword cannot establish the person's location.
  *
  * Replaces the old `isResultRelevant`, which answered a yes/no question and then
  * discarded the `confidence` it had just computed — the engine ignored the return
@@ -631,6 +635,13 @@ export async function runDorkEngine(
         const item = results[rank];
         const norm = normaliseLinkedinUrl(item.link || '');
         if (!norm) continue;
+        const geography=assessDiscoveryLocation(item,qObj.location);
+        if(geography.status!=='CONFIRMED'||!geography.evidence){
+          stats.scored++;stats.rejected++;
+          const reason=geography.reasonCode||'LOCATION_UNCONFIRMED';
+          stats.rejectsByReason[reason]=(stats.rejectsByReason[reason]||0)+1;
+          continue;
+        }
 
         // A re-find is not a new lead, but it *is* evidence (weight A8): a profile
         // several distinct dorks can reach is well indexed, which usually means an
@@ -675,7 +686,9 @@ export async function runDorkEngine(
 
         const lead: DiscoveredLead = {
           url: norm,
-          location: qObj.location,
+          location: geography.evidence.country,
+          searchLocation:qObj.location,
+          locationEvidence:geography.evidence,
           templateId: qObj.templateId,
           query: qObj.query,
           niche: qObj.niche,

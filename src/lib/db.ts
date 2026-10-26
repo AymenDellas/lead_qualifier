@@ -2,6 +2,7 @@ import { pool } from './pg_setup';
 import { syncHunterContacted } from './hunter-contact-sync';
 import type { ScoreReason } from './discovery-score';
 import { extractDiscoveryName } from './discovery-name';
+import { canonicalDiscoveryTarget, parsePersonLocation } from './discovery-location-evidence.cjs';
 import type { ProspectAssessment, ProspectReview } from './prospect-qualification.cjs';
 
 /**
@@ -76,6 +77,7 @@ export interface LeadRecord {
     discovery_niche?: string | null;
     /** The location the query was built from — distinct from `location`, which is free text. */
     discovery_location?: string | null;
+    discovery_location_evidence?: DiscoveryLocationEvidence | null;
     discovery_page?: number | null;
     discovery_rank?: number | null;
     discovery_title?: string | null;
@@ -384,6 +386,10 @@ export async function updateLead(id: string, updates: Partial<LeadRecord>): Prom
 }
 
 /** The provenance and score recorded when a discovery run first surfaces a profile. */
+export type DiscoveryLocationEvidence = {
+    version: 1; status: 'CONFIRMED'; country: 'UK' | 'US' | 'Canada';
+    rawText: string; source: string; requestedLocation: string; observedAt: string;
+};
 export type DiscoveryProvenance = {
     linkedin_url: string;
     location: string;
@@ -391,6 +397,7 @@ export type DiscoveryProvenance = {
     templateId: string;
     niche: string;
     discoveryLocation: string;
+    locationEvidence: DiscoveryLocationEvidence;
     page: number;
     rank: number;
     title: string;
@@ -427,6 +434,16 @@ export type DiscoveryProvenance = {
  * conflict target.
  */
 export async function insertDiscoveryProvenance(p: DiscoveryProvenance): Promise<{ inserted: boolean }> {
+    const evidence = p.locationEvidence;
+    const observed = evidence && parsePersonLocation(evidence.rawText);
+    if (!evidence || evidence.version !== 1 || evidence.status !== 'CONFIRMED'
+        || !['SERP_ATTRIBUTE_LOCATION','SERP_SNIPPET_LOCATION','SERP_LOCATION_PREFIX','SERP_RICH_METADATA_LOCATION'].includes(evidence.source)
+        || !Number.isFinite(Date.parse(evidence.observedAt)) || observed?.status !== 'CONFIRMED'
+        || observed.country !== evidence.country || p.location !== evidence.country
+        || canonicalDiscoveryTarget(p.discoveryLocation) !== evidence.country
+        || canonicalDiscoveryTarget(evidence.requestedLocation) !== evidence.country) {
+        throw new Error('Finder requires explicit, matching person-location evidence before saving a lead.');
+    }
     const name = extractDiscoveryName(p.title);
     const client = await pool.connect();
     try {
@@ -448,9 +465,10 @@ export async function insertDiscoveryProvenance(p: DiscoveryProvenance): Promise
                         AND $5::text <> '' THEN $5 ELSE first_name END,
                     last_name = CASE WHEN LOWER(BTRIM(COALESCE(first_name, ''))) IN ('', 'unknown')
                         AND LOWER(BTRIM(COALESCE(last_name, ''))) IN ('', 'unknown')
-                        AND $5::text <> '' THEN $6 ELSE last_name END
+                        AND $5::text <> '' THEN $6 ELSE last_name END,
+                    discovery_location_evidence = COALESCE(discovery_location_evidence, $7::jsonb)
                 WHERE id = $1
-            `, [row.id, better, p.fitScore, JSON.stringify(p.fitReasons), name.firstName, name.lastName]);
+            `, [row.id, better, p.fitScore, JSON.stringify(p.fitReasons), name.firstName, name.lastName, JSON.stringify(evidence)]);
             return { inserted: false };
         }
 
@@ -461,20 +479,20 @@ export async function insertDiscoveryProvenance(p: DiscoveryProvenance): Promise
                 discovery_query, discovery_template_id, discovery_niche, discovery_location,
                 discovery_page, discovery_rank, discovery_title, discovery_snippet,
                 discovery_run_id, discovered_at, discovery_seen_count,
-                fit_score, fit_reasons, scored_at
+                fit_score, fit_reasons, scored_at, discovery_location_evidence
             ) VALUES (
                 $1, $2, $3, 'INBOX', 'UNVERIFIED',
                 $15, $16, '', '', '', '', '', '',
                 $4, $5, $6, $7,
                 $8, $9, $10, $11,
                 $12, CURRENT_TIMESTAMP, 1,
-                $13, $14, CURRENT_TIMESTAMP
+                $13, $14, CURRENT_TIMESTAMP, $17::jsonb
             )
         `, [
             generateId(), p.linkedin_url, p.location,
             p.query, p.templateId, p.niche, p.discoveryLocation,
             p.page, p.rank, p.title, p.snippet,
-            p.runId, p.fitScore, JSON.stringify(p.fitReasons), name.firstName, name.lastName,
+            p.runId, p.fitScore, JSON.stringify(p.fitReasons), name.firstName, name.lastName, JSON.stringify(evidence),
         ]);
         return { inserted: true };
     } finally {
