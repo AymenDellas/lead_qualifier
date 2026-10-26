@@ -32,7 +32,16 @@ The broader qualified-record audit identifies 53 identity-matched records with e
 
 `scripts/engine-review-repair.cjs` creates a dry-run plan and immutable private input snapshot. `--apply --queue` applies fenced changes and stages eligible refreshes. PostgreSQL's `compel_qualification_repairs` retains full before/after assessments and the reason/job ID. A transaction and compare-and-swap checks protect concurrent manual/email edits; repeats cannot enqueue another policy refresh. Contacted/suppressed/Hunter-protected profiles and protected duplicates are excluded from refresh admission. No email, verification proof, contact history, suppression, original capture time or security hold is cleared. Processing must be paused, remains paused, and is never enabled by this tool. The normal PostgreSQL queue owns refreshes with active-profile duplicate protection, 300/day and 60-second profile-start reservations. Fresh policy checks bypass old completed-result caching; website/CRM recovery keeps its checkpoints.
 
-Final applied counts and validation are recorded below after the migration. Private evidence lives in ignored `data/engine-v2/`; those JSON files are audit artifacts, never a runtime queue.
+The migration applied all 178 planned evidence updates with zero concurrent-edit skips. Both Arabic counts were repaired. All 113 eligible refreshes are pending in PostgreSQL's capture lane with explicit-recheck markers; processing remains paused and the existing security hold remains intact. A post-write comparison verified that every other CRM column on all 178 rows is unchanged, including emails, verification, contact history, suppression and original research timestamps.
+
+| CRM stage | Before | After stored-evidence repair |
+| --- | ---: | ---: |
+| INBOX | 7,980 | 7,980 |
+| QUALIFIED | 1,014 | 961 |
+| REVIEW | 98 | 113 |
+| NOT_QUALIFIED | 5,314 | 5,352 |
+
+The original REVIEW cohort falls from 98 to 86 (12.2% resolved by proven country exclusions). Adding the 27 newly eligible old-threshold cases produces the total of 113 awaiting refresh. No lead was automatically promoted to QUALIFIED. This is a correctness repair, not evidence that the live review rate has fallen. The 590 qualified rows with stored research were checked for explicit residence; unknown/unassessed legacy records cannot be certified from a search target. Private evidence lives in ignored `data/engine-v2/`; those JSON files are audit artifacts, never a runtime queue. The applied report and unchanged-field verification are `location-review-v3/repair-applied.json` and `repair-verification.json`.
 
 ## Stored-evidence regression
 
@@ -47,3 +56,5 @@ With the requested current country/500 policy applied to the same evidence, 17 r
 Five focused agent contributions covered Finder provenance, all REVIEW records, rendered follower/activity evidence, adversarial policy tests and integration invariants. The integration review found a compact-CRM projection losing the country gate; both SQL and JavaScript projections now retain it. Independent tests cover full/compact send eligibility, unknown identity, version 2 compatibility, evidence version 2 round-trips, country conflicts and source attribution. PostgreSQL fixtures verify atomic/idempotent repairs and retained holds/contact history in isolated temporary tables.
 
 Rendering tests use local intercepted fixtures; Finder checks use simulated search responses. No paid search credits, live LinkedIn batch or outreach are used for validation. A lower live REVIEW rate cannot be claimed until the staged profiles are actually processed. The earlier engine throughput figures predate the currently authorized pacing and do not measure this change.
+
+Validation: all 340 engine/prospect/coach tests, 14 CRM tests (including actual PostgreSQL temporary-table fixtures), 28 simulated Finder checks, TypeScript and scoped engine lint pass. The production build passes; its 43 route manifests contain zero private runtime entries. Full repository lint still reports five existing errors in `teleprompter/page.jsx`, `WorkspaceCommandMenu.tsx`, `business/OnboardingWorkspace.tsx`, `copy-studio/EvidenceRecoveryDialog.tsx` and `copy-studio/OnboardingDialog.tsx`, plus seven warnings. Those unrelated UI files were left untouched. The updated local agent starts successfully with processing paused and the security hold preserved; its ready/acknowledgement state does not authorize LinkedIn activity.
