@@ -162,10 +162,10 @@ test('a Start navigation timeout retries within three attempts then shows an act
  const f=fixture();f.account.login_token=null;f.account.authorized=true;f.page.goto=async()=>{f.calls.navigation++;throw Error('Navigation timeout');};for(let n=0;n<3;n++)await f.runtime.tick();assert.equal(f.calls.opens,3);assert.equal(f.calls.navigation,3);assert.equal(f.pending.length,370);assert.equal(f.account.authorized,false);assert.equal(f.runtime.snapshot().startupStage,'FAILED');assert.ok(f.runtime.snapshot().action);
 });
 
-test('sign-out affects only the selected saved session and preserves every queued profile', async () => {
+test('legacy sign-out is blocked without deleting cookies or consuming queued profiles', async () => {
     const f = fixture(); await f.connect(); f.account.logout_token = 'logout-token'; await f.runtime.tick();
-    assert.equal(f.calls.logouts, 1); assert.equal(f.calls.closes, 1); assert.equal(f.runtime.snapshot().status, 'signed_out');
-    assert.equal(f.runtime.snapshot().signedIn, null); assert.equal(f.runtime.snapshot().browserOpen, false); assert.equal(f.pending.length, 370);
+    assert.equal(f.calls.logouts, 0); assert.equal(f.calls.closes, 0); assert.equal(f.runtime.snapshot().reasonCode, 'LEGACY_LOGOUT_DISABLED');
+    assert.equal(f.runtime.snapshot().browserOpen, true); assert.equal(f.pending.length, 370);
     await f.runtime.tick(); assert.equal(f.calls.opens, 1); assert.equal(f.calls.claims, 0);
 });
 

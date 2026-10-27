@@ -38,11 +38,12 @@ async function main(){
   await core.ensure(pool);await pool.query(registry.SCHEMA);await telemetry.ensure(pool);
   await require('./src/lib/engine-daily-policy.cjs').configure(pool);
   await require('./src/lib/worker-research-store.cjs').ensure(pool);
+  await require('./src/lib/aliasmode-store.cjs').ensure(pool);
   for(;;){const result=await registry.claim(pool,owner);if(!result.waitMs){leased=true;break;}stage('AGENT_ACK',result.reason,'Waiting for the dead database owner heartbeat.');await new Promise(resolve=>setTimeout(resolve,Math.min(result.waitMs,2000)));if(stopping)return;}
   await registry.recover(pool,owner);await require('./src/lib/worker-research-queue.cjs').ensure(pool);
   agent=require('./src/lib/compel-agent.cjs').createAgent({root,pool,owner,log});
   await agent.heartbeat();agent.start();
-  stopMetrics=require('./src/lib/engine-process-metrics.cjs').startResourceMonitor({pool,owner,queryStats,log,onSample:sample=>agent.setResources(sample)});
+  stopMetrics=require('./src/lib/engine-process-metrics.cjs').startResourceMonitor({pool,owner,queryStats,log,externalRoots:async()=> (await pool.query('SELECT pid FROM compel_aliasmode_sessions WHERE closed_at IS NULL AND pid IS NOT NULL')).rows.map(r=>r.pid),onSample:sample=>agent.setResources(sample)});
   try{listener=await pool.connect();listener.on('notification',()=>agent.wake());listener.on('error',error=>log('Notifications unavailable; idle backoff active: '+safeMessage(error)));await listener.query('LISTEN compel_engine_wake');}
   catch(error){listener?.release(true);listener=null;log('Using 2–30 second idle backoff: '+safeMessage(error));}
   stage('AGENT_ACK','Ready. Saved intent resumes; explicit pauses and account review holds remain in force.');

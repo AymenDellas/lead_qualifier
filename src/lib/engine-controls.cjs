@@ -7,7 +7,7 @@ async function controlEngine(pool,action) {
  if(!['resume','pause'].includes(action))throw new Error('Choose Resume or Pause.');
  const config=await core.settings(pool),updated=[],blocked=[];
  if(action==='resume'&&!config.supervisorOnline)throw new Error('Workers are offline. Start workers before resuming processing.');
- const accounts=action==='pause'?config.accounts.filter(a=>a.processingEnabled):config.accounts.filter(a=>a.enabled&&!a.signedOut&&!a.logoutPending);
+ const accounts=action==='pause'?config.accounts.filter(a=>a.processingEnabled):config.accounts.filter(a=>a.enabled&&a.aliasmodeProfileId&&!a.closePending&&!a.signedOut&&!a.logoutPending);
  if(action==='resume'&&!accounts.length)throw new Error('No accounts are selected to process. Enable an account and a processing slot in Manage accounts.');
  for(const account of accounts) {
   try {

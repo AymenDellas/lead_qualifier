@@ -28,6 +28,11 @@ ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS processing_enabled
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS processing_until TIMESTAMPTZ;
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS connected_at TIMESTAMPTZ;
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS confirmed_identity JSONB;
+ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS aliasmode_profile_id TEXT;
+ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS aliasmode_profile_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS binding_revision BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS expected_member_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS close_requested_at TIMESTAMPTZ;
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS attention_reason TEXT NOT NULL DEFAULT '';
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS daily_request_limit INTEGER NOT NULL DEFAULT 100;
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS request_interval_seconds INTEGER NOT NULL DEFAULT 15;
@@ -74,6 +79,7 @@ async function ensure(pool) {
    AND to_regclass('compel_worker_profile_usage') IS NOT NULL
    AND to_regclass('compel_prospect_runs') IS NOT NULL
    AND to_regclass('compel_worker_events') IS NOT NULL
+   AND (SELECT count(*)=5 FROM pg_attribute WHERE attrelid=to_regclass('compel_linkedin_accounts') AND attname IN ('aliasmode_profile_id','aliasmode_profile_name','binding_revision','expected_member_name','close_requested_at') AND NOT attisdropped)
    AND (SELECT count(*)=11 FROM pg_attribute WHERE attrelid=to_regclass('compel_linkedin_accounts') AND attname IN ('processing_enabled','processing_until','connected_at','confirmed_identity','attention_reason','daily_request_limit','request_interval_seconds','next_check_at','signed_out_at','activity_limits','working_hours') AND NOT attisdropped)
    AND (SELECT count(*)=3 FROM pg_attribute WHERE attrelid=to_regclass('compel_worker_usage') AND attname IN ('request_count','cached_profiles','request_kinds') AND NOT attisdropped)
    AND (SELECT count(*)=4 FROM pg_attribute WHERE attrelid=to_regclass('compel_worker_jobs') AND attname IN ('checkpoint','retry_at','retry_count','lane') AND NOT attisdropped)
@@ -186,7 +192,8 @@ async function settings(pool) {
  await ensure(pool);
  const config = (await pool.query('SELECT *,compel_worker_day()::text AS daily_day,((compel_worker_day()+1)::timestamp AT TIME ZONE daily_timezone) AS resume_at FROM compel_worker_config WHERE id=1')).rows[0];
  const rows = (await pool.query(`SELECT a.id,a.label,a.email,a.enabled,a.daily_limit,a.position,(a.secret<>'') AS has_password,
-  a.login_requested_at,a.logout_requested_at,a.signed_out_at,a.processing_enabled,a.processing_until,a.changed_at::text AS control_version,a.connected_at,a.confirmed_identity,a.attention_reason,s.status,s.updated_at,s.lease_until,COALESCE(p.used,0) AS daily_count,
+  a.login_requested_at,a.logout_requested_at,a.signed_out_at,a.processing_enabled,a.processing_until,a.changed_at::text AS control_version,a.connected_at,a.confirmed_identity,a.attention_reason,
+  a.aliasmode_profile_id,a.aliasmode_profile_name,a.binding_revision,a.expected_member_name,a.close_requested_at,s.status,s.updated_at,s.lease_until,COALESCE(p.used,0) AS daily_count,
   COALESCE(u.request_count,0) AS request_count,COALESCE(u.cached_profiles,0) AS cached_profiles,COALESCE(u.request_kinds,'{}') AS request_kinds
   FROM compel_linkedin_accounts a LEFT JOIN compel_worker_sessions s ON s.account_id=a.id
   LEFT JOIN compel_worker_usage u ON u.account_id=a.id AND u.day=compel_worker_day()
@@ -194,6 +201,7 @@ async function settings(pool) {
   WHERE a.archived IS FALSE ORDER BY a.position,a.id`)).rows;
  return { resources:config.agent_status?.resources||null,browserLimit:config.agent_status?.browserCapacity||10,dailyDay:config.daily_day,defaultDailyLimit:daily.defaultLimit(),revision: config.revision, supervisorOnline:!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000, activeCount: config.active_count>0?rows.filter(a => a.enabled).length:0, accounts: rows.map(a => ({
   id:a.id,label:a.label,email:a.email,enabled:a.enabled,dailyLimit:a.daily_limit,hasPassword:a.has_password,
+  aliasmodeProfileId:a.aliasmode_profile_id||null,aliasmodeProfileName:a.aliasmode_profile_name||'',bindingRevision:Number(a.binding_revision||0),expectedMemberName:a.expected_member_name||'',closePending:!!a.close_requested_at,
   dailyCount:a.daily_count,dailyTimezone:config.daily_timezone,dailyResumeAt:a.daily_count>=a.daily_limit?config.resume_at:null,status:a.status?.status || 'offline',reason:a.status?.reason || '',
   runtimeVersion:a.status?.runtimeVersion||'',sessionReady:!!a.status?.sessionReady,browserOpen:!!a.status?.browserOpen,nextEligibleAt:a.status?.nextEligibleAt||(a.daily_count>=a.daily_limit?config.resume_at:null),
   dailyRequests:a.request_count||0,dailyCachedProfiles:a.cached_profiles||0,requestKinds:a.request_kinds||{},
@@ -211,7 +219,7 @@ function startupForAccount(config,a){
  const live=config.agent_status?.accounts?.[a.id],saved=a.status;
  const agentOnline=!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000;
  const state=(agentOnline||live?.startupStage==='FAILED')&&live?.controlVersion===a.control_version?live:saved?.controlVersion===a.control_version?saved:null;
- if(a.attention_reason&&!a.login_requested_at)return {startupStage:'SESSION_REVIEW',startupReason:a.attention_reason};
+  if(a.attention_reason&&!a.login_requested_at&&!a.close_requested_at)return {startupStage:'SESSION_REVIEW',startupReason:a.attention_reason};
  if(!a.processing_enabled&&!a.login_requested_at&&!a.logout_requested_at&&state?.startupStage!=='FAILED')return {startupStage:agentOnline?(a.status?.sessionReady?'SESSION_VERIFIED':'AGENT_ACK'):'OFFLINE'};
  if(!agentOnline&&a.processing_enabled)return {startupStage:'REQUEST_RECEIVED',startupReason:'Processing intent is saved. Start the local agent to resume it.'};
  if(state?.startupStage)return {startupStage:state.startupStage,failedStage:state.failedStage||null,startupReason:state.reason||'',startupAction:state.action||''};
@@ -279,7 +287,7 @@ async function selectedAccounts(pool) {
   AND (SELECT active_count FROM compel_worker_config WHERE id=1)>0 ORDER BY a.position,a.id`)).rows;
 }
 async function readRuntimeAccount(pool,id) {
- return (await pool.query(`SELECT a.*,a.changed_at::text AS control_version,a.changed_at::text AS processing_token,a.login_requested_at::text AS login_token,a.logout_requested_at::text AS logout_token,
+  return (await pool.query(`SELECT a.*,a.changed_at::text AS control_version,a.changed_at::text AS processing_token,a.login_requested_at::text AS login_token,a.logout_requested_at::text AS logout_token,a.close_requested_at::text AS close_token,
   (a.processing_enabled AND (SELECT active_count FROM compel_worker_config WHERE id=1)>0) AS authorized
   FROM compel_linkedin_accounts a WHERE a.id=$1 AND a.archived IS FALSE`,[id])).rows[0]||null;
 }
@@ -355,6 +363,8 @@ async function confirmManualSignIn(pool,id,owner,identity) {
   const a=(await client.query('SELECT * FROM compel_linkedin_accounts WHERE id=$1 AND archived IS FALSE FOR UPDATE',[id])).rows[0];
   const lease=await client.query('SELECT 1 FROM compel_worker_sessions WHERE account_id=$1 AND owner=$2 AND lease_until>NOW()',[id,owner]);
   if(!a||!lease.rowCount||a.logout_requested_at||a.login_requested_at)throw new Error('Account request changed; sign-in was not confirmed.');
+   const memberName=value=>String(value||'').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();
+   if(!a.confirmed_identity&&a.expected_member_name&&memberName(a.expected_member_name)!==memberName(clean.name))throw new Error('This AliasMode profile does not show the expected LinkedIn member. Review its binding before processing.');
   if(a.confirmed_identity&&!sameMember(a.confirmed_identity,clean))throw new Error('This browser is signed into a different LinkedIn member. Sign out and use the intended account.');
   if((await client.query("SELECT 1 FROM compel_linkedin_accounts WHERE id<>$1 AND archived IS FALSE AND connected_at IS NOT NULL AND (($2<>'' AND confirmed_identity->>'memberUrn'=$2) OR ($3<>'' AND confirmed_identity->>'profileUrl'=$3)) LIMIT 1",[id,clean.memberUrn,clean.profileUrl])).rowCount)
    throw new Error('This LinkedIn member is already connected to another saved account. Use that account instead.');

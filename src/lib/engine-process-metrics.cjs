@@ -28,27 +28,31 @@ async function processRows(){
  }
  throw Error('Process-tree measurements are available on Windows and Linux.');
 }
-function createSampler({pid=process.pid,read=processRows,now=Date.now}={}){
+function createSampler({pid=process.pid,read=processRows,now=Date.now,externalRoots=async()=>[]}={}){
  let previous=null,peakMB=0,peakCpuPercent=0;
  return async()=>{
-  const clock=performance.now(),all=await read(),at=now(),rows=descendants(all,pid);
+  const clock=performance.now(),all=await read(),at=now();
+  const browserName=/chrome|chromium|sunbrowser|flowerbrowser/i,requested=[...new Set((await externalRoots()).map(Number).filter(Number.isSafeInteger))];
+  const attached=requested.filter(id=>all.some(row=>row.pid===id&&browserName.test(row.name))),adsRoots=all.filter(row=>/aliasmode/i.test(row.name)).map(row=>row.pid);
+  const rows=[...new Map([pid,...attached,...adsRoots].flatMap(root=>descendants(all,root)).map(row=>[row.pid,row])).values()];
   const treeCpu=rows.reduce((sum,row)=>sum+row.cpuMs,0),byPid=new Map(rows.map(row=>[row.pid,row.cpuMs]));
   // Compare only surviving PIDs; a process exiting must not subtract CPU used
   // by surviving renderers. Short-lived processes can still be missed; disclose it.
   const cpuDelta=previous?rows.reduce((sum,row)=>sum+Math.max(0,row.cpuMs-(previous.byPid.get(row.pid)??row.cpuMs)),0):null;
   const cpuPercent=previous&&at>previous.at?cpuDelta*100/(at-previous.at):null;
-  const chrome=rows.filter(row=>/chrome|chromium/i.test(row.name)),mb=bytes=>Math.round(bytes/1048576);
+  const chrome=rows.filter(row=>browserName.test(row.name)),mb=bytes=>Math.round(bytes/1048576);
   const treeRssMB=mb(rows.reduce((sum,row)=>sum+row.rss,0));peakMB=Math.max(peakMB,treeRssMB);peakCpuPercent=Math.max(peakCpuPercent,cpuPercent||0);
   previous={at,byPid};
   const chromeIds=new Set(chrome.map(row=>row.pid));
   const chromeRoots=chrome.filter(row=>!chromeIds.has(row.ppid)).map(root=>{const family=descendants(rows,root.pid);return {pid:root.pid,rssMB:mb(family.reduce((sum,row)=>sum+row.rss,0)),processes:family.length};});
   return {pid,treeRssMB,chromeRoots,chromeRssMB:mb(chrome.reduce((sum,row)=>sum+row.rss,0)),nodeRssMB:mb(rows.find(row=>row.pid===pid)?.rss||0),
    processes:rows.length,chromeProcesses:chrome.length,cpuPercent,peakTreeRssMB:peakMB,peakCpuPercent,
+   attachedBrowserRoots:attached,missingBrowserRoots:requested.filter(id=>!attached.includes(id)),aliasmodeRssMB:mb([...new Map(adsRoots.flatMap(root=>descendants(all,root)).map(row=>[row.pid,row])).values()].reduce((n,row)=>n+row.rss,0)),
    cpuAccounting:'one core = 100%; sampled surviving processes',cpuMs:treeCpu,sampleMs:performance.now()-clock};
  };
 }
-function startResourceMonitor({pool,owner,queryStats,intervalMs=15000,log=()=>{},onSample=()=>{}}){
- const telemetry=require('./engine-telemetry.cjs'),sample=createSampler();let running=false,closed=false,active=null;
+function startResourceMonitor({pool,owner,queryStats,intervalMs=15000,log=()=>{},onSample=()=>{},externalRoots}={}){
+ const telemetry=require('./engine-telemetry.cjs'),sample=createSampler({externalRoots});let running=false,closed=false,active=null;
  async function tick(){
   if(running||closed)return;running=true;
   try{const data={...await sample(),...telemetry.queryRates(queryStats)};onSample(data);

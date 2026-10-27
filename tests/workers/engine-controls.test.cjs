@@ -4,7 +4,7 @@ const core=require('../../src/lib/linkedin-workers.cjs'),{controlEngine}=require
 
 test('Resume authorizes configured account sessions, Pause persists the stop, and held accounts stay held',async()=>{
  const originals={settings:core.settings,start:core.startProcessing,pause:core.pauseProcessing};
- const calls=[],accounts=[{id:'one',label:'Fixture one',enabled:true,connectedAt:'confirmed',processingEnabled:false},{id:'held',label:'Fixture held',enabled:true,attentionReason:'Security review',processingEnabled:false},{id:'unselected',label:'Fixture unselected',enabled:true,processingEnabled:false}];
+ const calls=[],accounts=[{id:'one',label:'Fixture one',enabled:true,aliasmodeProfileId:'fixture-one',connectedAt:'confirmed',processingEnabled:false},{id:'held',label:'Fixture held',enabled:true,aliasmodeProfileId:'fixture-held',attentionReason:'Security review',processingEnabled:false},{id:'unselected',label:'Fixture unselected',enabled:true,aliasmodeProfileId:'fixture-unselected',processingEnabled:false}];
  let supervisorOnline=true;
  try {
   core.settings=async()=>({activeCount:2,supervisorOnline,accounts});

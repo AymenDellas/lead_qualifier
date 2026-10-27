@@ -1,0 +1,12 @@
+export {};
+// export type AdsPowerProfile={id:string;name:string;group:string;number:string};
+// export type AdsPowerSettings={baseUrl:string;apiKeyConfigured:boolean;revision:number;profiles:AdsPowerProfile[];lastRefreshedAt:string|null;status:{state?:string;code?:string;reason?:string;checkedAt?:string;truncated?:boolean}};
+// export function ensure(pool:unknown):Promise<void>;
+// export function publicSettings(pool:unknown):Promise<AdsPowerSettings>;
+// export function saveConfig(pool:unknown,input:unknown):Promise<AdsPowerSettings>;
+// export function requestRefresh(pool:unknown):Promise<void>;
+// export function allowProcessing(pool:unknown,enabled:boolean):Promise<void>;
+// export function bind(pool:unknown,input:unknown):Promise<void>;
+// export function importProfile(pool:unknown,input:unknown):Promise<string>;
+// export function updateAccount(pool:unknown,input:unknown):Promise<void>;
+// export function requestClose(pool:unknown,id:string):Promise<void>;

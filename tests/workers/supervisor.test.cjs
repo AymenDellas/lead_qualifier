@@ -15,6 +15,19 @@ function fixture(options={}){
  const settle=()=>new Promise(resolve=>setImmediate(resolve));
  return {agent,accounts,runtimes,settle,get reads(){return reads;},get acquires(){return acquires;},advance:ms=>{time+=ms;}};
 }
+
+test('a slow provider metadata refresh does not block independent account scheduling',async()=>{
+ let release;const pending=new Promise(resolve=>{release=resolve;});
+ const f=fixture({provider:{sync:()=>pending,idle:()=>pending}});f.accounts[0].authorized=true;
+ try{await f.agent.step();await f.settle();assert.equal(f.runtimes[0].ticks,1);}
+ finally{release();await f.agent.close();}
+});
+
+test('confirmed profile closure releases its runtime without awaiting its own account task',async()=>{
+ let released=0;const f=fixture({core:{releaseSession:async()=>released++},createRuntime:()=>({tick:async()=>{},snapshot:()=>({status:'idle',profileClosed:true}),requestStop:()=>{},close:async()=>{}})});
+ f.accounts[0].close_token='close-request';await f.agent.step();await f.settle();await f.settle();
+ assert.equal(f.agent.entries.has('one'),false);assert.equal(released,1);await f.agent.close();
+});
 test('one persistent agent creates account runtimes only for authorized work or explicit connection',async()=>{
  const f=fixture();await f.agent.step();await f.settle();assert.equal(f.acquires,0);
  f.accounts[0].authorized=true;f.agent.wake();await f.agent.step();await f.settle();assert.equal(f.acquires,1);assert.equal(f.runtimes[0].ticks,1);
