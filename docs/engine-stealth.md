@@ -22,3 +22,5 @@ The temporary diagnostic profile was closed and deleted through the supported CL
 ## Current verification
 
 Phase 0 preserves 50 decided CRM records, reasons, stored evidence and replay assessments. All actual accounts remain paused and both existing account holds remain in place. A detector-site pass is not a licence to clear a LinkedIn hold. Proxy configuration is authorized; purchase and paid usage are not.
+
+Phase 1 adds additive account fields and unique proxy-reference/verified-egress indexes. Account configuration rejects credential payloads, requires closed/paused sessions and uses revision compare-and-swap. Evidence writes require the current unexpired owner lease and configuration revision. Policy changes preserve recovery deadlines and exact account holds while invalidating prior diagnostics. Eight new policy/database tests and two existing AliasMode store tests pass; all 50 frozen records replay with zero decision/evidence changes and zero errors. Runtime admission and dashboard controls follow in the next phase; merely saving policy is not permission to process.

@@ -3,6 +3,7 @@ import {pool} from '@/lib/pg_setup';
 import {requireWorkerAdmin} from '@/lib/worker-admin';
 import {ensure,settings} from '@/lib/linkedin-workers.cjs';
 import * as ads from '@/lib/aliasmode-store.cjs';
+import * as sessions from '@/lib/account-session-store.cjs';
 export const dynamic='force-dynamic';
 export const runtime='nodejs';
 async function authorize(request:Request,mutation=false){await requireWorkerAdmin();if(mutation){const origin=request.headers.get('origin');if(!origin||new URL(origin).origin!==new URL(request.url).origin||request.headers.get('sec-fetch-site')==='cross-site')throw Error('Use AliasMode controls in the local CompelOS app.');if(!request.headers.get('content-type')?.startsWith('application/json'))throw Error('Expected a JSON request.');}}
@@ -14,6 +15,8 @@ export async function POST(request:Request){try{await authorize(request,true);}c
  else if(body.action==='bind')await ads.bind(pool,body);
  else if(body.action==='import')await ads.importProfile(pool,body);
  else if(body.action==='update')await ads.updateAccount(pool,body);
+ else if(body.action==='session-policy'){const {action:_action,...input}=body;void _action;await sessions.configure(pool,input);}
+ else if(body.action==='session-check')await sessions.request(pool,body.accountId,body.command);
  else if(body.action==='close'){if(typeof body.accountId!=='string')throw Error('Choose an account.');await ads.requestClose(pool,body.accountId);}
  else throw Error('Unknown AliasMode action.');
  return NextResponse.json({provider:await ads.publicSettings(pool),accounts:await settings(pool)},{headers:{'Cache-Control':'no-store'}});

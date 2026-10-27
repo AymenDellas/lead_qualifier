@@ -98,7 +98,7 @@ async function ensure(pool) {
   }
   catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
  })().catch(error => { ready.delete(pool); throw error; }));
- await ready.get(pool);await daily.ensure(pool);
+ await ready.get(pool);await daily.ensure(pool);await require('./account-session-store.cjs').ensure(pool);
 }
 async function backfillProfileUsage(client) {
  // The old counter recorded attempts. Recover distinct visits from saved
@@ -193,14 +193,16 @@ async function settings(pool) {
  const config = (await pool.query('SELECT *,compel_worker_day()::text AS daily_day,((compel_worker_day()+1)::timestamp AT TIME ZONE daily_timezone) AS resume_at FROM compel_worker_config WHERE id=1')).rows[0];
  const rows = (await pool.query(`SELECT a.id,a.label,a.email,a.enabled,a.daily_limit,a.position,(a.secret<>'') AS has_password,
   a.login_requested_at,a.logout_requested_at,a.signed_out_at,a.processing_enabled,a.processing_until,a.changed_at::text AS control_version,a.connected_at,a.confirmed_identity,a.attention_reason,
-  a.aliasmode_profile_id,a.aliasmode_profile_name,a.binding_revision,a.expected_member_name,a.close_requested_at,s.status,s.updated_at,s.lease_until,COALESCE(p.used,0) AS daily_count,
+  a.aliasmode_profile_id,a.aliasmode_profile_name,a.binding_revision,a.expected_member_name,a.close_requested_at,
+  a.engine,a.launch_mode,a.proxy_id,a.proxy_host,a.proxy_port,a.proxy_country,a.proxy_timezone,a.session_policy,a.session_evidence,a.session_revision,
+  s.status,s.updated_at,s.lease_until,COALESCE(p.used,0) AS daily_count,
   COALESCE(u.request_count,0) AS request_count,COALESCE(u.cached_profiles,0) AS cached_profiles,COALESCE(u.request_kinds,'{}') AS request_kinds
   FROM compel_linkedin_accounts a LEFT JOIN compel_worker_sessions s ON s.account_id=a.id
   LEFT JOIN compel_worker_usage u ON u.account_id=a.id AND u.day=compel_worker_day()
   LEFT JOIN (SELECT account_id,count(*)::int AS used FROM compel_worker_account_profiles WHERE day=compel_worker_day() GROUP BY account_id) p ON p.account_id=a.id
   WHERE a.archived IS FALSE ORDER BY a.position,a.id`)).rows;
  return { resources:config.agent_status?.resources||null,browserLimit:config.agent_status?.browserCapacity||10,dailyDay:config.daily_day,defaultDailyLimit:daily.defaultLimit(),revision: config.revision, supervisorOnline:!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000, activeCount: config.active_count>0?rows.filter(a => a.enabled).length:0, accounts: rows.map(a => ({
-  id:a.id,label:a.label,email:a.email,enabled:a.enabled,dailyLimit:a.daily_limit,hasPassword:a.has_password,
+  id:a.id,label:a.label,email:a.email,enabled:a.enabled,dailyLimit:a.daily_limit,hasPassword:a.has_password,session:require('./account-session-store.cjs').publicState(a),
   aliasmodeProfileId:a.aliasmode_profile_id||null,aliasmodeProfileName:a.aliasmode_profile_name||'',bindingRevision:Number(a.binding_revision||0),expectedMemberName:a.expected_member_name||'',closePending:!!a.close_requested_at,
   dailyCount:a.daily_count,dailyTimezone:config.daily_timezone,dailyResumeAt:a.daily_count>=a.daily_limit?config.resume_at:null,status:a.status?.status || 'offline',reason:a.status?.reason || '',
   runtimeVersion:a.status?.runtimeVersion||'',sessionReady:!!a.status?.sessionReady,browserOpen:!!a.status?.browserOpen,browserMode:a.status?.browserOpen&&['headless','visible','unknown'].includes(a.status?.browserMode)?a.status.browserMode:null,nextEligibleAt:a.status?.nextEligibleAt||(a.daily_count>=a.daily_limit?config.resume_at:null),
@@ -368,7 +370,8 @@ async function confirmManualSignIn(pool,id,owner,identity) {
   if(a.confirmed_identity&&!sameMember(a.confirmed_identity,clean))throw new Error('This browser is signed into a different LinkedIn member. Sign out and use the intended account.');
   if((await client.query("SELECT 1 FROM compel_linkedin_accounts WHERE id<>$1 AND archived IS FALSE AND connected_at IS NOT NULL AND (($2<>'' AND confirmed_identity->>'memberUrn'=$2) OR ($3<>'' AND confirmed_identity->>'profileUrl'=$3)) LIMIT 1",[id,clean.memberUrn,clean.profileUrl])).rowCount)
    throw new Error('This LinkedIn member is already connected to another saved account. Use that account instead.');
-  await client.query("UPDATE compel_linkedin_accounts SET connected_at=NOW(),confirmed_identity=$2::jsonb,attention_reason='',processing_enabled=FALSE,processing_until=NULL WHERE id=$1",[id,json(clean)]);
+  const recovery=a.attention_reason?{recoveryUntil:new Date(Date.now()+require('./account-session-policy.cjs').config(a.session_policy).recoveryDays*86400000).toISOString(),reviewedAt:new Date().toISOString()}:{};
+  await client.query("UPDATE compel_linkedin_accounts SET connected_at=NOW(),confirmed_identity=$2::jsonb,attention_reason='',processing_enabled=FALSE,processing_until=NULL,session_evidence=session_evidence||$3::jsonb WHERE id=$1",[id,json(clean),json(recovery)]);
   await accountEvent(client,id,'connected','Sign-in confirmed. Account is idle; processing requires an explicit start.');
  });
 }
