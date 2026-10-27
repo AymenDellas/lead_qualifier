@@ -25,4 +25,4 @@ test('legacy automated sign-out cannot read or delete AliasMode cookies',async()
 //  await assert.rejects(signOut(fixture({stillAuthenticated:true}).browser),/authentication cookie/);
 //  await assert.rejects(signOut(fixture({feedAccessible:true}).browser),/did not confirm/);
 // });
-// 
+//

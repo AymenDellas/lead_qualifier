@@ -217,7 +217,7 @@ export {default} from './AliasModeAccounts';
 //   </form>
 //  </dialog>;
 // }
-// 
+//
 // function AccountActions({account:a,disabled,pauseDisabled=disabled,busy,pendingAction,workerOnline,hasCapacity,advanced=false,onAction}:{account:WorkerAccount;disabled:boolean;pauseDisabled?:boolean;busy:boolean;pendingAction?:AccountAction;workerOnline:boolean;hasCapacity:boolean;advanced?:boolean;onAction:(action:AccountAction)=>void}) {
 //  const needsSignIn=!!a.attentionReason||!a.connectedAt||a.signedOut;
 //  const signingIn=a.online&&a.status==='awaiting_login';
@@ -249,4 +249,4 @@ export {default} from './AliasModeAccounts';
 //   {error?<p role="alert">{error}</p>:events===null?<p className="field-hint">Loading history…</p>:events.length===0?<p className="field-hint">No account events recorded yet.</p>:<ol className="space-y-3 py-2">{events.map(event=><li key={event.id}><p>{event.message}</p><time dateTime={event.createdAt} className="text-[var(--text-dim)]">{new Date(event.createdAt).toLocaleString()}</time></li>)}</ol>}
 //  </details>;
 // }
-// 
+//

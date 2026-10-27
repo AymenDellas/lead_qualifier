@@ -56,4 +56,4 @@ module.exports={createBrowserCoordinator};
 //  return {wrap,reserved,entries};
 // }
 // module.exports={createBrowserCoordinator,recoverSingletons};
-// 
+//

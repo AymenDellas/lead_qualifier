@@ -12,7 +12,13 @@ function createAliasModeBrowser({account,owner,pool,provider,puppeteer=require('
   await assertOwner();const saved=await store.session(pool,id);if(!force&&!entry?.managed&&!saved?.managed){await detach();await store.finishSession(pool,account,owner);return;}
   // The lease/binding fence is required even when Chrome/CDP is disconnected.
   if(entry)entry.expected=true;
-  try{await api.stop(id);const status=await api.active(id);if(status.active)throw providerError('ALIASMODE_STOP_PENDING','AliasMode has not confirmed profile closure. Check the profile before reopening.');}catch(error){if(entry)entry.expected=false;throw error;}
+  try{
+   // Do not restore another worker tab after every managed recycle. This is
+   // only our recorded/created target; never close a restored human tab here.
+   if(entry?.page&&!entry.page.isClosed())await entry.page.close().catch(()=>{});
+   await assertOwner();
+   await api.stop(id);const status=await api.active(id);if(status.active)throw providerError('ALIASMODE_STOP_PENDING','AliasMode has not confirmed profile closure. Check the profile before reopening.');
+  }catch(error){if(entry)entry.expected=false;throw error;}
   await detach();await store.finishSession(pool,account,owner);
  }
  async function resolvePid(browser){

@@ -7,7 +7,7 @@ export default function RetiredAdsPowerAccounts(){return null;}
 // import type {WorkerAccount,WorkerSettings} from '@/lib/linkedin-workers.cjs';
 // import type {AdsPowerSettings} from '@/lib/adspower-store.cjs';
 // import type {SupervisorStatus} from '@/lib/worker-supervisor-control.cjs';
-// 
+//
 // async function api<T>(url:string,body?:unknown,method='POST'):Promise<T>{
 //  const response=await fetch(url,body===undefined?{cache:'no-store'}:{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 //  const value=await response.json();if(!response.ok)throw Error(value.error||'The local worker request failed.');return value;

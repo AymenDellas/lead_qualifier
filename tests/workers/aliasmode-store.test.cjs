@@ -12,6 +12,10 @@ test('profile bindings use additive isolated PostgreSQL state and preserve holds
   await store.saveSession(pool,{id,aliasmode_profile_id:'fixture-two',binding_revision:1},'fixture-owner',{managed:true,headless:true,pid:10,targetId:'tab'});
   await assert.rejects(store.saveSession(pool,{id,aliasmode_profile_id:'wrong',binding_revision:1},'fixture-owner',{managed:true}),e=>e.code==='ALIASMODE_OWNERSHIP_CHANGED');
   assert.equal((await store.session(pool,'fixture-two')).owner,'fixture-owner');
+  await assert.rejects(core.confirmManualSignIn(pool,id,'fixture-owner',{name:'Different Member',profileUrl:'https://www.linkedin.com/in/fixture-member/'}),/expected LinkedIn member/);
+  await core.requestLogin(pool,id);const review=await core.readRuntimeAccount(pool,id);await core.consumeLoginRequest(pool,id,review.login_token);
+  await core.confirmManualSignIn(pool,id,'fixture-owner',{name:'John Dilah',profileUrl:'https://www.linkedin.com/in/fixture-member/'});
+  row=(await pool.query('SELECT attention_reason,processing_enabled FROM compel_linkedin_accounts WHERE id=$1',[id])).rows[0];assert.equal(row.attention_reason,'');assert.equal(row.processing_enabled,false,'explicit manual review confirms the member without authorizing processing');
  }finally{await db.close();}
 });
 test('AliasMode config has no API key and profile imports remain paused',async()=>{

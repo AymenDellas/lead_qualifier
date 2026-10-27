@@ -19,4 +19,4 @@ module.exports={async signOut(){throw Error('Automatic LinkedIn sign-out is disa
 //  log('LinkedIn signed out; login page confirmed.');
 // }
 // module.exports={signOut};
-// 
+//

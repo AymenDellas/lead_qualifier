@@ -43,7 +43,7 @@ test('a real restored browser reads two leads by API on one feed document, witho
 //  assert.equal(one.browserVersion,require('puppeteer').default.browserVersion);assert.equal(one.configuration.cacheDirectory,require('puppeteer').default.configuration.cacheDirectory);
 //  assert.ok(one.plugins.some(p=>p.name==='stealth'));assert.notEqual(one.plugins.find(p=>p.name==='stealth'),two.plugins.find(p=>p.name==='stealth'));
 // });
-// 
+//
 // test('plugin launch preserves the original AbortSignal so a cancelled startup remains cancelled',async()=>{
 //  const controller=new AbortController();controller.abort();let observed;
 //  const driver=createAccountDriver({defaultArgs:()=>[],executablePath:()=> 'fixture',launch:async options=>{observed=options.signal;options.signal.throwIfAborted();}});
@@ -83,4 +83,4 @@ test('a real restored browser reads two leads by API on one feed document, witho
 //   fs.rmSync(target,{recursive:true,force:true});
 //  }
 // });
-// 
+//

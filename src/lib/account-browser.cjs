@@ -3,14 +3,14 @@
 module.exports={createAccountBrowser:require('./aliasmode-browser.cjs').createAliasModeBrowser};
 // LEGACY CHROME REFERENCE — inactive; retained at the user’s request.
 // 'use strict';
-// 
+//
 // const path = require('node:path');
 // const profileOwners = new Map();
-// 
+//
 // function browserError(code, message) {
 //     return Object.assign(new Error(message), { code });
 // }
-// 
+//
 // function bounded(task, milliseconds) {
 //     let timer;
 //     return Promise.race([
@@ -18,11 +18,11 @@ module.exports={createAccountBrowser:require('./aliasmode-browser.cjs').createAl
 //         new Promise(resolve => { timer = setTimeout(() => resolve(false), milliseconds); }),
 //     ]).finally(() => clearTimeout(timer));
 // }
-// 
+//
 // function exited(child) {
 //     return child && (child.exitCode != null || child.signalCode != null);
 // }
-// 
+//
 // function waitForExit(child, milliseconds) {
 //     if (exited(child)) return Promise.resolve(true);
 //     return new Promise(resolve => {
@@ -36,7 +36,7 @@ module.exports={createAccountBrowser:require('./aliasmode-browser.cjs').createAl
 //         timer = setTimeout(done, milliseconds);
 //     });
 // }
-// 
+//
 // // Existing profiles always retain their original cookie directory. A different
 // // root is an opt-in location for new profiles, never an implicit migration.
 // function profilePath(root, account, fs, profileRoot) {
@@ -46,7 +46,7 @@ module.exports={createAccountBrowser:require('./aliasmode-browser.cjs').createAl
 //     const legacy = path.resolve(root, '.browser-profiles', account.profile_key);
 //     return !profileRoot || fs.existsSync(legacy) ? legacy : path.resolve(profileRoot, account.profile_key);
 // }
-// 
+//
 // /**
 //  * Owns one saved Chrome for Testing browser. Processing is headless; manual
 //  * sign-in/review uses a visible launch of the same persistent profile. Navigation,
@@ -59,17 +59,17 @@ module.exports={createAccountBrowser:require('./aliasmode-browser.cjs').createAl
 //     const directory = profilePath(root, account, fs, profileRoot);
 //     const profileKey = process.platform === 'win32' ? directory.toLowerCase() : directory;
 //     let entry = null, opening = null, closing = null, windowTask = Promise.resolve(), accountDriver = null;
-// 
+//
 //     function release(value) {
 //         if (profileOwners.get(profileKey) === value) profileOwners.delete(profileKey);
 //         if (entry === value) entry = null;
 //     }
-// 
+//
 //     function isOpen() {
 //         return Boolean(entry?.surface && !entry.closing && !entry.disconnected &&
 //             entry.browser.isConnected() && !entry.surface.page.isClosed());
 //     }
-// 
+//
 //     async function dispose(value) {
 //         value.closing = true;
 //         if (value.disposal) return value.disposal;
@@ -92,7 +92,7 @@ module.exports={createAccountBrowser:require('./aliasmode-browser.cjs').createAl
 //         })();
 //         try { await value.disposal; } catch (error) { value.disposal = null; throw error; }
 //     }
-// 
+//
 //     async function preparePage(value, acceptPages) {
 //         // Avoid initializing every restored page's session. Only about:blank is
 //         // created here; account URLs are opened by the caller after open().
@@ -114,14 +114,14 @@ module.exports={createAccountBrowser:require('./aliasmode-browser.cjs').createAl
 //             await bounded(() => session.detach(), closeTimeoutMs);
 //         }
 //     }
-// 
+//
 //     function open({headless=true}={}) {
 //         if (closing) return Promise.reject(browserError('BROWSER_CLOSING', 'The account browser is closing.'));
 //         if (opening) return opening;
 //         if (isOpen()) return entry.headless===headless?Promise.resolve(entry.surface):Promise.reject(browserError('BROWSER_MODE_CHANGE_REQUIRED','Close the owned browser before changing visibility mode.'));
 //         if (entry) return Promise.reject(browserError('BROWSER_DISCONNECTED', 'The account browser was disconnected or its page closed. Close it before explicitly reopening.'));
 //         if (profileOwners.has(profileKey)) return Promise.reject(browserError('BROWSER_PROFILE_IN_USE', 'This account profile already has a browser owner.'));
-// 
+//
 //         const value = { browser: null, child: null, surface: null, closing: false, disconnected: false, headless };
 //         entry = value;
 //         profileOwners.set(profileKey, value);
@@ -177,7 +177,7 @@ module.exports={createAccountBrowser:require('./aliasmode-browser.cjs').createAl
 //         task.then(() => { if (opening === task) opening = null; }, () => { if (opening === task) opening = null; });
 //         return task;
 //     }
-// 
+//
 //     function close() {
 //         if (closing) return closing;
 //         const value = entry;
@@ -196,7 +196,7 @@ module.exports={createAccountBrowser:require('./aliasmode-browser.cjs').createAl
 //         task.then(() => { if (closing === task) closing = null; }, () => { if (closing === task) closing = null; });
 //         return task;
 //     }
-// 
+//
 //     function windowState(state) {
 //         // Serialize Hide/Show so an account warning cannot be hidden by an
 //         // older minimize request that finishes late. No navigation or relaunch.
@@ -235,9 +235,9 @@ module.exports={createAccountBrowser:require('./aliasmode-browser.cjs').createAl
 //         windowTask = task;
 //         return task;
 //     }
-// 
+//
 //     return { open, close, isOpen, isHeadless:()=>isOpen()?entry.headless:null,profileDirectory:directory, background: () => windowState('background'), minimize: () => windowState('background'), reveal: () => windowState('normal'), get: () => isOpen() ? entry.surface : null };
 // }
-// 
+//
 // module.exports = { createAccountBrowser };
-// 
+//

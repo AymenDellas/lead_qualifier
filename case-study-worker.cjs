@@ -23,9 +23,9 @@ module.exports={};
 //     normalizeWebsiteCandidate,
 //     qualifyHeadline,
 // } = require('./case-study-worker-core.cjs');
-// 
+//
 // puppeteerExtra.use(StealthPlugin());
-// 
+//
 // const ROOT = __dirname;
 // const PROFILE_DIR = path.join(ROOT, '.browser-profiles-case-study', 'account-0');
 // const QUEUE_DIR = path.join(ROOT, 'case-study-queue');
@@ -43,11 +43,11 @@ module.exports={};
 // const RECYCLE_AFTER = 25;
 // const RECENT_LOG_LIMIT = 120;
 // const MAX_SOURCE_SCAN_PROFILES = 150;
-// 
+//
 // for (const directory of [PROFILE_DIR, QUEUE_DIR, RESULTS_DIR, FAILED_DIR, DATA_DIR]) {
 //     fs.mkdirSync(directory, { recursive: true });
 // }
-// 
+//
 // function loadEnv() {
 //     const envPath = path.join(ROOT, '.env.local');
 //     if (!fs.existsSync(envPath)) throw new Error('.env.local not found');
@@ -57,14 +57,14 @@ module.exports={};
 //         process.env[match[1].trim()] = match[2].trim().replace(/^(['"])([\s\S]*)\1$/, '$2');
 //     }
 // }
-// 
+//
 // loadEnv();
-// 
+//
 // const DAILY_LIMIT = Math.max(1, Number.parseInt(process.env.CASE_STUDY_DAILY_SCRAPE_LIMIT || '150', 10));
 // const PROFILE_DELAY_MIN_MS = Math.max(1000, Number.parseInt(process.env.CASE_STUDY_PROFILE_DELAY_MIN_MS || '12000', 10));
 // const PROFILE_DELAY_MAX_MS = Math.max(PROFILE_DELAY_MIN_MS, Number.parseInt(process.env.CASE_STUDY_PROFILE_DELAY_MAX_MS || '25000', 10));
 // const ENV_TARGET_TITLES = normalizeTitles(process.env.CASE_STUDY_JOB_TITLES || DEFAULT_TARGET_TITLES);
-// 
+//
 // let browser = null;
 // let linkedInPage = null;
 // let stopping = false;
@@ -77,27 +77,27 @@ module.exports={};
 // let lockOwned = false;
 // let state = { status: 'STARTING', phase: 'STARTING', message: 'Starting Case Study worker', currentProfile: '' };
 // const recentLogs = [];
-// 
+//
 // const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // const jitter = (min, max) => sleep(min + Math.floor(Math.random() * Math.max(1, max - min + 1)));
-// 
+//
 // class JobCancelledError extends Error {
 //     constructor() {
 //         super('The current Case Study run was stopped by the operator.');
 //         this.name = 'JobCancelledError';
 //     }
 // }
-// 
+//
 // function atomicJson(file, data) {
 //     const temp = `${file}.${process.pid}.tmp`;
 //     fs.writeFileSync(temp, JSON.stringify(data, null, 2));
 //     fs.renameSync(temp, file);
 // }
-// 
+//
 // function todayKey() {
 //     return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Casablanca' }).format(new Date());
 // }
-// 
+//
 // function readUsage() {
 //     try {
 //         const value = JSON.parse(fs.readFileSync(LIMITS_FILE, 'utf8'));
@@ -106,12 +106,12 @@ module.exports={};
 //         return { date: todayKey(), count: 0 };
 //     }
 // }
-// 
+//
 // function queueSize() {
 //     try { return fs.readdirSync(QUEUE_DIR).filter((file) => file.endsWith('.json')).length; }
 //     catch { return 0; }
 // }
-// 
+//
 // function writeStatus(extra = {}) {
 //     const usage = readUsage();
 //     const payload = {
@@ -135,7 +135,7 @@ module.exports={};
 //         try { fs.writeFileSync(STATUS_FILE, JSON.stringify(payload, null, 2)); } catch { /* next heartbeat retries */ }
 //     }
 // }
-// 
+//
 // function consumeStopRequest() {
 //     if (!fs.existsSync(CONTROL_FILE)) return false;
 //     try {
@@ -158,12 +158,12 @@ module.exports={};
 //         return false;
 //     }
 // }
-// 
+//
 // function throwIfCancelled() {
 //     consumeStopRequest();
 //     if (cancelRequested) throw new JobCancelledError();
 // }
-// 
+//
 // async function cancellableSleep(ms) {
 //     const deadline = Date.now() + ms;
 //     while (Date.now() < deadline) {
@@ -172,7 +172,7 @@ module.exports={};
 //     }
 //     throwIfCancelled();
 // }
-// 
+//
 // async function idleSleep(ms) {
 //     const deadline = Date.now() + ms;
 //     while (Date.now() < deadline) {
@@ -181,11 +181,11 @@ module.exports={};
 //     }
 //     return false;
 // }
-// 
+//
 // function releaseSourceScanLock() {
 //     try { fs.unlinkSync(SOURCE_SCAN_LOCK); } catch { /* already released */ }
 // }
-// 
+//
 // function setPhase(phase, message, extra = {}) {
 //     state = {
 //         ...state,
@@ -196,7 +196,7 @@ module.exports={};
 //     };
 //     writeStatus();
 // }
-// 
+//
 // function log(message, phase = state.phase) {
 //     const entry = { at: new Date().toISOString(), phase, message: String(message) };
 //     recentLogs.push(entry);
@@ -206,12 +206,12 @@ module.exports={};
 //     state = { ...state, phase, message: String(message) };
 //     writeStatus();
 // }
-// 
+//
 // function processAlive(pid) {
 //     if (!Number.isInteger(pid) || pid <= 0) return false;
 //     try { process.kill(pid, 0); return true; } catch { return false; }
 // }
-// 
+//
 // function acquireLock() {
 //     if (fs.existsSync(PID_FILE)) {
 //         const existing = Number.parseInt(fs.readFileSync(PID_FILE, 'utf8'), 10);
@@ -222,7 +222,7 @@ module.exports={};
 //     fs.writeFileSync(PID_FILE, String(process.pid));
 //     lockOwned = true;
 // }
-// 
+//
 // function releaseLock() {
 //     if (!lockOwned) return;
 //     try {
@@ -232,7 +232,7 @@ module.exports={};
 //         lockOwned = false;
 //     } catch { /* shutdown best effort */ }
 // }
-// 
+//
 // function reserveDailyProfile() {
 //     const usage = readUsage();
 //     if (usage.count >= DAILY_LIMIT) return false;
@@ -240,7 +240,7 @@ module.exports={};
 //     atomicJson(LIMITS_FILE, usage);
 //     return true;
 // }
-// 
+//
 // function claimNextJob(preferSource = false) {
 //     const names = fs.readdirSync(QUEUE_DIR).filter((file) => file.endsWith('.json')).sort();
 //     if (preferSource) names.sort((a, b) => {
@@ -260,18 +260,18 @@ module.exports={};
 //     }
 //     return null;
 // }
-// 
+//
 // function completeJob(claimed) {
 //     try { fs.unlinkSync(claimed.path); } catch { /* already gone */ }
 // }
-// 
+//
 // function restoreJob(claimed) {
 //     try {
 //         const original = claimed.path.replace(/\.\d+\.processing$/, '');
 //         fs.renameSync(claimed.path, original);
 //     } catch { /* leave processing file for manual recovery */ }
 // }
-// 
+//
 // function canonicalLinkedIn(value) {
 //     try {
 //         const url = new URL(value, 'https://www.linkedin.com');
@@ -279,7 +279,7 @@ module.exports={};
 //         return slug ? `https://www.linkedin.com/in/${slug}/` : '';
 //     } catch { return ''; }
 // }
-// 
+//
 // function sourceUrl(source, suppliedUrl) {
 //     if (source === 'CONNECTION') return 'https://www.linkedin.com/mynetwork/invite-connect/connections/';
 //     if (source === 'FOLLOWER') return 'https://www.linkedin.com/mynetwork/network-manager/people-follow/followers/';
@@ -287,7 +287,7 @@ module.exports={};
 //     if (source === 'ENGAGER') return suppliedUrl || '';
 //     return '';
 // }
-// 
+//
 // function enqueueProfile(profileUrl, parent) {
 //     const url = canonicalLinkedIn(profileUrl);
 //     if (!url) return false;
@@ -305,7 +305,7 @@ module.exports={};
 //     });
 //     return true;
 // }
-// 
+//
 // function connectionPaginationPayload(startIndex) {
 //     const requestedStateKeys = [{ key: { value: { $case: 'id', id: 'connectionsListSortOption' } }, namespace: 'connectionsListSortOptionMenu' }];
 //     const payload = { startIndex, sortByOptionBinding: { key: 'connectionsListSortOption', namespace: 'connectionsListSortOptionMenu' } };
@@ -339,12 +339,12 @@ module.exports={};
 //         },
 //     };
 // }
-// 
+//
 // function safeLinkedInHeaders(headers = {}) {
 //     return Object.fromEntries(Object.entries(headers)
 //         .filter(([name]) => name === 'content-type' || name === 'csrf-token' || name.startsWith('x-li-')));
 // }
-// 
+//
 // async function fetchConnectionBatch(startIndex, capturedHeaders) {
 //     throwIfCancelled();
 //     return linkedInPage.evaluate(async ({ postData, headers }) => {
@@ -364,7 +364,7 @@ module.exports={};
 //         }
 //     }, { postData: JSON.stringify(connectionPaginationPayload(startIndex)), headers: safeLinkedInHeaders(capturedHeaders) });
 // }
-// 
+//
 // async function removePipelineDuplicates(urls) {
 //     if (!urls.length) return { existingUrls: [], newUrls: [] };
 //     setPhase('CHECKING_DUPLICATES', `Comparing ${urls.length} LinkedIn profile URL(s) with the prospect pipeline`);
@@ -418,7 +418,7 @@ module.exports={};
 //     }
 //     return result;
 // }
-// 
+//
 // async function advanceSourceList(stagnantPasses) {
 //     const before = await linkedInPage.evaluate(() => {
 //         const container = document.querySelector('main#workspace, main');
@@ -428,7 +428,7 @@ module.exports={};
 //             links: document.querySelectorAll('a[href*="/in/"]').length,
 //         };
 //     });
-// 
+//
 //     await linkedInPage.evaluate((stagnant) => {
 //         const container = document.querySelector('main#workspace, main');
 //         if (!container) return;
@@ -444,7 +444,7 @@ module.exports={};
 //         }
 //     }, stagnantPasses);
 //     await cancellableSleep(1700 + Math.floor(Math.random() * 700));
-// 
+//
 //     const clickedLoadMore = await linkedInPage.evaluate(() => {
 //         const button = [...document.querySelectorAll('button')].find((candidate) => {
 //             const text = `${candidate.textContent || ''} ${candidate.getAttribute('aria-label') || ''}`.trim();
@@ -455,7 +455,7 @@ module.exports={};
 //         return Boolean(button);
 //     });
 //     if (clickedLoadMore) await cancellableSleep(1500);
-// 
+//
 //     const after = await linkedInPage.evaluate(() => {
 //         const container = document.querySelector('main#workspace, main');
 //         return {
@@ -469,7 +469,7 @@ module.exports={};
 //         clickedLoadMore,
 //     };
 // }
-// 
+//
 // async function scanSource(job) {
 //     const sourceRequests = [];
 //     const captureRequest = (request) => {
@@ -532,7 +532,7 @@ module.exports={};
 //     const initialUrls = await linkedInPage.$$eval('a[href*="/in/"]', (anchors) => anchors.map((anchor) => anchor.href));
 //     await collectProfiles(initialUrls);
 //     if (!found.size) reportProgress();
-// 
+//
 //     if (job.source === 'CONNECTION' && newProfiles.length < limit) {
 //         const headerSource = sourceRequests.find((request) => /flagship-web\/rsc-action/i.test(request.url) && request.headers);
 //         // Pagination follows source positions, never the number of non-duplicates.
@@ -635,7 +635,7 @@ module.exports={};
 //         linkedInPage.off('request', captureRequest);
 //     }
 // }
-// 
+//
 // async function voyagerFetch(apiPath) {
 //     return linkedInPage.evaluate(async (requestPath) => {
 //         try {
@@ -656,7 +656,7 @@ module.exports={};
 //         }
 //     }, apiPath);
 // }
-// 
+//
 // function profileFields(payload, slug) {
 //     const included = Array.isArray(payload?.included) ? payload.included : [];
 //     const candidates = [...included, payload?.data, payload].filter(Boolean);
@@ -669,7 +669,7 @@ module.exports={};
 //         location: String(matched.geoLocationName || matched.locationName || matched.geoLocation?.geo?.defaultLocalizedName || ''),
 //     };
 // }
-// 
+//
 // async function readProfile(linkedinUrl) {
 //     throwIfCancelled();
 //     const slug = new URL(linkedinUrl).pathname.split('/').filter(Boolean).at(-1);
@@ -708,7 +708,7 @@ module.exports={};
 //     }
 //     return { ...fields, slug, profilePayload: response.data || {} };
 // }
-// 
+//
 // async function findWebsite(profile) {
 //     throwIfCancelled();
 //     setPhase('FINDING_WEBSITE', `Finding a public website for ${profile.firstName || profile.slug}`);
@@ -722,13 +722,13 @@ module.exports={};
 //         log(`Found website in LinkedIn contact info: ${contactWebsites[0]}`, 'FINDING_WEBSITE');
 //         return contactWebsites[0];
 //     }
-// 
+//
 //     const aboutWebsites = extractSummaryWebsites(profile.profilePayload);
 //     if (aboutWebsites.length) {
 //         log(`Found website in the LinkedIn About section: ${aboutWebsites[0]}`, 'FINDING_WEBSITE');
 //         return aboutWebsites[0];
 //     }
-// 
+//
 //     const featured = await voyagerFetch(`/voyager/api/identity/profiles/${profile.slug}/featuredContent`);
 //     throwIfCancelled();
 //     const featuredWebsites = featured.status === 200 ? extractFeaturedWebsites(featured.data) : [];
@@ -736,7 +736,7 @@ module.exports={};
 //         log(`Found website in LinkedIn Featured content: ${featuredWebsites[0]}`, 'FINDING_WEBSITE');
 //         return featuredWebsites[0];
 //     }
-// 
+//
 //     // Match the original worker's final fallback: conservative personal-domain
 //     // guesses are accepted only when DNS resolves and the site returns real HTML.
 //     const firstName = String(profile.firstName || '').toLowerCase().replace(/[^a-z]/g, '');
@@ -757,11 +757,11 @@ module.exports={};
 //             }
 //         } catch { /* this conservative guess did not resolve to a usable website */ }
 //     }
-// 
+//
 //     log('No public website was found in LinkedIn contact info, About, Featured, or verified personal-domain fallbacks.', 'FINDING_WEBSITE');
 //     return '';
 // }
-// 
+//
 // async function fetchHtml(url, timeout = 18000) {
 //     throwIfCancelled();
 //     const response = await fetch(url, {
@@ -795,7 +795,7 @@ module.exports={};
 //     html += decoder.decode();
 //     return { url: response.url, html, status: response.status };
 // }
-// 
+//
 // function profileAssessment(reason, qualification, websiteScan) {
 //     return {
 //         coachFit: qualification.qualified ? 'YES' : 'NO',
@@ -810,7 +810,7 @@ module.exports={};
 //         recommendedNextAction: qualification.qualified ? 'Find and verify the public website' : 'Keep out of the active queue',
 //     };
 // }
-// 
+//
 // async function processProfile(job) {
 //     throwIfCancelled();
 //     const profile = await readProfile(job.linkedinUrl);
@@ -830,7 +830,7 @@ module.exports={};
 //             }),
 //         };
 //     }
-// 
+//
 //     const website = await findWebsite(profile);
 //     throwIfCancelled();
 //     const nextAction = website ? 'Review the profile and website, then write your LinkedIn DM' : 'Find the public website or review the LinkedIn profile before outreach';
@@ -847,7 +847,7 @@ module.exports={};
 //         },
 //     };
 // }
-// 
+//
 // async function saveResult(job, result) {
 //     throwIfCancelled();
 //     setPhase('SAVING_RESULT', `Saving ${result.status.toLowerCase().replaceAll('_', ' ')} result`);
@@ -875,7 +875,7 @@ module.exports={};
 //     atomicJson(path.join(FAILED_DIR, `${job.jobId}.json`), { job, result, endpoint, error: lastError, savedAt: new Date().toISOString() });
 //     throw new Error(`Could not save the Case Study record: ${lastError}`);
 // }
-// 
+//
 // async function launchBrowser(headless) {
 //     return puppeteerExtra.launch({
 //         headless,
@@ -889,7 +889,7 @@ module.exports={};
 //         env: { ...process.env, DISPLAY: process.env.DISPLAY || ':99' },
 //     });
 // }
-// 
+//
 // async function launchBrowserWithRetry(headless) {
 //     let lastError;
 //     for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -903,13 +903,13 @@ module.exports={};
 //     }
 //     throw lastError || new Error('Browser startup failed.');
 // }
-// 
+//
 // function accounts() {
 //     const parsed = JSON.parse(process.env.LINKEDIN_ACCOUNTS || '[]');
 //     if (!Array.isArray(parsed) || !parsed[0]?.email || !parsed[0]?.password) throw new Error('LINKEDIN_ACCOUNTS is not configured.');
 //     return parsed;
 // }
-// 
+//
 // async function checkLogin(page, allowCredentials = true) {
 //     setPhase('CHECKING_LINKEDIN_LOGIN', 'Checking the isolated LinkedIn session');
 //     await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -927,7 +927,7 @@ module.exports={};
 //     await sleep(5000);
 //     return /linkedin\.com\/feed/i.test(page.url());
 // }
-// 
+//
 // async function openCleanLinkedInPage() {
 //     // browser.pages() attaches to every restored tab. A large saved Chrome
 //     // session can time out before the worker gets a chance to close them.
@@ -951,7 +951,7 @@ module.exports={};
 //     await page.setViewport({ width: 1366, height: 850 });
 //     return page;
 // }
-// 
+//
 // async function openLoggedInBrowser() {
 //     browser = await launchBrowserWithRetry(true);
 //     linkedInPage = await openCleanLinkedInPage();
@@ -979,7 +979,7 @@ module.exports={};
 //     }
 //     throw new Error('LinkedIn login was not completed within 10 minutes.');
 // }
-// 
+//
 // async function recycleBrowser() {
 //     setPhase('RECYCLING_BROWSER', 'Recycling the browser after the completed batch');
 //     if (browser) await browser.close().catch(() => {});
@@ -988,7 +988,7 @@ module.exports={};
 //     processedInCycle = 0;
 //     await openLoggedInBrowser();
 // }
-// 
+//
 // async function ensureBrowserHealthy() {
 //     try {
 //         if (!browser?.connected || !linkedInPage || linkedInPage.isClosed()) throw new Error('browser unavailable');
@@ -997,7 +997,7 @@ module.exports={};
 //         await recycleBrowser();
 //     }
 // }
-// 
+//
 // async function shutdown(signal) {
 //     if (stopping) return;
 //     stopping = true;
@@ -1006,7 +1006,7 @@ module.exports={};
 //     if (browser) await browser.close().catch(() => {});
 //     releaseLock();
 // }
-// 
+//
 // async function main() {
 //     acquireLock();
 //     fs.writeFileSync(LOG_FILE, '');
@@ -1113,11 +1113,11 @@ module.exports={};
 //         }
 //     }
 // }
-// 
+//
 // process.on('SIGINT', () => shutdown('SIGINT').then(() => process.exit(0)));
 // process.on('SIGTERM', () => shutdown('SIGTERM').then(() => process.exit(0)));
 // process.on('exit', releaseLock);
-// 
+//
 // main().catch(async (error) => {
 //     console.error(`[CaseStudy] Fatal — ${error.stack || error.message}`);
 //     stopping = true;
@@ -1130,4 +1130,4 @@ module.exports={};
 //     }
 //     process.exitCode = 1;
 // });
-// 
+//

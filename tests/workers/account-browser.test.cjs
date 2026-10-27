@@ -5,20 +5,20 @@ test('the compatibility browser entry point delegates only to AliasMode',()=>{as
 test('missing or invalid AliasMode bindings fail without launching local Chrome',()=>{for(const id of [null,'../profile','https://other.test'])assert.throws(()=>createAccountBrowser({account:{id:'fixture',aliasmode_profile_id:id},provider:{},owner:'fixture'}),e=>e.code==='ALIASMODE_PROFILE_ID');});
 // RETIRED LOCAL CHROME TESTS â€” retained as comments; AliasMode contracts replace these cases.
 // 'use strict';
-// 
+//
 // const { test } = require('node:test');
 // const assert = require('node:assert/strict');
 // const path = require('node:path');
 // const { EventEmitter } = require('node:events');
 // const { createAccountBrowser } = require('../../src/lib/account-browser.cjs');
-// 
+//
 // let fixtureId = 0;
 // function deferred() {
 //     let resolve, reject;
 //     const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
 //     return { promise, resolve, reject };
 // }
-// 
+//
 // function fixture() {
 //     const root = path.resolve('isolated-account-browser-' + ++fixtureId);
 //     const bundled=path.resolve('chrome-for-testing.exe');
@@ -67,7 +67,7 @@ test('missing or invalid AliasMode bindings fail without launching local Chrome'
 //         set launchGate(value) { launchGate = value; }, set launchError(value) { launchError = value; },
 //         set pageError(value) { pageError = value; }, set hangClose(value) { hangClose = value; }, set killWorks(value) { killWorks = value; } };
 // }
-// 
+//
 // test('creation is inert; repeated and concurrent opens reuse one visible saved browser', async () => {
 //     const f = fixture(), owner = createAccountBrowser(f.options);
 //     assert.equal(owner.isOpen(), false); assert.equal(owner.get(), null);
@@ -104,7 +104,7 @@ test('missing or invalid AliasMode bindings fail without launching local Chrome'
 //  page.target=()=>({createCDPSession:async()=>{throw Error('Window controls unavailable');}});
 //  await assert.rejects(owner.minimize(),/Window controls unavailable/);assert.equal(owner.isOpen(),true);assert.equal(f.launches.length,1);await owner.close();
 // });
-// 
+//
 // test('preserves existing legacy cookie paths even with a separate profile root', async () => {
 //     const f = fixture(), legacy = path.join(f.root, '.browser-profiles', 'account-0');
 //     f.existing.add(legacy);
@@ -113,14 +113,14 @@ test('missing or invalid AliasMode bindings fail without launching local Chrome'
 //     const next = createAccountBrowser({ ...f.options, account: { profile_key: 'new-account' }, profileRoot: path.resolve('separate-local-state') });
 //     await next.open(); assert.equal(f.launches[1].userDataDir, path.resolve('separate-local-state', 'new-account')); await next.close();
 // });
-// 
+//
 // test('uses bundled Chrome for Testing instead of a configured system Chrome override', async () => {
 //     const f = fixture(); f.puppeteer.configuration.executablePath = path.resolve('installed-chrome.exe');
 //     const owner = createAccountBrowser(f.options); await owner.open();
 //     assert.equal(f.launches[0].executablePath,path.resolve('chrome-for-testing.exe'));
 //     assert.equal(f.launches[0].channel, undefined); await owner.close();
 // });
-// 
+//
 // test('honors the CommonJS Puppeteer namespace default configuration', async () => {
 //     const f = fixture(), executablePath = path.resolve('chrome-for-testing.exe');
 //     const puppeteer = { default:f.puppeteer };
@@ -128,7 +128,7 @@ test('missing or invalid AliasMode bindings fail without launching local Chrome'
 //     assert.equal(f.launches[0].executablePath, executablePath);
 //     assert.equal(f.launches[0].channel, undefined); await owner.close();
 // });
-// 
+//
 // test('normal close is idempotent, leaves saved state intact, and allows an explicit reopen', async () => {
 //     const f = fixture(), owner = createAccountBrowser(f.options), { browser } = await owner.open();
 //     await Promise.all([owner.close(), owner.close()]); await owner.close();
@@ -137,7 +137,7 @@ test('missing or invalid AliasMode bindings fail without launching local Chrome'
 //     assert.equal(f.existing.has(f.launches[0].userDataDir), true);
 //     await owner.open(); assert.equal(f.launches.length, 2); await owner.close();
 // });
-// 
+//
 // test('unexpected disconnect notifies once and cannot silently relaunch', async () => {
 //     const f = fixture(), owner = createAccountBrowser(f.options), { browser } = await owner.open();
 //     browser.disconnectUnexpectedly(); browser.emit('disconnected');
@@ -147,21 +147,21 @@ test('missing or invalid AliasMode bindings fail without launching local Chrome'
 //     assert.equal(f.launches.length, 1); assert.equal(browser.closeCalls, 0);
 //     await owner.close(); await owner.open(); assert.equal(f.launches.length, 2); await owner.close();
 // });
-// 
+//
 // test('a closed page also requires explicit recovery without creating another page', async () => {
 //     const f = fixture(), owner = createAccountBrowser(f.options), { browser, page } = await owner.open();
 //     page.isClosed = () => true;
 //     await assert.rejects(owner.open(), { code: 'BROWSER_DISCONNECTED' });
 //     assert.equal(browser.newPageCalls, 1); await owner.close();
 // });
-// 
+//
 // test('competing owners cannot open the same profile until its owner closes', async () => {
 //     const f = fixture(), first = createAccountBrowser(f.options), second = createAccountBrowser(f.options);
 //     await first.open(); await assert.rejects(second.open(), { code: 'BROWSER_PROFILE_IN_USE' });
 //     assert.equal(f.launches.length, 1); await second.close(); assert.equal(first.isOpen(), true);
 //     await first.close(); await second.open(); assert.equal(f.launches.length, 2); await second.close();
 // });
-// 
+//
 // test('launch and page setup failures release ownership after cleaning up only their browser', async () => {
 //     const f = fixture(), owner = createAccountBrowser(f.options);
 //     f.launchError = new Error('Launch failed'); await assert.rejects(owner.open(), /Launch failed/);
@@ -170,13 +170,13 @@ test('missing or invalid AliasMode bindings fail without launching local Chrome'
 //     assert.equal(f.browsers[0].closeCalls, 1); assert.equal(f.browsers[0].detaches, 1);
 //     f.pageError = null; await owner.open(); await owner.close();
 // });
-// 
+//
 // test('a hung close is bounded and signals only the owned child process', async () => {
 //     const f = fixture(), owner = createAccountBrowser(f.options), { browser } = await owner.open();
 //     f.hangClose = true; await owner.close();
 //     assert.deepEqual(browser.child.signals, ['SIGKILL']); assert.equal(owner.get(), null);
 // });
-// 
+//
 // test('failed process termination retains ownership instead of allowing another browser', async () => {
 //     const f = fixture(), owner = createAccountBrowser(f.options), other = createAccountBrowser(f.options);
 //     await owner.open(); f.hangClose = true; f.killWorks = false;
@@ -184,7 +184,7 @@ test('missing or invalid AliasMode bindings fail without launching local Chrome'
 //     await assert.rejects(other.open(), { code: 'BROWSER_PROFILE_IN_USE' });
 //     f.killWorks = true; await owner.close(); await other.open(); await other.close();
 // });
-// 
+//
 // test('close during launch aborts, returns promptly, and cleans up a late launch result', async () => {
 //     const f = fixture(), gate = deferred(); f.launchGate = gate;
 //     const owner = createAccountBrowser(f.options), opening = owner.open();
@@ -194,7 +194,7 @@ test('missing or invalid AliasMode bindings fail without launching local Chrome'
 //     assert.equal(f.browsers[0].closeCalls, 1); assert.equal(f.browsers[0].newPageCalls, 0);
 //     f.launchGate = null; await owner.open(); await owner.close();
 // });
-// 
+//
 // test('invalid profile keys fail before filesystem changes or browser launch', () => {
 //     const f = fixture();
 //     for (const profile_key of ['', '../account', '..\\account', '/account', 'C:\\account', 'account:stream']) {
@@ -206,4 +206,4 @@ test('missing or invalid AliasMode bindings fail without launching local Chrome'
 //  const f=fixture();f.existing.delete(path.resolve('chrome-for-testing.exe'));const owner=createAccountBrowser(f.options);
 //  await assert.rejects(owner.open(),error=>error.code==='CHROME_FOR_TESTING_MISSING'&&/puppeteer browsers install chrome/.test(error.message));assert.equal(f.launches.length,0);
 // });
-// 
+//

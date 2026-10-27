@@ -24,4 +24,4 @@ test('only provider-confirmed stop/recycle releases a browser slot; no filesyste
 //   await recoverSingletons(dir,{now:()=>130001,processOwner:async()=>false});assert.equal(fs.existsSync(lock),false);
 //  }finally{if(fs.existsSync(lock))fs.unlinkSync(lock);fs.unlinkSync(metadata);fs.rmdirSync(dir);}
 // });
-// 
+//
