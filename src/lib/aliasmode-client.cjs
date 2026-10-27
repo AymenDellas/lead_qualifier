@@ -17,9 +17,10 @@ function publicProfile(value){
  // persist, log or forward the raw response; select only public identifiers.
  return {id,name:String(value.name||id).replace(/[\u0000-\u001f]/g,'').slice(0,120),group:String(value.group_name||'').slice(0,120),number:String(value.serial_number||value.profile_no||'').slice(0,32)};
 }
-function createAliasModeClient({config={},fetch:fetcher=globalThis.fetch,timeoutMs=10000}={}){
+function createAliasModeClient({config={},fetch:fetcher=globalThis.fetch,timeoutMs=10000,cli}={}){
  // Bound local control work without delaying LinkedIn requests.
  const queue=require('./bounded-work.cjs').createBoundedQueue({capacity:16,concurrency:2});
+ const helper=cli||require('./aliasmode-cli.cjs').createAliasModeCli();
  async function requestNow(path,{timeout=timeoutMs}={}){
   const settings=typeof config==='function'?await config():config,origin=baseUrl(settings.baseUrl);
   let response,data;try{
@@ -45,13 +46,22 @@ function createAliasModeClient({config={},fetch:fetcher=globalThis.fetch,timeout
   if(data.lifecycle==='running'&&data.status!=='Active')throw providerError('ALIASMODE_API_RESPONSE','AliasMode returned conflicting profile lifecycle evidence.');
   return {active:data.status==='Active',...(data.status==='Active'?{endpoint:websocket(data.ws?.puppeteer)}:{})};
  }
- async function start(id){
-  // AliasMode owns launch mode. Its current API does not expose a per-profile
-  // headless switch; passing --headless through launch_args is unsupported.
-  const data=await request('/api/v1/browser/start?'+new URLSearchParams({user_id:profileId(id)}),{timeout:120000});
-  return {active:true,headless:null,endpoint:websocket(data.ws?.puppeteer)};
+ async function inspect(id){
+  const state=await active(id);if(!state.active)return state;
+  const mode=await helper.status(id),again=await active(id);
+  if(!mode.running||mode.state!=='running'||!again.active||again.endpoint!==state.endpoint||Number(new URL(state.endpoint).port)!==mode.port)throw providerError('ALIASMODE_INSTANCE_CHANGED','AliasMode CLI and Local API did not confirm the same running browser. Check the API address and profile before retrying.');
+  return {...state,headless:mode.headless};
+ }
+ async function start(id,{headless=true}={}){
+  if((await active(id)).active)throw providerError('ALIASMODE_PROFILE_BUSY','The profile is already open. Reconcile its mode before starting.');
+  const opened=await helper.open(id,{headless});
+  try{
+   const state=await inspect(id);
+   if(!state.active||state.headless!==headless||Number(new URL(state.endpoint).port)!==opened.port)throw providerError('ALIASMODE_MODE_UNVERIFIED','AliasMode did not confirm the requested browser mode. Check its runtime before retrying.');
+   return state;
+  }catch(error){error.startedProfilePort=opened.port;throw error;}
  }
  async function list(){let profiles=[],truncated=false;for(let page=1;page<=2;page++){const data=await request('/api/v1/user/list?'+new URLSearchParams({page:String(page),page_size:'100'}));if(!Array.isArray(data.list))throw providerError('ALIASMODE_API_RESPONSE','AliasMode did not return a supported profile list.');profiles.push(...data.list.map(publicProfile).filter(Boolean));if(data.list.length<100)break;if(page===2)truncated=true;}return {profiles:[...new Map(profiles.map(p=>[p.id,p])).values()],truncated};}
- return {health:()=>request('/status'),list,active,start,stop:async id=>{await request('/api/v1/browser/stop?user_id='+encodeURIComponent(profileId(id)),{timeout:90000});},idle:queue.idle,request};
+ return {health:()=>request('/status'),capabilities:async()=>({helperVersion:await helper.version(),headless:true}),list,active,inspect,start,stop:async id=>{await request('/api/v1/browser/stop?user_id='+encodeURIComponent(profileId(id)),{timeout:90000});},idle:async()=>{await helper.idle();await queue.idle();},request};
 }
 module.exports={createAliasModeClient,baseUrl,profileId,websocket,publicProfile,providerError};

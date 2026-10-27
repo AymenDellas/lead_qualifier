@@ -1,18 +1,21 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const {createAliasModeClient,baseUrl,websocket}=require('../../src/lib/aliasmode-client.cjs');
-function fixture(data={}){const calls=[];return {calls,client:createAliasModeClient({config:{baseUrl:'http://127.0.0.1:50400',apiKey:'must-never-forward'},fetch:async(url,options)=>{calls.push({url,options});return new Response(JSON.stringify({code:0,data}),{status:200});}})};}
+function fixture(data={}){const calls=[];return {calls,client:createAliasModeClient({config:{baseUrl:'http://127.0.0.1:50400',apiKey:'must-never-forward'},cli:{version:async()=>'0.1.0-beta.69',status:async()=>({running:true,state:'running',headless:true,port:9222}),idle:async()=>{}},fetch:async(url,options)=>{calls.push({url,options});return new Response(JSON.stringify({code:0,data}),{status:200});}})};}
 test('only loopback API and CDP addresses are accepted',()=>{
  assert.equal(baseUrl(),'http://127.0.0.1:50400');
  for(const value of ['https://attacker.test','http://127.0.0.1:50400/path','http://user:secret@localhost:50400','file:///tmp'])assert.throws(()=>baseUrl(value));
  for(const value of ['ws://attacker.test:90/devtools/browser/id','ws://127.0.0.1:9/other','ws://user:secret@localhost:9/devtools/browser/id'])assert.throws(()=>websocket(value));
 });
-test('start and stop use supported V1 GETs without auth, launch flags or session overrides',async()=>{
- const f=fixture({ws:{puppeteer:'ws://127.0.0.1:9222/devtools/browser/fixture'}});
- const value=await f.client.start('profile-one',{headless:true});await f.client.stop('profile-one');
- const url=new URL(f.calls[0].url);assert.equal(url.pathname,'/api/v1/browser/start');assert.equal(url.searchParams.get('user_id'),'profile-one');assert.equal(url.searchParams.has('launch_args'),false);
- assert.equal(f.calls[0].options.method,'GET');assert.equal(f.calls[0].options.headers.Authorization,undefined);assert.equal(f.calls[0].options.redirect,'error');assert.equal(value.headless,null);
- assert.equal(new URL(f.calls[1].url).pathname,'/api/v1/browser/stop');assert.ok(!JSON.stringify(f.calls).includes('must-never-forward'));
+test('CLI launches headlessly while Local API supplies CDP and confirmed stop without auth or launch flags',async()=>{
+ let active=false;const calls=[],cli={version:async()=>'0.1.0-beta.69',status:async()=>({running:true,state:'running',headless:true,port:9222}),open:async(id,options)=>{calls.push({id,options});active=true;return {headless:true,port:9222};},idle:async()=>{}};
+ const client=createAliasModeClient({cli,fetch:async(url,options)=>{calls.push({url,options});return new Response(JSON.stringify({code:0,data:{status:active?'Active':'Inactive',...(active?{ws:{puppeteer:'ws://127.0.0.1:9222/devtools/browser/fixture'}}:{})}}));}});
+ const value=await client.start('one',{headless:true});assert.equal(value.headless,true);assert.equal(calls.find(c=>c.id).options.headless,true);await client.stop('one');
+ assert.ok(calls.filter(c=>c.url).every(c=>!c.url.includes('/start')&&!c.url.includes('launch_args')&&c.options.headers.Authorization===undefined));assert.equal(new URL(calls.at(-1).url).pathname,'/api/v1/browser/stop');
+ await assert.rejects(client.start('one'),e=>e.code==='ALIASMODE_PROFILE_BUSY');
+});
+test('CLI and Local API instance disagreement fails closed',async()=>{
+ const f=fixture({status:'Active',ws:{puppeteer:'ws://127.0.0.1:9999/devtools/browser/fixture'}});await assert.rejects(f.client.inspect('one'),e=>e.code==='ALIASMODE_INSTANCE_CHANGED');
 });
 test('profile lists return public identifiers only',async()=>{
  const f=fixture({list:[{user_id:'one',name:'Main',password:'private-password',proxy_password:'private-proxy',username:'private-email',group_name:'Work',serial_number:'2'}]});
