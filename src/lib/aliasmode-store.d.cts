@@ -1,0 +1,11 @@
+export type AliasModeProfile={id:string;name:string;group:string;number:string};
+export type AliasModeSettings={baseUrl:string;revision:number;profiles:AliasModeProfile[];lastRefreshedAt:string|null;status:{state?:string;code?:string;reason?:string;checkedAt?:string;truncated?:boolean}};
+export function ensure(pool:unknown):Promise<void>;
+export function publicSettings(pool:unknown):Promise<AliasModeSettings>;
+export function saveConfig(pool:unknown,input:unknown):Promise<AliasModeSettings>;
+export function requestRefresh(pool:unknown):Promise<void>;
+export function allowProcessing(pool:unknown,enabled:boolean):Promise<void>;
+export function bind(pool:unknown,input:unknown):Promise<void>;
+export function importProfile(pool:unknown,input:unknown):Promise<string>;
+export function updateAccount(pool:unknown,input:unknown):Promise<void>;
+export function requestClose(pool:unknown,id:string):Promise<void>;
