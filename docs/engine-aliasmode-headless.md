@@ -16,4 +16,14 @@ The investigation confirmed installed helper beta.69 could open a disposable Chr
 
 Phase 1 replay: 50 preserved decided CRM records, zero decision/qualification/blocker changes and zero replay errors. Private snapshots/reports remain under ignored `data/engine-v2/aliasmode-headless/`.
 
+## Worker and dashboard flow
+
+`aliasmode-browser.cjs` requires a confirmed mode before attaching or reading LinkedIn. Start defaults to headless; Verify session requests visible mode. Runtime drains ordered saves before changing modes, then closes its owned worker tab and asks AliasMode to stop the profile. A confirmed inactive state must precede reopening the same profile. The same persistent default context is used throughout; there is no cookie transfer or password entry.
+
+An externally opened wrong-mode browser is left intact and shows MODE_CONFLICT with an instruction to Close profile explicitly. After an agent restart, a saved managed flag alone is insufficient for automatic mode switching: the live PID and recorded worker target must match. Missing mode evidence blocks work. Wrong-mode newly launched profiles are cleaned up only against the confirmed launch port; ambiguous timeouts are reconciled without assuming ownership. Existing security holds, owner-fenced leases and checkpoints remain authoritative.
+
+The dashboard shows actual Headless / Visible session / Mode unconfirmed while attached. Provider status includes the helper version and actionable helper failures. No new mode toggle is exposed: headless is required for processing and visible is required for manual connection. Accounts retain separate concurrent sequential lanes, daily allowances and one-minute intervals. Website research, saves and browser process-tree measurement keep their existing bounds; helper processes descend from the agent and are included when present at sampling time.
+
+Phase 2: 31 affected browser/runtime fixture tests passed, plus 20 mode/provider checks. Fixed-clock replay again shows zero changes across all 50 preserved records. Real fixture browsers verify headless → visible → headless transitions with a synthetic cookie in the same profile, and account isolation during recycling. Full verification and installed-AliasMode checks follow separately; no live LinkedIn requests are part of these tests.
+
 Primary sources: [official helper commands](https://github.com/aliasmode/aliasmode#agent-browser-automation), [helper implementation](https://github.com/aliasmode/aliasmode/blob/main/agent/aliasmode-mcp.ts), [MCP lifecycle](https://github.com/aliasmode/aliasmode/blob/main/agent/mcp-host.mjs).

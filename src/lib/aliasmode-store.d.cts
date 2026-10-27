@@ -1,5 +1,5 @@
 export type AliasModeProfile={id:string;name:string;group:string;number:string};
-export type AliasModeSettings={baseUrl:string;revision:number;profiles:AliasModeProfile[];lastRefreshedAt:string|null;status:{state?:string;code?:string;reason?:string;checkedAt?:string;truncated?:boolean}};
+export type AliasModeSettings={baseUrl:string;revision:number;profiles:AliasModeProfile[];lastRefreshedAt:string|null;status:{headless?:boolean;helperVersion?:string;state?:string;code?:string;reason?:string;checkedAt?:string;truncated?:boolean}};
 export function ensure(pool:unknown):Promise<void>;
 export function publicSettings(pool:unknown):Promise<AliasModeSettings>;
 export function saveConfig(pool:unknown,input:unknown):Promise<AliasModeSettings>;

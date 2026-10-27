@@ -1,11 +1,11 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),{fixture}=require('./aliasmode-fixture.cjs');
-test('real CDP attachment uses provider mode and retains profile cookies across disconnect and recycle',async()=>{
+test('real CDP switches headless to visible to headless, preserving the same profile cookie',async()=>{
  const f=await fixture(),owner=f.create('one');try{
-  let surface=await owner.open();assert.equal(surface.browser.process(),null);assert.equal(owner.pid(),f.browsers.get('one').process().pid);assert.equal(owner.isHeadless(),null);
+  let surface=await owner.open();assert.equal(surface.browser.process(),null);assert.equal(owner.pid(),f.browsers.get('one').process().pid);assert.equal(owner.isHeadless(),true);
   await surface.page.setCookie({name:'fixture-session',value:'retained',domain:'example.test',secure:true,httpOnly:true});
-  await owner.close();surface=await owner.open({headless:false});assert.equal(owner.isHeadless(),null);assert.equal((await surface.page.cookies('https://example.test')).find(c=>c.name==='fixture-session')?.value,'retained');
-  await owner.recycle();surface=await owner.open();assert.equal((await surface.page.cookies('https://example.test')).find(c=>c.name==='fixture-session')?.value,'retained');
+  await owner.close();surface=await owner.open({headless:false});assert.equal(owner.isHeadless(),false);assert.equal((await surface.page.cookies('https://example.test')).find(c=>c.name==='fixture-session')?.value,'retained');
+  await owner.close();surface=await owner.open();assert.equal(owner.isHeadless(),true);assert.equal((await surface.page.cookies('https://example.test')).find(c=>c.name==='fixture-session')?.value,'retained');
  }finally{await f.close();}
 });
 // RETIRED LOCAL CHROME TESTS â€” retained as comments; AliasMode contracts replace these cases.

@@ -42,7 +42,7 @@ function createAccountRuntime(options) {
    ...(state==='processing'?{startupStage:'PROCESSING'}:{}),
    ...(state==='idle'?{startupStage:identity?'SESSION_VERIFIED':'AGENT_ACK'}:{}),
    ...(state==='offline'?{startupStage:'OFFLINE'}:{}),
-   browserOpen:browserOwner.isOpen(),sessionReady:!!identity&&browserOwner.isOpen(),signedIn:identity,updatedAt:new Date(now()).toISOString()};
+   browserOpen:browserOwner.isOpen(),browserMode:browserOwner.isOpen()?(browserOwner.isHeadless?.()===true?'headless':browserOwner.isHeadless?.()===false?'visible':'unknown'):null,sessionReady:!!identity&&browserOwner.isOpen(),signedIn:identity,updatedAt:new Date(now()).toISOString()};
   status.controlVersion=activeVersion;
   onStatus({...status});return status;
  }
@@ -90,9 +90,9 @@ function createAccountRuntime(options) {
  async function open(headless=true) {
   if(browserOwner.isOpen()&&typeof browserOwner.isHeadless==='function'&&typeof browserOwner.isHeadless()==='boolean'&&browserOwner.isHeadless()!==headless){
    await saves.idle();await releasePendingClaims();watched=null;identity=null;surface=null;handledStart=null;
-   await browserOwner.close();
+   await (browserOwner.recycle?browserOwner.recycle():browserOwner.close());
   }
-  publish('starting',{startupStage:'BROWSER_STARTING',reason:'Opening this account’s persistent Chrome profile.'});
+  publish('starting',{startupStage:'BROWSER_STARTING',reason:headless?'Opening this account’s saved profile headlessly.':'Opening this account’s saved profile visibly for manual review.'});
   browserAttempted=true;
   surface=await browserOwner.open({headless});watch(surface.page);return surface;
  }

@@ -47,7 +47,7 @@ export default function AliasModeAccounts(){
     {!linked.length&&<p className="text-sm text-[var(--text-dim)]">Link your AliasMode profiles, verify the signed-in members, then start processing.</p>}
     <div className="divide-y divide-[var(--line)]">{linked.map(a=><div key={a.id} className="space-y-2 py-4 first:pt-0" role="group" aria-label={a.label}>
      <div className="flex flex-wrap justify-between gap-2 text-xs"><strong className="font-medium break-words">{a.label}</strong><span className="text-[var(--text-dim)]">{state(a)}</span></div>
-     <p className="text-xs text-[var(--text-faint)] break-all">AliasMode {a.aliasmodeProfileId}{a.aliasmodeProfileName&&a.aliasmodeProfileName!==a.label?` · ${a.aliasmodeProfileName}`:''} · {a.browserOpen?'Automation attached':'Automation detached'}</p>
+     <p className="text-xs text-[var(--text-faint)] break-all">AliasMode {a.aliasmodeProfileId}{a.aliasmodeProfileName&&a.aliasmodeProfileName!==a.label?` · ${a.aliasmodeProfileName}`:''} · {a.browserOpen?'Automation attached':'Automation detached'}{a.browserOpen&&a.browserMode?` · ${a.browserMode==='headless'?'Headless':a.browserMode==='visible'?'Visible session':'Mode unconfirmed'}`:''}</p>
      <p className="text-xs text-[var(--text-dim)]">{a.signedIn?.profileUrl?<><span>Last verified: </span><a href={a.signedIn.profileUrl} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">{a.signedIn.name}</a></>:<>Expected member: {a.expectedMemberName||'Verify in AliasMode'}</>}</p>
      {[...new Set([a.attentionReason,a.startupReason,a.reason].filter(Boolean))].map(reason=><p key={reason} className={`text-xs break-words ${a.attentionReason?'text-[var(--bad)]':'text-[var(--text-dim)]'}`}>{reason}</p>)}
      {a.startupStage&&<p className="text-xs text-[var(--text-faint)]">{a.startupStage}{a.failedStage?` · ${a.failedStage}`:''}</p>}
@@ -64,14 +64,14 @@ export default function AliasModeAccounts(){
    </>}
    {pending&&<p role="status" className="flex items-center gap-2 text-xs text-[var(--text-faint)]"><Loader2 className="h-3.5 w-3.5 animate-spin"/>Saving request…</p>}
   </div>
-  <p className="panel-note">Linked accounts run simultaneously. A daily cap and one-minute profile interval apply to each account. AliasMode manages sign-in; Start authorizes processing.</p>
+  <p className="panel-note">Headless processing · Visible manual sign-in and review. Linked accounts run simultaneously, with their own daily cap and one-minute profile interval. Start authorizes processing.</p>
  </section>;
 }
 function ConnectionForm({provider,disabled,onSave}:{provider:AliasModeSettings;disabled:boolean;onSave:(body:unknown)=>Promise<boolean>}){
  const [address,setAddress]=useState(provider.baseUrl);
  return <form className="space-y-3 border-y border-[var(--line)] py-4" onSubmit={e=>{e.preventDefault();void onSave({baseUrl:address,revision:provider.revision});}}>
   <p className="text-xs font-medium">AliasMode connection</p><label className="block space-y-1"><span className="field-label">Local API address</span><input className="field w-full" type="url" required value={address} onChange={e=>setAddress(e.target.value)} disabled={disabled}/></label>
-  <p className="field-hint">AliasMode uses its local API without a key. Keep the desktop app open; browser sessions and launch mode are managed there.</p><button className="btn btn-outline !text-xs" disabled={disabled}>Save connection</button>
+  <p className="field-hint">Keep AliasMode open. Processing uses its supported headless launcher; Verify session opens a visible browser. No API key is needed.</p><button className="btn btn-outline !text-xs" disabled={disabled}>Save connection</button>
  </form>;
 }
 type FormProps={profiles:AliasModeSettings['profiles'];disabled:boolean};

@@ -1,6 +1,6 @@
 # Qualification engine v2
 
-Current browser provider: [AliasMode Local API/CDP](engine-aliasmode.md), authorized 27 October 2026. This supersedes the local account-Chrome launch and headless/manual switching described below. Voyager, qualification and PostgreSQL behavior remain; earlier measurements are historical.
+Current browser provider: [AliasMode Local API/CDP](engine-aliasmode.md) with [supported CLI headless processing](engine-aliasmode-headless.md), authorized 27 October 2026. This supersedes the local account-Chrome launch and headless/manual switching described below. Voyager, qualification and PostgreSQL behavior remain; earlier measurements are historical.
 
 Finder continues to discover leads through SerpAPI. PostgreSQL remains the CRM, queue, checkpoint store and measurement store. The local Next.js dashboard requests work through PostgreSQL; it does not own the browsers. The audit and measured changes are in [engine-audit.md](engine-audit.md) and [engine-measurements.md](engine-measurements.md).
 

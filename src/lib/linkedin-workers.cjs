@@ -203,7 +203,7 @@ async function settings(pool) {
   id:a.id,label:a.label,email:a.email,enabled:a.enabled,dailyLimit:a.daily_limit,hasPassword:a.has_password,
   aliasmodeProfileId:a.aliasmode_profile_id||null,aliasmodeProfileName:a.aliasmode_profile_name||'',bindingRevision:Number(a.binding_revision||0),expectedMemberName:a.expected_member_name||'',closePending:!!a.close_requested_at,
   dailyCount:a.daily_count,dailyTimezone:config.daily_timezone,dailyResumeAt:a.daily_count>=a.daily_limit?config.resume_at:null,status:a.status?.status || 'offline',reason:a.status?.reason || '',
-  runtimeVersion:a.status?.runtimeVersion||'',sessionReady:!!a.status?.sessionReady,browserOpen:!!a.status?.browserOpen,nextEligibleAt:a.status?.nextEligibleAt||(a.daily_count>=a.daily_limit?config.resume_at:null),
+  runtimeVersion:a.status?.runtimeVersion||'',sessionReady:!!a.status?.sessionReady,browserOpen:!!a.status?.browserOpen,browserMode:a.status?.browserOpen&&['headless','visible','unknown'].includes(a.status?.browserMode)?a.status.browserMode:null,nextEligibleAt:a.status?.nextEligibleAt||(a.daily_count>=a.daily_limit?config.resume_at:null),
   dailyRequests:a.request_count||0,dailyCachedProfiles:a.cached_profiles||0,requestKinds:a.request_kinds||{},
   processingEnabled:!!a.processing_enabled,processingUntil:null,
   connectedAt:a.connected_at||null,attentionReason:a.attention_reason||'',
