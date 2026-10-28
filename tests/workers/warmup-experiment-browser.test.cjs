@@ -16,3 +16,23 @@ test('the real runtime only renders warmup pages and stops on a fresh 403; all f
   assert.equal(requests.filter(u=>urls.includes(u)).length,2);assert.ok(requests.every(u=>u==='https://www.linkedin.com/feed/'||urls.includes(u)||u.includes('/voyager/api/fixture-background')||u.endsWith('/favicon.ico')));
  }finally{await runtime?.close({preserveIntent:true});await f.close();await db.close();}
 });
+for(const scenario of ['http500','fallback200','other-member'])test('warmup '+scenario+' retains bounded response diagnostics and never counts an error/redirect as a completed visit',async()=>{
+ const db=await database(),f=await fixture(),pool=db.pool;let runtime;
+ try{
+  await core.ensure(pool);await alias.ensure(pool);const id=await alias.importProfile(pool,{profileId:exp.PROFILE,name:'John fixture',expectedMemberName:'John Dilah'}),identity={name:'John Dilah',profileUrl:'https://www.linkedin.com/in/owner-john-fixture/'},urls=Array.from({length:20},(_,i)=>`https://www.linkedin.com/in/health-warmup-${i}/`);
+  await pool.query("UPDATE compel_linkedin_accounts SET connected_at=NOW(),confirmed_identity=$2::jsonb,launch_mode='headless' WHERE id=$1",[id,JSON.stringify(identity)]);
+  await exp.prepare(pool,urls);await exp.start(pool);await pool.query("UPDATE compel_engine_batches SET report=report||jsonb_build_object('notBefore',clock_timestamp()-interval '1 second') WHERE id=$1",[exp.ID]);await core.acquireSession(pool,id,'owner');
+  const browser=f.create(exp.PROFILE),surface=await browser.open({headless:true}),page=surface.page,requests=[];
+  await page.setRequestInterception(true);page.on('request',r=>{requests.push(r.url());let response={status:200,contentType:'text/html',body:'<!doctype html><title>Intercepted fixture</title><main>Fixture page</main>'};
+   if(r.url()===urls[0])response=scenario==='http500'?{...response,status:500}:{status:302,headers:{location:scenario==='fallback200'?'/error_pages/500.html?token=fixture-do-not-save':'/in/other-member/?token=fixture-do-not-save'},body:''};
+   void r.respond(response).catch(()=>{});
+  });
+  const runner=exp.create({pool,accountId:id,owner:'owner',core,rendered:{readSignedInIdentity:async()=>identity}});
+  runtime=createAccountRuntime({pool,accountId:id,owner:'owner',core,browserOwner:browser,warmupExperiment:runner,reader:{inspected:rendered.inspected,captureProfile:()=>assert.fail('No qualification reads')},researchQueue:{handoff:()=>assert.fail('No public research')},discoveryStore:{claimSource:()=>assert.fail('No discovery')}});
+  await runtime.tick();const report=await exp.load(pool);assert.equal(report.state,'WARMUP_STOPPED');assert.equal(report.report.attempts.length,1,report.report.reason);assert.equal(report.report.visits.length,0);assert.equal(report.report.lastAction,'profile_inspection');assert.equal((await core.readRuntimeAccount(pool,id)).attention_reason,'');
+  assert.ok(report.report.traffic.pages.length>=2);assert.ok(report.report.traffic.pages.length<=20);assert.equal(report.report.scriptedQualificationRequests,0);assert.ok(!JSON.stringify(report.report).includes('fixture-do-not-save'));
+  if(scenario==='http500'){assert.equal(report.report.lastNavigation.status,500);assert.equal(report.report.traffic.serverErrors[0].status,500);assert.match(report.report.reason,/HTTP 500/);}
+  else{assert.ok(report.report.lastNavigation.redirectedFrom.some(p=>p.path==='/in/health-warmup-0/'));assert.equal(report.report.finalPage.path,scenario==='fallback200'?'/error_pages/500.html':'/in/other-member/');}
+  assert.ok(requests.every(u=>u.startsWith('https://www.linkedin.com/')),'All observed fixture requests stay on intercepted origins');
+ }finally{await runtime?.close({preserveIntent:true});await f.close();await db.close();}
+});

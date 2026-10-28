@@ -118,11 +118,11 @@ function createAccountRuntime(options) {
    if(!manualCheck)await assertActive();
   }
  }
- async function inspect(manualMode=false) {
+ async function inspect(manualMode=false,response) {
   return reader.inspected(surface.page,{manual:manualMode,checkResponse:(code,url)=>{
    const found=pageSignal({url,status:code,manual:manualMode});
    if(found)throw Object.assign(new Error(found.reason),{failure:sessionFailure(found)});
-  }});
+  }},response);
  }
  async function connect(a) {
   if(a.login_token===handledLogin)return;
@@ -279,7 +279,7 @@ function createAccountRuntime(options) {
        await assertActive();
        if(guard){
         await require('./session-humanizer.cjs').interact(surface.page,{assertActive});
-        if(jobsStarted%require('./account-session-policy.cjs').config(currentSessionPolicy).renderEvery===0){await require('./session-humanizer.cjs').visit(surface.page,job.linkedinUrl,{assertActive});await inspect();await assertActive();}
+        if(jobsStarted%require('./account-session-policy.cjs').config(currentSessionPolicy).renderEvery===0){const response=await require('./session-humanizer.cjs').visit(surface.page,job.linkedinUrl,{assertActive});await inspect(false,response);await assertActive();}
        }
       }
       if(job.prospecting&&!await discoveryStore.runIsActive(pool,job.prospecting.runId))throw controlError('The prospecting run was stopped. Captured evidence is retained.');
@@ -300,7 +300,7 @@ function createAccountRuntime(options) {
   const a=await account();
   if(!a){await close();return;}
   currentSessionPolicy=a.session_policy||{};
-  if(warmupExperiment&&(a.close_token||a.login_token||a.logout_token||a.session_evidence?.command!=='warmup-experiment'))await warmupExperiment.stop('Account controls changed or the operator stopped the warmup.');
+  if(warmupExperiment&&(a.close_token||a.login_token||a.logout_token||a.session_evidence?.command!=='warmup-experiment'))await warmupExperiment.stop(a.attention_reason||'Account controls changed or the operator stopped the warmup.');
   if(a.close_token){
    if(a.close_token===handledClose)return;
    activeVersion=a.control_version||null;await saves.idle();manual=null;identity=null;watched=null;
@@ -316,7 +316,7 @@ function createAccountRuntime(options) {
   if(a.session_evidence?.command==='warmup-experiment'){
    activeVersion=a.control_version||null;
    warmupExperiment??=(options.warmupExperiment||require('./worker-warmup-experiment.cjs').create({pool,accountId,owner,core,guard,now}));
-   const result=experimentDisconnected?await warmupExperiment.stop('Browser disconnected during the bounded experiment; no automatic retry.'):await warmupExperiment.step(a,{open,adopt:()=>browserOwner.adopt?.(),inspect:()=>inspect(),onSignal:handleSignal,assertSignal:async()=>{if(stopped)throw controlError('The worker is stopping.');if(signal)throw Object.assign(Error(signal.reason),{failure:signal});}});
+   const result=experimentDisconnected?await warmupExperiment.stop('Browser disconnected during the bounded experiment; no automatic retry.'):await warmupExperiment.step(a,{open,adopt:()=>browserOwner.adopt?.(),inspect:response=>inspect(false,response),onSignal:handleSignal,assertSignal:async()=>{if(stopped)throw controlError('The worker is stopping.');if(signal)throw Object.assign(Error(signal.reason),{failure:signal});}});
    if(result.identity)identity=result.identity;
    if(result.done){if(result.held){await setWindowVisibility(true);publish('paused',{startupStage:'SESSION_REVIEW',reason:result.reason,manualResumeRequired:true,reasonCode:'WARMUP_STOPPED'});}else{await browserOwner.recycle?.();publish('idle',{profileClosed:true,reason:result.reason,reasonCode:result.state});}}
    else publish('WARMUP',{reason:result.reason,reasonCode:result.code,nextEligibleAt:new Date(result.at).toISOString(),signedIn:result.identity||null});
@@ -372,7 +372,7 @@ function createAccountRuntime(options) {
     }
     if(!researchQueue.fullCapture(reservation.job.resumeResult)){if(!await prepareProcessing(a)){await core.releaseClaim?.(pool,reservation.job.jobId,owner);return;}await setWindowVisibility(false);}
     if(sessionState?.state==='WARMUP'&&!researchQueue.fullCapture(claimedJob.resumeResult)){
-     try{const progress=await guard.warmup(a,claimedJob,surface.page,assertActive,()=>inspect());if(progress.reservation?.limited)dailyStatus(progress.reservation);else if(progress.reservation?.paced)paceStatus(progress.reservation);else{if(progress.visited){await permit('profile_page');await flushStatistics(claimedJob.jobId);}publish('WARMUP',{reason:'Rendered warmup visit recorded. No Voyager read or qualification decision was made.',...(progress.nextProfileAt?{reasonCode:'PROFILE_INTERVAL',nextEligibleAt:new Date(progress.nextProfileAt).toISOString()}:{} )});}}
+     try{const progress=await guard.warmup(a,claimedJob,surface.page,assertActive,response=>inspect(false,response));if(progress.reservation?.limited)dailyStatus(progress.reservation);else if(progress.reservation?.paced)paceStatus(progress.reservation);else{if(progress.visited){await permit('profile_page');await flushStatistics(claimedJob.jobId);}publish('WARMUP',{reason:'Rendered warmup visit recorded. No Voyager read or qualification decision was made.',...(progress.nextProfileAt?{reasonCode:'PROFILE_INTERVAL',nextEligibleAt:new Date(progress.nextProfileAt).toISOString()}:{} )});}}
      finally{await core.releaseClaim(pool,claimedJob.jobId,owner);}return;
     }
     if(guard)await guard.activateRamp(a);
@@ -404,11 +404,11 @@ function createAccountRuntime(options) {
  function close({preserveIntent=false}={}) {
   if(closing)return closing;stopped=true;
   closing=(async()=>{
-   await warmupExperiment?.stop('The agent stopped; the warmup checkpoint is retained and will not automatically reread profiles.');
+   const warmupOutcome=await warmupExperiment?.stop('The agent stopped; the warmup checkpoint is retained and will not automatically reread profiles.');
    await flushStatistics(status.jobId);await saves.close();await releasePendingClaims();
    if(!preserveIntent)await core.pauseProcessing(pool,accountId,'The local account session stopped. Queued work is retained.',false,owner).catch(()=>{});
    watched=null;await browserOwner.close();identity=null;
-   publish('offline',{reason:'Local session stopped. Queued work and saved sign-in are retained.'});
+   publish('offline',{reason:warmupOutcome?.reason||'Local session stopped. Queued work and saved sign-in are retained.',...(warmupOutcome?{reasonCode:warmupOutcome.state}: {})});
   })();
   return closing;
  }

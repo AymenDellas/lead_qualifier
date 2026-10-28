@@ -50,10 +50,22 @@ async function snapshot(page) {
 }
 async function inspected(page, options={}, response) {
  options.checkResponse?.(response?.status?.() || 0, page.url());
+ const initialSignal=pageSignal({url:page.url(),status:response?.status?.()||0,manual:options.manual===true});
+ if(initialSignal)throw Object.assign(new Error(initialSignal.reason),{failure:failure(initialSignal)});
+ const unavailable=require('./linkedin-page-health.cjs').unavailable;
+ const initialProblem=unavailable({url:page.url(),status:response?.status?.()||0});
+ if(initialProblem){
+  // Read only the title/account notices on an error page. A security warning
+  // still takes precedence; unavailable profile DOM is never interpreted.
+  try{await inspectNotice(page,options);}catch(error){if(error.failure)throw error;initialProblem.cause=error;}
+  throw initialProblem;
+ }
  const state=await snapshot(page);
  if(Buffer.byteLength(state.html)>2*1024*1024) throw problem('PAGE_CONTENT_SIZE','Rendered LinkedIn content exceeded the reading limit.');
  const signal=pageSignal({url:state.url,status:response?.status?.()||0,text:state.title+'\n'+state.notice,manual:options.manual===true});
  if(signal) throw Object.assign(new Error(signal.reason),{failure:failure(signal)});
+ const pageProblem=unavailable({url:state.url,status:response?.status?.()||0});
+ if(pageProblem)throw pageProblem;
  return state;
 }
 async function inspectNotice(page,options={}){

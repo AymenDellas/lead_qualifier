@@ -46,7 +46,10 @@ function createSessionGuard({pool,owner,core,now=Date.now,checks=diagnostics}={}
   if(today.includes(job.linkedinUrl))return {done:true};
   const reservation=await core.reserveProfile(pool,{accountId:a.id,owner,profileUrl:job.linkedinUrl,jobId:job.jobId,version:a.control_version});
   if(reservation.stopped||reservation.limited||reservation.paced)return {reservation};
-  await require('./session-humanizer.cjs').visit(page,job.linkedinUrl,{assertActive});await inspect();await assertActive();await require('./session-humanizer.cjs').interact(page,{assertActive});
+  const response=await require('./session-humanizer.cjs').visit(page,job.linkedinUrl,{assertActive});await inspect(response);await assertActive();
+  require('./linkedin-page-health.cjs').assertProfile(page.url(),job.linkedinUrl,response?.status?.()||0);
+  await require('./session-humanizer.cjs').interact(page,{assertActive});await inspect();await assertActive();
+  require('./linkedin-page-health.cjs').assertProfile(page.url(),job.linkedinUrl);
   const days=[...new Set([...(e.warmupDays||[]),day])].sort().slice(-90);
   await store.updateOwned(pool,a,owner,{warmupDays:days,warmupVisits:{...Object.fromEntries(Object.entries(visits).filter(([key])=>days.includes(key))),[day]:[...today,job.linkedinUrl]},warmupObservedAt:new Date(now()).toISOString()});
   return {visited:true,nextProfileAt:reservation.nextProfileAt};

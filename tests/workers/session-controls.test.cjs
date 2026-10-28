@@ -53,3 +53,9 @@ test('a bounded warmup browser disconnect stops the run instead of reopening it'
  const runtime=createAccountRuntime({pool:{},accountId:'one',owner:'owner',core:{readRuntimeAccount:async()=>a},browserOwner:{isOpen:()=>false,close:async()=>{},recycle:async()=>{}},warmupExperiment:{step:async()=>{steps++;return{wait:true,at:new Date(Date.now()+60000).toISOString(),code:'PROFILE_INTERVAL'};},stop:async()=>{stops++;return{done:true,state:'WARMUP_STOPPED',reason:'Disconnected'};}}});
  try{await runtime.tick();runtime.disconnected(Error('Target closed'));await runtime.tick();assert.equal(steps,1);assert.ok(stops>=1);}finally{await runtime.close({preserveIntent:true});}
 });
+test('a security stop preserves its actual reason in the experiment and its final offline status',async()=>{
+ const {createAccountRuntime}=require('../../src/lib/account-runtime.cjs');let outcome=null;
+ const reason='LinkedIn sign-in is required (HTTP 401). Processing stopped; use manual sign-in.',a={enabled:true,control_version:'one',session_evidence:{command:'warmup-experiment'}};
+ const runtime=createAccountRuntime({pool:{},accountId:'one',owner:'owner',core:{readRuntimeAccount:async()=>a},browserOwner:{isOpen:()=>false,close:async()=>{}},warmupExperiment:{step:async()=>({wait:true,at:new Date(Date.now()+60000).toISOString(),code:'PROFILE_INTERVAL'}),stop:async text=>outcome??=( {done:true,state:'WARMUP_STOPPED',reason:text})}});
+ try{await runtime.tick();a.attention_reason=reason;delete a.session_evidence.command;await runtime.tick();assert.equal(outcome.reason,reason);assert.equal(runtime.snapshot().reason,reason);await runtime.close({preserveIntent:true});assert.equal(runtime.snapshot().reason,reason);assert.equal(runtime.snapshot().reasonCode,'WARMUP_STOPPED');}finally{await runtime.close({preserveIntent:true});}
+});

@@ -4,8 +4,8 @@ const urls=Array.from({length:20},(_,i)=>`https://www.linkedin.com/in/authorized
 const fingerprint={origin:'https://www.linkedin.com',userAgent:'Fixture Chrome',platform:'Win32',screen:{width:1920,height:1080},timezone:'UTC',locale:'en-GB',hardwareConcurrency:4,deviceMemory:8,webglVendor:'Fixture GPU',webglRenderer:'Fixture GPU renderer'};
 async function fixture(){const db=await database(),pool=db.pool;await core.ensure(pool);await alias.ensure(pool);const id=await alias.importProfile(pool,{profileId:exp.PROFILE,name:'John',expectedMemberName:identity.name});await pool.query('UPDATE compel_linkedin_accounts SET connected_at=NOW(),confirmed_identity=$2::jsonb,attention_reason=$3 WHERE id=$1',[id,JSON.stringify(identity),oldHold]);await exp.prepare(pool,urls);await exp.start(pool);await pool.query("UPDATE compel_engine_batches SET report=report||jsonb_build_object('notBefore',clock_timestamp()-interval '1 second') WHERE id=$1",[exp.ID]);assert.equal(await core.acquireSession(pool,id,'owner'),true);return {...db,id,pool};}
 function fakePage(){let url='about:blank';return {url:()=>url,on:()=>{},goto:async u=>{url=u;}};}
-function harness(f,{found=identity,signal,probe=async()=>fingerprint}={}){const page=fakePage(),seen=[],signalled=[];
- const runner=exp.create({pool:f.pool,accountId:f.id,owner:'owner',core,rendered:{readSignedInIdentity:async()=>found,captureProfile:()=>assert.fail('No qualification reads')},human:{visit:async(p,u,{assertActive})=>{await assertActive();seen.push(u);await p.goto(u);},interact:async()=>{}},probe});
+function harness(f,{found=identity,signal,probe=async()=>fingerprint,visitError}={}){const page=fakePage(),seen=[],signalled=[];
+ const runner=exp.create({pool:f.pool,accountId:f.id,owner:'owner',core,rendered:{readSignedInIdentity:async()=>found,captureProfile:()=>assert.fail('No qualification reads')},human:{visit:async(p,u,{assertActive})=>{await assertActive();if(visitError)throw visitError;seen.push(u);await p.goto(u);},interact:async()=>{}},probe});
  const callbacks={open:async()=>({page}),inspect:async()=>{},assertSignal:async()=>{if(signal&&page.url().includes('/feed/'))throw signal;},onSignal:async failure=>{signalled.push(failure);await core.pauseProcessing(f.pool,f.id,failure.reason,true,'owner');}};
  return {runner,callbacks,page,seen,signalled};
 }
@@ -42,5 +42,13 @@ test('normal Pause cancels the experiment, and orphan warmup locks can never ent
   await h.runner.step(await core.readRuntimeAccount(f.pool,f.id),h.callbacks);assert.equal(h.seen.length,1);
   await f.pool.query("INSERT INTO compel_worker_jobs(id,profile_key,payload) VALUES('orphan',$1,$2::jsonb)",[urls[1],JSON.stringify({warmupExperimentId:exp.ID,linkedinUrl:urls[1]})]);
   await f.pool.query('UPDATE compel_linkedin_accounts SET processing_enabled=TRUE,next_profile_at=NULL WHERE id=$1',[f.id]);assert.equal(await core.claim(f.pool,f.id,'owner'),null);
+ }finally{await f.close();}
+});
+test('a failed navigation records its action without URL query credentials or local connection capabilities',async()=>{
+ const f=await fixture();try{
+  const h=harness(f,{visitError:Error('Runtime.callFunctionOn timed out at https://user:fixturepassword@www.linkedin.com/error_pages/500.html?token=fixture-secret wss://127.0.0.1:1234/devtools/browser/fixture-capability')});
+  await h.runner.step(await core.readRuntimeAccount(f.pool,f.id),h.callbacks);const b=await exp.load(f.pool);
+  assert.equal(b.state,'WARMUP_STOPPED');assert.equal(b.report.lastAction,'profile_navigation');assert.equal(b.report.attempts.length,1);assert.equal(b.report.visits.length,0);
+  assert.match(b.report.reason,/Runtime.callFunctionOn timed out/);assert.ok(!/fixturepassword|fixture-secret|fixture-capability/.test(b.report.reason));assert.equal((await core.readRuntimeAccount(f.pool,f.id)).attention_reason,'');
  }finally{await f.close();}
 });

@@ -53,8 +53,11 @@ async function cancel(pool,reason='The operator stopped the warmup experiment.')
 }
 function create({pool,accountId,owner,core,guard,now=Date.now,rendered=require('./linkedin-browser-page.cjs'),human=require('./session-humanizer.cjs'),probe=require('./stealth-self-test.cjs').probe}){
  const policy=require('./account-session-policy.cjs'),session=require('./linkedin-session-policy.cjs');
- let verifiedPage=null,claimed=null,traffic={total:0,nativeVoyager:0,security:[]},watched=null,identity=null;
- const cleanError=e=>String(e?.failure?.reason||e?.message||e).replace(/wss?:\/\/\S+/gi,'[CDP endpoint]').slice(0,1200);
+ let verifiedPage=null,claimed=null,traffic={total:0,nativeVoyager:0,security:[],pages:[],serverErrors:[],requestFailures:[]},watched=null,identity=null,lastAction='admission',lastNavigation=null;
+ const route=value=>{try{const u=new URL(value);return /(^|\.)(linkedin\.com|licdn\.com)$/.test(u.hostname)?{host:u.hostname,path:u.pathname.slice(0,240)}:null;}catch{return null;}};
+ const bounded=(items,value,limit=20)=>{items.push(value);if(items.length>limit)items.shift();};
+ const currentRoute=()=>{try{return route(watched?.url?.());}catch{return null;}};
+ const cleanError=e=>String(e?.failure?.reason||e?.message||e).replace(/(?:wss?|postgres(?:ql)?):\/\/\S+/gi,'[local connection]').replace(/https?:\/\/[^\s]+/gi,raw=>{try{const u=new URL(raw);return u.origin+u.pathname;}catch{return '[page URL]';}}).slice(0,1200);
  async function active(a,initial=false){return authority(pool,{accountId,owner,version:a.control_version,initial});}
  async function write(patch){const r=await pool.query(`UPDATE compel_engine_batches b SET report=report||$2::jsonb WHERE id=$1 AND report->>'owner'=$3 AND state IN ('WARMUP_AUTHORIZED','WARMUP_RUNNING') AND EXISTS(SELECT 1 FROM compel_worker_sessions s WHERE s.account_id=b.account_id AND s.owner=$3 AND s.lease_until>NOW())`,[ID,JSON.stringify(patch),owner]);if(!r.rowCount)throw problem('Warmup evidence ownership changed.');return r;}
  async function releaseJob(){if(claimed){await pool.query(`UPDATE compel_worker_jobs j SET status='cancelled',completed_at=NOW(),owner=NULL,account_id=NULL,lease_until=NULL,result=$4::jsonb WHERE id=$1 AND owner=$2 AND payload->>'warmupExperimentId'=$3 AND EXISTS(SELECT 1 FROM compel_worker_sessions s WHERE s.account_id=j.account_id AND s.owner=$2 AND s.lease_until>NOW())`,[claimed.jobId,owner,ID,JSON.stringify({status:'WARMUP_ONLY',url:claimed.url,reason:'Qualification was not requested; only the warmup lock is released.'})]);claimed=null;}}
@@ -62,20 +65,42 @@ function create({pool,accountId,owner,core,guard,now=Date.now,rendered=require('
   const old=await load(pool);if(!old||terminal(old.state))return {done:true,reason:old?.report?.reason||reason,state:old?.state||state};
   await releaseJob();
   await pool.query(`UPDATE compel_worker_jobs SET status='cancelled',completed_at=NOW(),result=jsonb_build_object('status','WARMUP_ONLY','reason',$3::text) WHERE status='pending' AND payload->>'warmupExperimentId'=$1 AND EXISTS(SELECT 1 FROM compel_worker_sessions s WHERE s.account_id=$4 AND s.owner=$2 AND s.lease_until>NOW())`,[ID,owner,reason,accountId]);
-  await pool.query(`UPDATE compel_engine_batches b SET state=$2,finished_at=NOW(),report=report||$4::jsonb WHERE id=$1 AND state IN ('WARMUP_AUTHORIZED','WARMUP_RUNNING') AND EXISTS(SELECT 1 FROM compel_worker_sessions s WHERE s.account_id=b.account_id AND s.owner=$3 AND s.lease_until>NOW())`,[ID,state,owner,JSON.stringify({traffic,reason,endedAt:new Date(now()).toISOString()})]);
+  await pool.query(`UPDATE compel_engine_batches b SET state=$2,finished_at=NOW(),report=report||$4::jsonb WHERE id=$1 AND state IN ('WARMUP_AUTHORIZED','WARMUP_RUNNING') AND EXISTS(SELECT 1 FROM compel_worker_sessions s WHERE s.account_id=b.account_id AND s.owner=$3 AND s.lease_until>NOW())`,[ID,state,owner,JSON.stringify({traffic,reason,lastAction,finalPage:currentRoute(),lastNavigation,endedAt:new Date(now()).toISOString()})]);
   await pool.query(`UPDATE compel_linkedin_accounts a SET session_evidence=session_evidence-'command' WHERE id=$1 AND session_evidence->>'command'=$2 AND session_evidence->>'warmupExperimentId'=$3 AND EXISTS(SELECT 1 FROM compel_worker_sessions s WHERE s.account_id=a.id AND s.owner=$4 AND s.lease_until>NOW())`,[accountId,COMMAND,ID,owner]);
   await pool.query("SELECT pg_notify('compel_engine_wake','')");return {done:true,reason,state};
  }
- function observe(page){if(watched===page)return;watched=page;page.on?.('request',r=>{if(watched!==page)return;try{const u=new URL(r.url());if(/(^|\.)(linkedin\.com|licdn\.com)$/.test(u.hostname)){traffic.total++;if(u.pathname.startsWith('/voyager/api/'))traffic.nativeVoyager++;}}catch{}});page.on?.('response',r=>{if(watched!==page)return;try{if(![401,403,429,999].includes(r.status()))return;const u=new URL(r.url());if(/(^|\.)(linkedin\.com|licdn\.com)$/.test(u.hostname)&&traffic.security.length<20)traffic.security.push({status:r.status(),host:u.hostname,path:u.pathname.slice(0,240),type:r.request().resourceType()});}catch{}});}
+ function observe(page){
+  if(watched===page)return;watched=page;lastNavigation=null;
+  page.on?.('request',r=>{if(watched!==page)return;try{const u=new URL(r.url());if(route(u.href)){traffic.total++;if(u.pathname.startsWith('/voyager/api/'))traffic.nativeVoyager++;}}catch{}});
+  page.on?.('response',r=>{
+   if(watched!==page)return;
+   try{
+    const target=route(r.url());if(!target)return;
+    const request=r.request(),entry={status:r.status(),...target,type:request.resourceType()};
+    if([401,403,429,999].includes(entry.status))bounded(traffic.security,entry);
+    if(entry.status>=500&&entry.status<=599)bounded(traffic.serverErrors,entry);
+    if(request.isNavigationRequest?.()&&r.frame?.()===page.mainFrame?.()){
+     lastNavigation={...entry,redirectedFrom:(request.redirectChain?.()||[]).slice(-8).map(q=>route(q.url())).filter(Boolean)};
+     bounded(traffic.pages,lastNavigation);
+    }
+   }catch{/* A closing/replaced target cannot invalidate earlier evidence. */}
+  });
+  page.on?.('requestfailed',r=>{if(watched!==page)return;try{const target=route(r.url());if(!target)return;const text=String(r.failure?.()?.errorText||'');bounded(traffic.requestFailures,{...target,error:/^(?:net::)?ERR_[A-Z_]+$/.test(text)?text:'REQUEST_FAILED'},10);}catch{}});
+ }
+ function confirmDestination(page,url){
+  require('./linkedin-page-health.cjs').assertProfile(page.url(),url,lastNavigation?.status||0);
+ }
  async function step(a,{open,assertSignal,onSignal,inspect,adopt=async()=>{}}){
   try{
+   lastAction='admission';
    let b=await active(a,true);if(new Date(b.report.notBefore)>new Date(b.db_now))return {wait:true,at:b.report.notBefore,code:'LANE_STAGGER',reason:'Authorized warmup start is staggered.'};
    if(!b.report.owner){await pool.query("UPDATE compel_engine_batches SET state='WARMUP_RUNNING',report=report||$2::jsonb WHERE id=$1 AND state='WARMUP_AUTHORIZED'",[ID,JSON.stringify({owner})]);b=await active(a,true);}
    if(b.report.inFlight)throw problem('A previous navigation was interrupted. Its checkpoint is retained; no profile is reread.');
    const assertActive=async(initial=false)=>{await assertSignal();return active(a,initial);};
-   await assertActive(true);const surface=await open(a.launch_mode==='headless'),page=surface.page;observe(page);
+   await assertActive(true);lastAction='browser_open';const surface=await open(a.launch_mode==='headless'),page=surface.page;observe(page);
    if(verifiedPage!==page){
-    await assertActive(true);await page.goto('https://www.linkedin.com/feed/',{waitUntil:'domcontentloaded',timeout:30000});await assertActive(true);await inspect();
+    await assertActive(true);lastAction='feed_navigation';const response=await page.goto('https://www.linkedin.com/feed/',{waitUntil:'domcontentloaded',timeout:30000});await assertActive(true);lastAction='feed_inspection';await inspect(response);
+    lastAction='identity_verification';
     const found=await rendered.readSignedInIdentity(page,{leaveMenuOpen:true,beforeCheck:()=>assertActive(true)});
     await assertActive(true);await inspect();if(!session.isFeed(page.url())||!found||!a.confirmed_identity||!session.sameMember(a.confirmed_identity,found))throw Object.assign(problem('The rendered feed did not confirm John’s saved identity.','ACCOUNT_MISMATCH'),{failure:{stage:'linkedin',code:'ACCOUNT_MISMATCH',reason:'The rendered feed did not confirm John’s saved identity.',retryable:false}});
     await core.confirmManualSignIn(pool,accountId,owner,found);
@@ -83,23 +108,26 @@ function create({pool,accountId,owner,core,guard,now=Date.now,rendered=require('
     await assertActive();identity=found;await adopt();
     const current=await core.readRuntimeAccount(pool,accountId);if(current.session_evidence?.fingerprint&&guard&&!await guard.verify(current,page))throw problem('Browser identity drift requires review.','ACCOUNT_REVIEW');
     if(page.url()!=='https://www.linkedin.com/feed/'){await page.goto('https://www.linkedin.com/feed/',{waitUntil:'domcontentloaded',timeout:30000});await assertActive();await inspect();}
-    const fingerprint=policy.fingerprint(await probe(page),{profileId:a.aliasmode_profile_id,engine:a.engine,mode:a.launch_mode,proxyId:a.proxy_id,revision:Number(a.session_revision)});
+    lastAction='identity_baseline';const fingerprint=policy.fingerprint(await probe(page),{profileId:a.aliasmode_profile_id,engine:a.engine,mode:a.launch_mode,proxyId:a.proxy_id,revision:Number(a.session_revision)});
     if(b.report.fingerprint&&b.report.fingerprint.hash!==fingerprint.hash)throw Object.assign(problem('Browser fingerprint changed during the experiment.','FINGERPRINT_DRIFT'),{failure:{stage:'linkedin',code:'FINGERPRINT_DRIFT',reason:'Browser fingerprint changed during the experiment.',retryable:false}});
     await write({identity:found,fingerprint,traffic});verifiedPage=page;
    }
-   b=await assertActive();if(b.report.attempts.length>=COUNT)return stop('Twenty authorized rendered profile starts completed.','WARMUP_COMPLETE');
+   lastAction='profile_claim';b=await assertActive();if(b.report.attempts.length>=COUNT)return stop('Twenty authorized rendered profile starts completed.','WARMUP_COMPLETE');
    const url=b.profiles[b.report.attempts.length],jobId='warmup_'+randomUUID(),c=await pool.connect();
    try{await c.query('BEGIN');await c.query('SELECT id FROM compel_linkedin_accounts WHERE id=$1 FOR UPDATE',[accountId]);b=await authority(c,{accountId,owner,version:a.control_version,lock:true});
     const inserted=await c.query(`INSERT INTO compel_worker_jobs(id,profile_key,payload,status,account_id,owner,lease_until,checkpoint) VALUES($1,$2,$3::jsonb,'processing',$4,$5,NOW()+interval '15 minutes',$6::jsonb) ON CONFLICT DO NOTHING RETURNING id`,[jobId,url,JSON.stringify({jobId,linkedinUrl:url,warmupExperimentId:ID,nativePostProcess:false}),accountId,owner,JSON.stringify({warmupExperimentId:ID,url,stage:'RESERVING'})]);
     if(!inserted.rowCount)throw problem('Another job owns the selected canonical profile; duplicate protection stopped the test.');
     await c.query('UPDATE compel_engine_batches SET job_ids=array_append(job_ids,$2),report=report||$3::jsonb WHERE id=$1',[ID,jobId,JSON.stringify({inFlight:{url,jobId,stage:'RESERVING'}})]);await c.query('COMMIT');claimed={url,jobId};
    }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
-   const reservation=await core.reserveProfile(pool,{accountId,owner,profileUrl:url,jobId,version:a.control_version,warmupExperimentId:ID});
+   lastAction='profile_reservation';const reservation=await core.reserveProfile(pool,{accountId,owner,profileUrl:url,jobId,version:a.control_version,warmupExperimentId:ID});
    if(reservation.paced){await releaseJob();await write({inFlight:null});return {wait:true,at:reservation.resumeAt,code:'PROFILE_INTERVAL',reason:'Waiting for the account’s normal profile interval.'};}
    if(reservation.limited||reservation.stopped)throw problem(reservation.reason||'The normal daily profile ceiling stopped the experiment.');
-   await assertActive();await human.visit(page,url,{assertActive:()=>assertActive()});await inspect();await assertActive();await human.interact(page,{assertActive:()=>assertActive()});await inspect();await assertActive();
+   await assertActive();lastAction='profile_navigation';const response=await human.visit(page,url,{assertActive:()=>assertActive()});
+   lastAction='profile_inspection';await inspect(response);await assertActive();confirmDestination(page,url);
+   lastAction='profile_interaction';await human.interact(page,{assertActive:()=>assertActive()});
+   lastAction='profile_final_inspection';await inspect();await assertActive();confirmDestination(page,url);
    b=await active(a);const visits=[...b.report.visits,{url,jobId,at:new Date(now()).toISOString()}];
-   await write({visits,inFlight:null,traffic,lastVisited:url});await releaseJob();await core.recordLinkedInChecks(pool,accountId,owner,{profile_page:1});
+   lastAction='visit_save';await write({visits,inFlight:null,traffic,lastVisited:url,lastAction,finalPage:currentRoute(),lastNavigation});await releaseJob();await core.recordLinkedInChecks(pool,accountId,owner,{profile_page:1});
    if(visits.length===COUNT)return stop('Twenty authorized rendered visits completed; normal qualification remains paused.','WARMUP_COMPLETE');
    return {wait:true,at:reservation.nextProfileAt,code:'PROFILE_INTERVAL',visits:visits.length,identity,reason:`Rendered warmup ${visits.length}/${COUNT}; no qualification API reads or CRM decisions.`};
   }catch(error){

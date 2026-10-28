@@ -1,5 +1,9 @@
 # Account session controls and diagnostic evidence
 
+## Browser reliability maintenance — 28 October 2026
+
+The user has manually confirmed John's restriction. The current hold and consumed experiments remain unchanged. [Browser reliability maintenance](engine-browser-reliability.md) addresses a potentially suspended animation-frame wait, generic 5xx/fallback-page handling, canonical warmup destinations and bounded redacted failure diagnostics. Plain Puppeteer/CDP, browser-exposed identity, detector verdicts and the memory guard remain unchanged. This work neither establishes the restriction's cause nor authorizes a new account test.
+
 ## Explicit John warmup exception — 28 October 2026
 
 The user authorized one supervised, rendered-only, 20-profile experiment for John / AliasMode `k1ierfk4`, waiving proxy/detector/recovery admission and the ten-profile warmup ceiling only for that manifest. Normal account daily ceilings, 60–150-second reservations, identity/ownership/duplicate checks and reactive stops remained. The manifest is now consumed: **2 visits completed from 3 starts**, then a Puppeteer `Runtime.callFunctionOn` timeout stopped it. No new LinkedIn security signal was recorded; normal qualification remains paused and the browser is closed. There were no CompelOS qualification API calls or CRM decision changes. Native rendered pages made 42 background Voyager requests. See [the authorization, checks and partial live result](engine-john-warmup.md); this does not change general account admission or detector verdicts.
