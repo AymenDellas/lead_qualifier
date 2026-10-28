@@ -1,55 +1,136 @@
 'use strict';
-// Read-only diagnostics. Never patch browser properties or mistake a landing
-// page, example JSON, transport failure or unavailable verdict for a pass.
-const URLS=Object.freeze(['https://browserscan.net/','https://bot.incolumitas.com/','https://deviceandbrowserinfo.com/','https://demo.fingerprint.com/','https://abrahamjuliot.github.io/creepjs/','https://arh.antoinevastel.com/bots/areyouheadless']);
-async function probe(page){return page.evaluate(()=>{
- const gl=document.createElement('canvas').getContext('webgl'),debug=gl?.getExtension('WEBGL_debug_renderer_info');
- return {origin:location.origin,secureContext:isSecureContext,webdriver:navigator.webdriver,userAgent:navigator.userAgent,platform:navigator.platform,chrome:typeof window.chrome,plugins:navigator.plugins.length,
-  screen:{width:screen.width,height:screen.height},timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,locale:navigator.language,
-  hardwareConcurrency:navigator.hardwareConcurrency??null,deviceMemory:navigator.deviceMemory??null,
-  webglVendor:debug?gl.getParameter(debug.UNMASKED_VENDOR_WEBGL):null,webglRenderer:debug?gl.getParameter(debug.UNMASKED_RENDERER_WEBGL):null};
-});}
+// Read-only measurements. Never patch navigator, export cookies or make Node TLS requests.
+const VERSION='DIRECT_SIGNALS_V2',IDENTITY_URL='https://browserscan.net/';
+const BATTERY=Object.freeze([
+ {url:'https://www.browserscan.net/bot-detection',kind:'browserscan'},
+ {url:'https://bot.incolumitas.com/',kind:'incolumitas'},
+ {url:'https://deviceandbrowserinfo.com/are_you_a_bot',kind:'device'},
+ {url:'https://demo.fingerprint.com/playground',kind:'fingerprint'},
+ {url:'https://abrahamjuliot.github.io/creepjs/',kind:'creepjs'},
+ {url:'https://bot.sannysoft.com/',kind:'sannysoft'},
+ {url:'https://tls.browserleaks.com/json',kind:'tls'},
+].map(Object.freeze));
+const URLS=Object.freeze(BATTERY.map(s=>s.url));
+async function probe(page,{checkCDP=false}={}){
+ return page.evaluate(async check=>{
+  const errors={},read=(key,fn)=>{try{return fn()??null;}catch{errors[key]='unavailable';return null;}};
+  let gl,debug;try{gl=document.createElement('canvas').getContext('webgl');debug=gl?.getExtension('WEBGL_debug_renderer_info');}catch{errors.webgl='unavailable';}
+  const p={origin:location.origin,secureContext:isSecureContext,
+   webdriver:read('webdriver',()=>navigator.webdriver),userAgent:read('userAgent',()=>navigator.userAgent),platform:read('platform',()=>navigator.platform),
+   chrome:read('chrome',()=>typeof window.chrome),plugins:read('plugins',()=>navigator.plugins.length),
+   screen:read('screen',()=>({width:screen.width,height:screen.height})),timezone:read('timezone',()=>Intl.DateTimeFormat().resolvedOptions().timeZone),locale:read('locale',()=>navigator.language),
+   hardwareConcurrency:read('hardwareConcurrency',()=>navigator.hardwareConcurrency),deviceMemory:read('deviceMemory',()=>navigator.deviceMemory),
+   webglVendor:read('webglVendor',()=>debug?gl.getParameter(debug.UNMASKED_VENDOR_WEBGL):null),webglRenderer:read('webglRenderer',()=>debug?gl.getParameter(debug.UNMASKED_RENDERER_WEBGL):null),
+   cdpDetected:null,cdpMethod:'Error.stack console serialization heuristic',errors};
+  if(check){try{
+   let detected=false;const diagnostic=new Error('CompelOS diagnostic');
+   Object.defineProperty(diagnostic,'stack',{get(){detected=true;return 'CompelOS diagnostic';}});
+   // Logging this local object is the challenge. Reading its stack ourselves
+   // would trigger the getter and manufacture a positive, so never do that.
+   console.debug(diagnostic);
+   await new Promise(resolve=>{const c=new MessageChannel();c.port1.onmessage=()=>{c.port1.close();c.port2.close();resolve();};c.port2.postMessage(null);});
+   p.cdpDetected=detected;
+  }catch{errors.cdpDetected='unavailable';}}
+  return p;
+ },checkCDP);
+}
 async function identityProbe(page,{assertActive=async()=>{}}={}){
  await assertActive();
- // Secure-context APIs differ on about:blank and fingerprints can be scoped by
- // origin. Compare every baseline/session on the same public diagnostic origin.
- if(page.url()!==URLS[0])await page.goto(URLS[0],{waitUntil:'domcontentloaded',timeout:15000});
- await assertActive();const observed=await probe(page);
- if(!observed.secureContext||new URL(observed.origin).hostname.replace(/^www\./,'')!=='browserscan.net')throw Error('A consistent secure diagnostic context could not be established.');
- return observed;
+ // Preserve the old secure origin/hash fields: battery updates must not create drift.
+ if(page.url()!==IDENTITY_URL)await page.goto(IDENTITY_URL,{waitUntil:'domcontentloaded',timeout:15000});
+ await assertActive();const p=await probe(page);
+ if(!p.secureContext||new URL(p.origin).hostname.replace(/^www\./,'')!=='browserscan.net')throw Error('A consistent secure diagnostic context could not be established.');
+ return p;
 }
-function assessSite({url,status,probe:identity,result=null,error=''}){
- if(identity?.webdriver===true||/HeadlessChrome/.test(identity?.userAgent||''))return {url,verdict:'FAIL',reason:'Browser exposes an explicit webdriver/headless signal.'};
- if(error||status!==200)return {url,verdict:'UNKNOWN',reason:error||'Detector returned HTTP '+status+'.'};
- // Only a detector's declared result element is accepted. Never search a whole
- // page for an example containing "false" or a marketing authenticity score.
- if(!result||typeof result!=='object'||Array.isArray(result))return {url,verdict:'UNKNOWN',reason:'No supported machine-readable detector verdict; inspect the captured evidence.'};
- const checks=['webdriverDetected','headlessDetected','cdpDetected','tlsMismatch'];
- if(checks.some(key=>result[key]===true))return {url,verdict:'FAIL',reason:'Detector reported '+checks.filter(key=>result[key]===true).join(', ')+'.'};
- if(!checks.every(key=>result[key]===false))return {url,verdict:'UNKNOWN',reason:'Detector did not establish all webdriver, headless, CDP and TLS results.'};
- return {url,verdict:'PASS',reason:'All declared detector checks passed.'};
+const result=(name,read,ok,value)=>({name,verdict:!read?'UNKNOWN':ok?'PASS':'FAIL',value:value??null});
+const verdict=checks=>checks.some(c=>c.verdict==='FAIL')?'FAIL':checks.some(c=>c.verdict==='UNKNOWN')?'UNKNOWN':'PASS';
+function assessProbe(p={}){
+ p??={};
+ const text=v=>typeof v==='string'&&v.trim().length>0;
+ return [
+  result('webdriver',typeof p.webdriver==='boolean',p.webdriver===false,p.webdriver),
+  result('userAgent',text(p.userAgent),!/HeadlessChrome|PhantomJS|Selenium|Playwright/i.test(p.userAgent||''),p.userAgent),
+  result('chrome',text(p.chrome),p.chrome==='object'||p.chrome==='function',p.chrome),
+  result('plugins',Number.isInteger(p.plugins),p.plugins>0,p.plugins),
+  result('webglVendor',text(p.webglVendor),true,p.webglVendor),
+  result('webglRenderer',text(p.webglRenderer),true,p.webglRenderer),
+  result('cdpSerialization',typeof p.cdpDetected==='boolean',p.cdpDetected===false,p.cdpDetected),
+ ];
 }
-async function run(page,{assertActive=async()=>{},now=Date.now,urls=URLS}={}){
+function endpointMatches(actual,expected){try{const a=new URL(actual),b=new URL(expected);return a.origin===b.origin&&a.pathname.replace(/\/$/,'')===b.pathname.replace(/\/$/,'')&&!a.search;}catch{return false;}}
+function assessSite({url,status,finalUrl=url,probe:identity,external=null,error=''}){
+ const checks=assessProbe(identity),measured=verdict(checks);
+ if(measured==='FAIL'||external?.verdict==='FAIL')return {url,checks,verdict:'FAIL',reason:external?.verdict==='FAIL'?'The test site reported a failure.':'Direct checks failed: '+checks.filter(c=>c.verdict==='FAIL').map(c=>c.name).join(', ')+'.'};
+ if(!URLS.includes(url)||!endpointMatches(finalUrl,url)||error||status!==200)return {url,checks,verdict:'UNKNOWN',reason:error||'The actual test endpoint was unavailable or redirected (HTTP '+status+').'};
+ if(measured==='UNKNOWN')return {url,checks,verdict:'UNKNOWN',reason:'Cannot read direct signals: '+checks.filter(c=>c.verdict==='UNKNOWN').map(c=>c.name).join(', ')+'.'};
+ return {url,checks,verdict:'PASS',reason:'All seven direct browser checks passed.'+(external?.verdict==='PASS'?' The site also reported a pass.':' The site-specific verdict is unavailable; direct measurements are separate.')};
+}
+// Runs in the page: real result elements, never examples or private app state.
+function siteResult(kind){
+ try{
+  if(kind==='device'){
+   const data=JSON.parse((document.querySelector('#jsonResult')?.textContent||'').slice(0,32768));if(typeof data.isBot!=='boolean')return null;
+   const flags=Object.fromEntries(Object.entries(data).filter(([k,v])=>/^(?:is|has)/.test(k)&&typeof v==='boolean').slice(0,40));
+   const failed=data.isBot||['hasBotUserAgent','hasWebdriverTrue','isHeadlessChrome','isAutomatedWithCDP','isAutomatedWithCDPInWebWorker'].some(k=>flags[k]===true);
+   return {verdict:failed?'FAIL':'PASS',source:'#jsonResult',flags};
+  }
+  if(kind==='fingerprint'){
+   const value=document.querySelector('[data-test-property-name="bot"]')?.textContent?.replace(/\s+/g,' ').trim();
+   if(value==='Not detected')return {verdict:'PASS',source:'[data-test-property-name="bot"]',value};
+   if(/^You are a (?:bad |good )?bot\b/i.test(value||''))return {verdict:'FAIL',source:'[data-test-property-name="bot"]',value:value.slice(0,200)};
+  }
+  if(kind==='sannysoft'){
+   if(!document.querySelector('#user-agent-result')?.textContent?.trim()||!/^\d+/.test(document.querySelector('#plugins-length-result')?.textContent?.trim()||''))return null;
+   const ids=['user-agent-result','webdriver-result','advanced-webdriver-result','chrome-result','plugins-length-result','plugins-type-result'];
+   const cells=ids.map(id=>{const e=document.getElementById(id);return e?.textContent?.trim()?{id,value:e.textContent.trim().slice(0,400),failed:e.classList.contains('failed')}:null;});
+   if(cells.some(c=>!c))return null;
+   return {verdict:cells.some(c=>c.failed)?'FAIL':'PASS',source:'Completed result table',cells};
+  }
+  if(kind==='incolumitas'){
+   const data=JSON.parse((document.querySelector('#new-tests')?.textContent||'').slice(0,32768));
+   if(!['webdriverPresent','puppeteerEvaluationScript','inconsistentUserAgent','inconsistentLanguages'].every(k=>['OK','FAIL'].includes(data[k])))return null;
+   const checks=Object.fromEntries(Object.entries(data).filter(([,v])=>v==='OK'||v==='FAIL').slice(0,40));
+   return {verdict:Object.values(checks).includes('FAIL')?'FAIL':'PASS',source:'#new-tests',checks};
+  }
+ }catch{/* Missing/incomplete vendor UI; direct probes are independent. */}
+ return null;
+}
+function assessTLS(data,p={}){
+ const md5=s=>require('node:crypto').createHash('md5').update(s).digest('hex');
+ const hasJA3=typeof data?.ja3_hash==='string'&&/^[a-f0-9]{32}$/i.test(data.ja3_hash)&&typeof data.ja3_text==='string'&&/^\d+,[\d-]+,[\d-]*,[\d-]*,[\d-]*$/.test(data.ja3_text);
+ const hasJA4=typeof data?.ja4==='string'&&/^[tq][\da-z]{9}_[a-f0-9]{12}_[a-f0-9]{12}$/i.test(data.ja4);
+ const hasUA=typeof data?.user_agent==='string'&&data.user_agent.length>0&&typeof p.userAgent==='string'&&p.userAgent.length>0;
+ const checks=[result('ja3',hasJA3,hasJA3&&md5(data.ja3_text)===data.ja3_hash?.toLowerCase(),data?.ja3_hash),result('ja4',hasJA4,true,data?.ja4),result('httpUserAgent',hasUA,hasUA&&data.user_agent===p.userAgent,data?.user_agent)];
+ return {verdict:verdict(checks),checks,referenceVerdict:'NOT_EVALUATED',reason:'Checks cover fingerprint availability/integrity and HTTP/browser UA agreement. No reference Chrome TLS fingerprint was supplied.'};
+}
+async function run(page,{assertActive=async()=>{},now=Date.now,urls=URLS,resultTimeoutMs=8000}={}){
  if(urls.length!==URLS.length||urls.some((u,i)=>u!==URLS[i]))throw Error('Use only the configured diagnostic battery.');
+ if(!Number.isInteger(resultTimeoutMs)||resultTimeoutMs<1||resultTimeoutMs>10000)throw Error('Invalid detector result deadline.');
  const sites=[],start=now();
- for(const url of urls){
-  await assertActive();const at=now();let evidence={url};
+ for(const {url,kind}of BATTERY){
+  await assertActive();const at=now();let e={url,kind};
   try{
    const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:15000});await assertActive();
-   // Event-based wait for the result element, bounded by a deadline. These
-   // sites may change or require explicit human interaction; UNKNOWN is useful.
-   await page.waitForSelector?.('#detection-results,[data-testid="bot-detection-results"]',{timeout:1500}).catch(()=>{});
-   const captured=await page.evaluate(()=>{
-    const element=document.querySelector('#detection-results,[data-testid="bot-detection-results"]');let result=null;
-    if(element)try{result=JSON.parse(element.textContent);}catch{}
-    return {result,title:document.title,text:(document.body?.innerText||'').slice(0,8000)};
-   });
-   evidence={...evidence,status:response?.status(),probe:await probe(page),...captured};
-  }catch(error){evidence.error=String(error.name||'Detector error');}
-  sites.push({...evidence,...assessSite(evidence),durationMs:now()-at});
+   const status=response?.status(),finalUrl=page.url();
+   if(kind==='tls'){
+    const data=await page.evaluate(()=>{const t=document.body?.innerText||'';if(t.length>65536)return null;try{const d=JSON.parse(t);return Object.fromEntries(['user_agent','ja4','ja4_r','ja4_o','ja4_ro','ja3_hash','ja3_text','ja3n_hash','ja3n_text','akamai_hash'].filter(k=>typeof d[k]==='string').map(k=>[k,d[k].slice(0,4096)]));}catch{return null;}});
+    const identity=await probe(page),assessment=assessTLS(data,identity);e={...e,status,finalUrl,tls:data,...assessment};
+    if(status!==200||!endpointMatches(finalUrl,url))e={...e,verdict:'UNKNOWN',reason:'The browser-routed TLS JSON endpoint was unavailable (HTTP '+status+').'};
+   }else{
+    let external=null;
+    if(status===200&&endpointMatches(finalUrl,url)&&['device','fingerprint','sannysoft','incolumitas'].includes(kind)){
+     // Event-driven DOM observation, not a fixed rendering/throttle sleep.
+     try{const h=await page.waitForFunction(siteResult,{timeout:resultTimeoutMs,polling:'mutation'},kind);try{external=await h.jsonValue();}finally{await h.dispose();}}catch{/* Direct measurements remain available if the site UI is unsupported/slow. */}
+    }
+    await assertActive();const identity=await probe(page,{checkCDP:true}),captured=await page.evaluate(()=>({title:document.title,text:(document.body?.innerText||'').slice(0,8000)}));
+    e={...e,status,finalUrl,probe:identity,external:external||{verdict:'UNKNOWN',reason:'No completed supported site result; direct checks are independent.'},...captured};e={...e,...assessSite(e)};
+   }
+  }catch(error){e={...e,verdict:'UNKNOWN',reason:'Cannot read detector signals: '+String(error.name||'Detector error'),error:String(error.name||'Detector error')};}
+  // Pause/hold/lease loss aborts, never permits subsequent navigation as UNKNOWN.
+  await assertActive();sites.push({...e,durationMs:now()-at});
  }
- await assertActive();const verdict=sites.some(s=>s.verdict==='FAIL')?'FAIL':sites.every(s=>s.verdict==='PASS')?'PASS':'UNKNOWN';
- return {verdict,reason:verdict==='PASS'?'Diagnostic battery complete.':verdict==='FAIL'?'One or more detectors reported automation signals.':'One or more detector verdicts are unavailable or unsupported. No pass was inferred.',checkedAt:new Date(now()).toISOString(),durationMs:now()-start,sites};
+ const overall=verdict(sites),counts={PASS:0,FAIL:0,UNKNOWN:0};for(const s of sites)counts[s.verdict]++;
+ return {version:VERSION,verdict:overall,reason:overall==='PASS'?'All required direct browser and TLS capture/coherence checks passed; no available site result reported failure.':overall==='FAIL'?'Measured browser signals or a completed site test reported failure.':'One or more required browser/TLS signals could not be read.',scope:'Browser signal heuristics and browser-routed TLS capture/coherence; not proof of an undetectable browser.',controlTransport:'CDP',checkedAt:new Date(now()).toISOString(),durationMs:now()-start,counts,sites};
 }
 async function network(page,{assertActive=async()=>{}}={}){
  const readings=[];
@@ -62,4 +143,4 @@ async function network(page,{assertActive=async()=>{}}={}){
  }
  await assertActive();return {...readings[0],rotating:new Set(readings.map(v=>v.ip)).size!==1,readings};
 }
-module.exports={URLS,probe,identityProbe,assessSite,run,network};
+module.exports={VERSION,BATTERY,URLS,probe,identityProbe,assessProbe,assessSite,siteResult,assessTLS,run,network};

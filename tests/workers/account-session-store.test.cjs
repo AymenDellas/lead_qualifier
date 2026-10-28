@@ -54,6 +54,8 @@ test('human review approves only the exact current unclear report and never clea
   await core.startProcessing(pool,id);assert.equal((await core.readRuntimeAccount(pool,id)).processing_enabled,true);await core.pauseProcessing(pool,id);
   e.gate.verdict='FAIL';e.gate.sites[0].verdict='FAIL';await pool.query('UPDATE compel_linkedin_accounts SET session_evidence=$2::jsonb WHERE id=$1',[id,JSON.stringify(e)]);
   await assert.rejects(store.approveUnknown(pool,{accountId:id,revision:1,reportId:'report-one'}),/Confirmed failures/);
+  e.gate.verdict='UNKNOWN';e.gate.sites[0]={verdict:'UNKNOWN',probe:{cdpDetected:true}};await pool.query('UPDATE compel_linkedin_accounts SET session_evidence=$2::jsonb WHERE id=$1',[id,JSON.stringify(e)]);
+  await assert.rejects(store.approveUnknown(pool,{accountId:id,revision:1,reportId:'report-one'}),/Confirmed failures/);
   e.gate.verdict='UNKNOWN';e.gate.sites[0]={verdict:'UNKNOWN',probe:{webdriver:true}};await pool.query('UPDATE compel_linkedin_accounts SET session_evidence=$2::jsonb WHERE id=$1',[id,JSON.stringify(e)]);
   await assert.rejects(store.approveUnknown(pool,{accountId:id,revision:1,reportId:'report-one'}),/Confirmed failures/);
   e.gate.verdict='UNKNOWN';e.gate.sites[0].verdict='UNKNOWN';await pool.query("UPDATE compel_linkedin_accounts SET session_evidence=$2::jsonb,attention_reason='Exact existing hold' WHERE id=$1",[id,JSON.stringify(e)]);

@@ -1,13 +1,14 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),checks=require('../../src/lib/stealth-self-test.cjs'),humanizer=require('../../src/lib/session-humanizer.cjs');
-test('diagnostic landing pages, missing TLS/CDP evidence and transport failures never pass',()=>{
+test('diagnostics require directly readable signals and never accept example verdict JSON',()=>{
  const base={url:checks.URLS[0],status:200,probe:{webdriver:false,userAgent:'Chrome/155'}};
  assert.equal(checks.assessSite({...base,text:'100% authentic; cdpDetected:false'}).verdict,'UNKNOWN');
  assert.equal(checks.assessSite({...base,result:{webdriverDetected:false,headlessDetected:false}}).verdict,'UNKNOWN');
  assert.equal(checks.assessSite({...base,status:502,result:{}}).verdict,'UNKNOWN');
  assert.equal(checks.assessSite({...base,status:502,probe:{webdriver:true,userAgent:'Chrome/155'}}).verdict,'FAIL');
  const result={webdriverDetected:false,headlessDetected:false,cdpDetected:false,tlsMismatch:false};
- assert.equal(checks.assessSite({...base,result}).verdict,'PASS');assert.equal(checks.assessSite({...base,result:{...result,cdpDetected:true}}).verdict,'FAIL');
+ assert.equal(checks.assessSite({...base,result}).verdict,'UNKNOWN');
+ assert.equal(checks.assessSite({...base,probe:{...base.probe,cdpDetected:true}}).verdict,'FAIL');
 });
 test('restriction classification preserves the actual profile-volume notice',()=>{
  const {pageSignal}=require('../../src/lib/linkedin-session-policy.cjs'),notice='We restricted your account because we detected that over time, it has accessed an unusually high volume of LinkedIn profile data.';
