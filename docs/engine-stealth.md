@@ -1,5 +1,9 @@
 # Account session controls and diagnostic evidence
 
+## Explicit John warmup exception — 28 October 2026
+
+The user authorized one supervised, rendered-only, 20-profile experiment for John / AliasMode `k1ierfk4`, waiving proxy/detector/recovery admission and the ten-profile warmup ceiling only for that manifest. Normal account daily ceilings, 60–150-second reservations, identity/ownership/duplicate checks and reactive stops remained. The manifest is now consumed: **2 visits completed from 3 starts**, then a Puppeteer `Runtime.callFunctionOn` timeout stopped it. No new LinkedIn security signal was recorded; normal qualification remains paused and the browser is closed. There were no CompelOS qualification API calls or CRM decision changes. Native rendered pages made 42 background Voyager requests. See [the authorization, checks and partial live result](engine-john-warmup.md); this does not change general account admission or detector verdicts.
+
 ## Detector correction audit — 28 October 2026
 
 The previous runner required an invented common JSON result element that these sites do not share. It also visited the DeviceAndBrowserInfo and Fingerprint homepages. This was a runner limitation, not evidence that their tests failed. Before changing behaviour, 50 already-decided CRM records were frozen again with their stored decisions/reasons/evidence and deterministic replay assessments under ignored `data/engine-v2/detector-v3/`; the existing frozen set also replays unchanged.
