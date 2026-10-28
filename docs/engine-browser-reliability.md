@@ -43,3 +43,9 @@ The first added browser-fixture attempt used a headless browser with a headful d
 | Original session, John experiment and fresh maintenance replay sets | 50 records each; 0 decision changes, 0 evidence changes, 0 errors |
 
 The focused 15-test pure/runtime set was also rerun after adding the explicit rule that security notices take precedence on a 5xx page. The final browser cases ran against that rule. Neither tests nor replay opened authenticated LinkedIn sessions. No new production build was run for this worker maintenance; its changes introduce no dependency, asset or browser-launch configuration.
+
+## Applied local runtime
+
+The previous agent was stopped through its existing PostgreSQL stop command. Its OFFLINE release, dead PID and absence of pending account-start/login/diagnostic requests were verified before restarting. The new agent acknowledged startup at 16:42:40 UTC with **zero open account browsers and zero pending saves**. All four accounts remain paused; both existing holds and every saved account control/evidence field match the pre-maintenance snapshot. No account browser was opened or warmup re-armed. An already open review browser was not forcibly closed.
+
+Final replay after restart remains unchanged in all three 50-record sets. PostgreSQL stores the verification receipt as `browser-reliability-20261028`, state `OFFLINE_VERIFIED`, kind `browser-reliability-maintenance`, with zero requested profiles/jobs. The private `verification-summary.json` contains the compact results and account comparison. No performance/restriction-prevention claim follows from these offline tests; browser CDP visibility and the prior detector flags remain unchanged.
