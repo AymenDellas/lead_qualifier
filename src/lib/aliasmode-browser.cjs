@@ -1,6 +1,14 @@
 'use strict';
 const {profileId,providerError}=require('./aliasmode-client.cjs');
 const ownership=new Map();
+function targetFilter(target){
+ // Puppeteer 24.38.0 exposes dedicated CDP workers as public type "other".
+ // Read its pinned target info so only worker targets are excluded.
+ const type=target._getTargetInfo?.()?.type||target.type();
+ return !['worker','service_worker','shared_worker'].includes(type);
+}
+// Keep Puppeteer's page Runtime.enable: execution-context tracking requires it.
+// Filter worker attachment instead; do not patch CDP commands or page globals.
 function createAliasModeBrowser({account,owner,pool,provider,puppeteer=require('puppeteer'),onDisconnect=()=>{},onStage=()=>{}}){
  const id=profileId(account.aliasmode_profile_id),store=provider.store,api=provider.client;
  let entry=null,opening=null,openingMode=null,closing=null,cancelled=false;
@@ -45,7 +53,7 @@ function createAliasModeBrowser({account,owner,pool,provider,puppeteer=require('
      if(!previous?.managed||!previous.target_id||!previous.pid)throw modeConflict();
      // A saved managed flag alone cannot authorize closing a replacement human
      // browser. Verify both its live PID and our recorded worker target first.
-     browser=await puppeteer.connect({browserWSEndpoint:state.endpoint,defaultViewport:null,protocolTimeout:30000});await check();
+     browser=await puppeteer.connect({browserWSEndpoint:state.endpoint,defaultViewport:null,protocolTimeout:30000,targetFilter});await check();
      const pid=await resolvePid(browser),target=browser.targets().find(t=>t.type()==='page'&&t._targetId===previous.target_id);
      if(pid!==previous.pid||!target)throw modeConflict();
      entry={browser,page:await target.page(),pid,managed:true,headless:state.headless,targetId:previous.target_id,expected:true};
@@ -64,7 +72,7 @@ function createAliasModeBrowser({account,owner,pool,provider,puppeteer=require('
     if(state.headless!==headless)throw providerError('ALIASMODE_MODE_UNVERIFIED','AliasMode did not confirm the requested browser mode. No LinkedIn work was started.');
     onStage('BROWSER_MODE_VERIFIED',headless?'Headless browser confirmed.':'Visible browser confirmed for manual review.');
     await check();onStage('CDP_ATTACHING','Attaching Puppeteer to the AliasMode browser.');
-    browser=await puppeteer.connect({browserWSEndpoint:state.endpoint,defaultViewport:null,protocolTimeout:30000});await check();
+    browser=await puppeteer.connect({browserWSEndpoint:state.endpoint,defaultViewport:null,protocolTimeout:30000,targetFilter});await check();
     const version=await browser.version();if(!/chrome|chromium|sunbrowser/i.test(version))throw providerError('ALIASMODE_BROWSER_CORE','This integration requires an AliasMode Chromium profile (Firefox has no CDP).');
     const pid=await resolvePid(browser);await check();
     // Reuse only the recorded worker target. Never close or adopt arbitrary

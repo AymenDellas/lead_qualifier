@@ -11,7 +11,14 @@ function fixture({active=false,saved=null,headless=true}={}){
  browser.newPage=async()=>{calls.push('newPage');return page;};browser.target=()=>({createCDPSession:async()=>({send:async()=>({processInfo:[{type:'browser',id:12345}]}),detach:async()=>{}})});
  const store={assertOwner:async()=>{if(!allowed)throw Object.assign(Error('Ownership changed'),{failure:{stage:'provider'},code:'ALIASMODE_OWNERSHIP_CHANGED'});},session:async()=>row,saveSession:async(_p,a,o,value)=>{row={account_id:a.id,owner:o,...value,target_id:value.targetId};},finishSession:async()=>{if(row)row.closed_at='closed';}};
  const api={active:async()=>{calls.push('active');return {active,...(active?{headless,endpoint:'ws://127.0.0.1:9222/devtools/browser/fixture'}:{})};},start:async(_id,options)=>{headless=options.headless;calls.push('start');if(startGate)await startGate;active=true;return {active:true,headless,endpoint:'ws://127.0.0.1:9222/devtools/browser/fixture'};},stop:async()=>{calls.push('stop');if(stopWorks)active=false;}};
- const options={account,owner,pool:{},provider:{store,client:api},puppeteer:{connect:async settings=>{calls.push('connect');assert.equal(settings.defaultViewport,null);if(connectError)throw Error('Connection refused');connected=true;return browser;}}};
+ const options={account,owner,pool:{},provider:{store,client:api},puppeteer:{connect:async settings=>{calls.push('connect');assert.equal(settings.defaultViewport,null);
+  assert.equal(typeof settings.targetFilter,'function');
+  for(const type of ['worker','service_worker','shared_worker']){
+   assert.equal(settings.targetFilter({type:()=>type}),false);
+   assert.equal(settings.targetFilter({type:()=>type==='worker'?'other':type,_getTargetInfo:()=>({type})}),false);
+  }
+  for(const type of ['page','tab','browser','background_page','other'])assert.equal(settings.targetFilter({type:()=>type}),true);
+  if(connectError)throw Error('Connection refused');connected=true;return browser;}}};
  return {account,options,calls,browser,page,get row(){return row;},get active(){return active;},set allowed(v){allowed=v;},set stopWorks(v){stopWorks=v;},set connectError(v){connectError=v;},set startGate(v){startGate=v;}};
 }
 test('visible is the default and explicit headless configuration remains supported',async()=>{
