@@ -1,5 +1,11 @@
 # Account session controls and diagnostic evidence
 
+## Detector correction audit — 28 October 2026
+
+The previous runner required an invented common JSON result element that these sites do not share. It also visited the DeviceAndBrowserInfo and Fingerprint homepages. This was a runner limitation, not evidence that their tests failed. Before changing behaviour, 50 already-decided CRM records were frozen again with their stored decisions/reasons/evidence and deterministic replay assessments under ignored `data/engine-v2/detector-v3/`; the existing frozen set also replays unchanged.
+
+Verified primary endpoints are [BrowserScan bot detection](https://www.browserscan.net/bot-detection), [DeviceAndBrowserInfo's bot test](https://deviceandbrowserinfo.com/are_you_a_bot), [Fingerprint Playground](https://demo.fingerprint.com/playground), and [Sannysoft](https://bot.sannysoft.com/) as the replacement for the failed Antoine Vastel URL. Incolumitas and CreepJS already use their actual test pages. [BrowserLeaks JSON](https://tls.browserleaks.com/json) exposes browser-routed JA3/JA4 evidence; its [TLS documentation](https://browserleaks.com/tls) describes fingerprints, not a universal automation verdict. The [published CDP serialization heuristic](https://deviceandbrowserinfo.com/learning_zone/articles/detecting-headless-chrome-puppeteer-2024) is an observable-side-effect test; it can flag open DevTools and a negative result does not mean no CDP connection exists. CompelOS's control connection remains CDP in all modes.
+
 ## Evidence before implementation — 27 October 2026
 
 The requested browser/session changes follow an explicit user instruction. They do not establish the cause of LinkedIn restrictions. The active AliasMode adapter uses plain `puppeteer.connect`, not a newly injected Puppeteer-extra/stealth layer. A failed read after two profiles does not isolate volume, account history, session state, endpoint compatibility or network causes.
