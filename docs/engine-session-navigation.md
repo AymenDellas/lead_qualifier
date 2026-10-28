@@ -27,3 +27,21 @@ Document headers come from Chromium's `Network.requestWillBeSentExtraInfo`, with
 Deterministic tests verify the distribution's median, logarithmic quantiles and long tail, lower/upper dwell bounds, cancellation, pending telemetry deadlines and quiet-window resets. PostgreSQL/runtime fixtures cover atomic slots, the target duration, preserved checkpoints, fresh 403/401 stops, wrong-member/error pages, final-feed security stops and the consumed manifest's re-arm rejection.
 
 Before behavior edits, 50 decided CRM records were frozen with reasons, evidence and their fixed-clock replay under ignored `data/engine-v2/session-navigation-20261028/`. PostgreSQL stores the benchmark manifest `session-navigation-20261028-929fcb37-de84-4bdd-8199-0b2b72247f86`. Per-phase/final replay and account/CRM preservation results are stored with that manifest. No runtime state or evidence is committed from the private folder.
+
+### Completed results
+
+The full engine/worker/prospect/coach command completed all 460 cases: 453 passed and seven pagination fixtures initially failed because the new shared link metadata used a global `document` in their minimal element-only mocks. Resolving a link's base target through its own `ownerDocument` fixes that compatibility issue without changing real-page behavior. All seven affected cases passed on rerun after the correction. Both the initial output and the successful rerun are retained privately; there are no remaining observed test failures. The full command was not repeated after that focused correction.
+
+| Check | Result |
+| --- | --- |
+| Native-header/SPA HTTPS fixtures | 2 passed |
+| Statistical timing, dwell and telemetry fixtures | 7 passed |
+| Adapter/support/worker/comparison fixtures | 23 passed |
+| PostgreSQL CRM suite | 14 passed |
+| TypeScript | Passed |
+| Lint on changed source/tests | Passed |
+| Full workspace lint | Existing 5 errors / 7 warnings in unrelated UI files |
+| Fresh and original 50-record replays, each phase and final | Zero decision changes, evidence changes or errors |
+| Final complete CRM/account comparison | All 14,406 CRM rows and all 10 account-control rows unchanged |
+
+The full lint errors remain in teleprompter, WorkspaceCommandMenu, business OnboardingWorkspace, EvidenceRecoveryDialog and copy-studio OnboardingDialog. No UI changes, dependency changes, production worker restart, profile migration, proxy changes or authenticated LinkedIn trial were performed. The anonymous detector measurement is separate from fixture tests and is not a throughput benchmark; its full-battery differences remain disclosed in the linked report.
