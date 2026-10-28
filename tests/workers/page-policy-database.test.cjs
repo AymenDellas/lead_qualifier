@@ -10,7 +10,10 @@ test('old page budgets and schedules are inert; concurrent counters and partial 
   const url='https://www.linkedin.com/in/partial-fixture/';await core.enqueue(pool,[url]);const claimed=await core.claim(pool,id,'owner');
   const saved={url,profileIdentityConfirmed:true,firstName:'Fixture',emails:['fixture@example.test'],linkedinAccountId:id,linkedinCapture:{version:2,stage:'contact',complete:false},status:'PENDING'};
   await core.reserveProfile(pool,{intervalMs:0,accountId:id,owner:'owner',profileUrl:url,jobId:claimed.job.jobId});await core.checkpoint(pool,claimed.job.jobId,'owner',saved);
-  await core.defer(pool,claimed.job.jobId,'owner',{...saved,status:'ERROR',failure:{stage:'linkedin',code:'BROWSER_CRASH',reason:'Fixture crash',retryable:true}},new Date().toISOString());
+  // The queue compares retry_at with PostgreSQL time. Use that same clock for
+  // an immediate fixture retry; PC/server skew must not make this test race.
+  const retryAt=(await pool.query('SELECT clock_timestamp() AS retry_at')).rows[0].retry_at;
+  await core.defer(pool,claimed.job.jobId,'owner',{...saved,status:'ERROR',failure:{stage:'linkedin',code:'BROWSER_CRASH',reason:'Fixture crash',retryable:true}},retryAt.toISOString());
   const resumed=await core.claim(pool,id,'owner');assert.equal(resumed.job.resumeCapture,true);assert.deepEqual(resumed.job.resumeResult.emails,saved.emails);assert.equal(resumed.dailyCount,1);
   assert.equal((await core.reserveProfile(pool,{intervalMs:0,accountId:id,owner:'owner',profileUrl:url,jobId:resumed.job.jobId})).charged,false);
   await core.pauseProcessing(pool,id,'Security review',true,'owner');assert.equal(await core.processingAllowed(pool,id,'owner'),false);await assert.rejects(core.startProcessing(pool,id),/needs review/);

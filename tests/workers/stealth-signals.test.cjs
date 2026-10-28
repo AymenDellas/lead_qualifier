@@ -34,6 +34,14 @@ test('complete direct/TLS signals produce PASS even without vendor UI; positives
  assert.equal((await checks.run(pageFixture({ui:{verdict:'FAIL'}}),{resultTimeoutMs:1})).verdict,'FAIL');
  assert.equal((await checks.run(pageFixture({p:{...normal(),webglVendor:null}}),{resultTimeoutMs:1})).verdict,'UNKNOWN');
  assert.equal((await checks.run(pageFixture({tlsData:null}),{resultTimeoutMs:1})).verdict,'UNKNOWN');
+ const badProbe=pageFixture({ui:{verdict:'FAIL'}}),evaluate=badProbe.evaluate;badProbe.evaluate=async(fn,arg)=>{if(typeof arg==='boolean')throw Error('Fixture probe unreadable');return evaluate(fn,arg);};
+ const retained=await checks.run(badProbe,{resultTimeoutMs:1});assert.equal(retained.verdict,'FAIL');assert.equal(retained.sites[1].verdict,'FAIL');assert.equal(retained.sites[0].failureStage,'direct-probe');assert.match(retained.sites[0].reason,/Fixture probe unreadable/);
+ const noText=pageFixture(),read=noText.evaluate;noText.evaluate=async(fn,arg)=>{if(arg===undefined&&noText.url()!==checks.URLS.at(-1))throw Error('Optional text unavailable');return read(fn,arg);};
+ assert.equal((await checks.run(noText,{resultTimeoutMs:1})).verdict,'PASS');
+});
+test('dashboard summary includes TLS as the seventh bounded detector entry',()=>{
+ const state=require('../../src/lib/account-session-store.cjs').publicState({daily_limit:300,session_evidence:{gate:{verdict:'UNKNOWN',sites:checks.URLS.map(url=>({url,verdict:'UNKNOWN'}))}}});
+ assert.equal(state.gate.sites.length,7);assert.equal(state.gate.sites.at(-1).url,'https://tls.browserleaks.com/json');
 });
 test('a hold or lost owner cancels the battery before another navigation; arbitrary endpoint injection is rejected',async()=>{
  const page=pageFixture();let active=0;await assert.rejects(checks.run(page,{assertActive:async()=>{if(++active>=3)throw Error('Account hold');},resultTimeoutMs:1}),/Account hold/);assert.equal(page.calls.length,1);

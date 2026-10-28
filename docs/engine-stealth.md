@@ -16,6 +16,52 @@ Overall FAIL wins if any direct check, TLS coherence check or completed site ver
 
 Focused pure/PostgreSQL/browser fixtures pass 17/17 before external measurements. The browser fixtures intercept every request and exercise visible/headless mode, real JS reads, real result selectors, synthetic TLS JSON, a positive CDP serializer control and cancellation. Both the original and freshly frozen 50-record sets replay with zero decision/evidence changes and zero errors. No qualification rule, browser library, proxy, account hold or processing intent was changed.
 
+### Corrected engine/mode comparison — 28 October 2026
+
+The final run used one fresh blank profile per engine, sequential modes, the production AliasMode CLI/CDP adapter and isolated PostgreSQL account leases. It ran separately from tests/builds. No real LinkedIn profile was opened or signed in. All four gate verdicts are **FAIL**, with a completed DeviceAndBrowserInfo result in each case:
+
+| Engine | Mode | Launch/attach s | Battery s | Page requests | PASS / FAIL / UNKNOWN endpoints | Gate |
+| --- | --- | ---: | ---: | ---: | --- | --- |
+| AliasMode Chromium 155 | Visible | 14.03 | 33.92 | 178 | 5 / 1 / 1 | FAIL |
+| AliasMode Chromium 155 | Headless | 9.57 | 23.05 | 193 | 6 / 1 / 0 | FAIL |
+| CloakBrowser 146 | Visible | 16.22 | 24.11 | 197 | 6 / 1 / 0 | FAIL |
+| CloakBrowser 146 | Headless | 9.45 | 21.61 | 196 | 6 / 1 / 0 | FAIL |
+
+AliasMode Chromium's returned `details` identify `isAutomatedWithCDP=true` and `isAutomatedWithCDPInWebWorker=true` in both modes. CloakBrowser's returned details identify `hasInconsistentTimingResolution=true` in both modes. The direct legacy console-getter heuristic did not fire, illustrating its limited coverage; the completed site failure still determines the gate. Nothing was changed to hide those signals, switch existing engines or override these failures.
+
+The one remaining UNKNOWN is a real Sannysoft navigation failure: `net::ERR_CONNECTION_TIMED_OUT at https://bot.sannysoft.com/`. The same replacement endpoint completed in the other three final runs. It is not a missing parser/result-element verdict, and the runner records the failure stage/reason. Optional text capture can no longer erase already measured signals or a confirmed site FAIL. No retry hides the unavailable endpoint.
+
+All four BrowserLeaks calls returned usable JA3/JA4 and matching HTTP/browser UA. JA4 was stable across modes for each engine in this sample:
+
+| Engine | Observed JA4 (both modes) |
+| --- | --- |
+| AliasMode Chromium | `t13d1518h2_8daaf6152771_4980c97edce0` |
+| CloakBrowser | `t13d1516h2_8daaf6152771_d8a2da3f94cd` |
+
+Raw JA3 hashes/text and JA3n are retained privately. JA3 differed between mode requests; that alone does not establish a changed device or TLS mismatch, since ClientHello extension ordering can vary. These are single observations per mode, not a controlled latency/throughput benchmark or evidence explaining a LinkedIn restriction.
+
+The reproducible command is `node scripts/engine-detector-comparison.cjs --run`. It only creates new blank profiles, checks them and confirms closure before deleting only those freshly created, unmapped profiles through the official CLI. Existing mapped profiles are never candidates. LinkedIn/LICDN requests from detector-page advertising are aborted before transmission; attempted main-frame LinkedIn navigation aborts the comparison. The final run blocked `snap.licdn.com` script requests in three modes and made no LinkedIn navigation. Earlier raw runs remain available, including an initial harness error that treated an already-blocked advertising request as a failed measurement; the guard was corrected without allowing that request.
+
+The final receipt confirms both temporary profiles closed/deleted, the original two-profile roster restored and all actual account intents, holds and evidence unchanged. Full evidence is private in `data/engine-v2/detector-v3/browser-comparison-latest.json`; individual run files are preserved. PostgreSQL retains the report/manifest as benchmark `detector-v3-52b65ec0-9a17-4921-be5a-864ea3a9a322`, state `DIAGNOSTIC_COMPLETE`, kind `browser-diagnostics`, seven endpoint URLs, four runs and zero lead jobs. This state cannot masquerade as a completed 30-lead qualification baseline. No paid usage was enabled.
+
+### Verification of the correction
+
+| Check | Result |
+| --- | --- |
+| Full engine/worker/prospect/coach suite | 427 passed; 0 failed/skipped |
+| PostgreSQL-enabled CRM suite | 14 passed; 0 failed/skipped |
+| TypeScript | Passed |
+| ESLint on changed production files | Passed |
+| Full workspace lint | Same existing 5 errors and 7 warnings outside the changed production files |
+| Production build and deployment tracing | Passed; 45 route manifests, 0 private runtime entries |
+| Original frozen set and fresh detector-correction set | 50 each; 0 decision changes, 0 evidence changes, 0 errors |
+| Restarted agent | AGENT_ACK; 0 open account browsers; 0 pending saves |
+| Actual accounts after restart | All 4 paused; both holds and all account evidence/intent unchanged |
+
+The first full test attempt hit an existing immediate-retry fixture race: it used the PC clock to schedule a retry that the queue compares against PostgreSQL time. Its isolated recheck passed; the fixture now obtains `clock_timestamp()` for that immediate retry, and the complete rerun passed 427/427. Production retry, pacing and lease code were not changed. Later probe/text failures are tested not to erase earlier confirmed failures; optional raw-text capture does not control the verdict. Oversized/unreadable required TLS fields remain unavailable rather than being truncated into a fabricated hash mismatch.
+
+The previous saved agent owner was already dead and had an expired heartbeat. Its PID/script identity and heartbeat age were verified; the unchanged normal stale-owner recovery path restarted the worker. No owner/hold was forcibly cleared. The correction introduces no environment variable or runtime dependency, does not sign in, and does not change qualification criteria or selected account engines/modes.
+
 ## Evidence before implementation — 27 October 2026
 
 The requested browser/session changes follow an explicit user instruction. They do not establish the cause of LinkedIn restrictions. The active AliasMode adapter uses plain `puppeteer.connect`, not a newly injected Puppeteer-extra/stealth layer. A failed read after two profiles does not isolate volume, account history, session state, endpoint compatibility or network causes.
@@ -35,7 +81,7 @@ The temporary diagnostic profile was closed and deleted through the supported CL
 5. Session interactions: `session-humanizer.cjs`, runtime and Voyager reader. All actions stay cancellable and bounded. Identity/followers/location gates retain their dependency order; activity/contact reads cannot be shuffled ahead of those gates. No message, connection, follow, reaction or form submission is authorized.
 6. Dashboard, documentation and validation: existing AliasMode account controls, focused fixtures, full engine/CRM checks, types, lint, build and private-tracing check. Replay all 50 records after each phase and report every delta.
 
-## Current verification
+## Original session-controls verification
 
 Phase 0 preserves 50 decided CRM records, reasons, stored evidence and replay assessments. All actual accounts remain paused and both existing account holds remain in place. A detector-site pass is not a licence to clear a LinkedIn hold. Proxy configuration is authorized; purchase and paid usage are not.
 
@@ -55,7 +101,7 @@ Network preflight compares three browser-routed observations against the configu
 
 After manual member verification, the first successful configured network preflight records the observed browser baseline. Every baseline and comparison uses the same secure BrowserScan origin: about:blank can omit secure-context fields, and different origins can expose different profile fingerprints. An unavailable consistent context stops the check rather than creating a false drift report. Explicit Capture/Approve identity also exists for reviewed changes. A later observed hash change creates a persistent hold. The hash covers observed UA, platform, screen, timezone, locale, cores, memory, WebGL vendor/renderer, and the declared profile/configuration identity. It does not prove that all possible browser signals are unchanged or that two profiles are unlinkable.
 
-The detector runner reads only the configured six public sites with bounded requests and result waits. Landing pages, HTTP errors and unsupported/missing results remain **UNKNOWN**, never a synthetic pass. Current sites do not share a stable machine-readable verdict, so reports can contain UNKNOWN even when individual visible JS checks look normal. On the user's subsequent explicit instruction, an administrator may inspect the saved report and approve its unclear checks. This is recorded as **HUMAN_APPROVED**, preserving the original UNKNOWN result, report ID and approval time. A failed check, saved LinkedIn hold, identity drift, changed configuration, stale report or pending diagnostic prevents approval. Approval never starts processing or clears a hold. The dashboard offers a separate, explicit Start action after prerequisites are satisfied.
+The current detector runner uses seven actual test/TLS endpoints and the direct-signal contract documented above. Required direct signals and TLS coherence must be readable; optional vendor UI results are recorded separately. Confirmed direct or vendor failures determine FAIL and cannot be manually overridden. Only an exact current overall UNKNOWN report can receive HUMAN_APPROVED, preserving its report ID and original verdict. Holds, stale configuration, identity drift and pending commands still prevent approval. Approval never starts processing or clears a hold. The old six-site/shared-JSON behaviour and comparison below are historical.
 
 Rendered warmup visits reserve the same daily/spacing allowance as profile-data reads and release the CRM job unchanged. Visits are recorded by the PostgreSQL local day; no Voyager qualification or public research is performed during a warmup visit. Four distinct observed warmup days and elapsed days are required by default. The visit list stays bounded and prevents repeatedly visiting the same first queued lead that day. An empty queue cannot manufacture warmup progress.
 
@@ -95,7 +141,7 @@ LinkedIn 401/403/429/999 and recognized account notices retain their stop behavi
 
 Offline browser fixtures intercept every request. They cover visible CDP operation, persistence of the requested mode, observed identity drift, safe pointer/scroll actions, warmup without Voyager/qualification, blocked admission, atomic ramp/spacing reservations, stale/expired owners, duplicate proxy bindings and explicit review of only a current unclear report. Frozen qualification evidence remains independent of these session controls. Live authenticated LinkedIn qualification and proxy-route validation remain unverified; no restriction-prevention or throughput improvement is claimed.
 
-## Final validation and rollout
+## Original session-controls validation and rollout
 
 Phase 3 adds `src/components/AccountSessionControls.tsx`, integrates it into `src/components/AliasModeAccounts.tsx`, and exposes the report/approval operations through the existing local-admin/same-origin `src/app/api/aliasmode/route.ts`. The approval checkbox resets when the report ID or configuration revision changes. Desktop (1280 px) and mobile (390 px) layouts were inspected without saving account settings, requesting browser checks or enabling processing. Current setup/hold states keep Start disabled. The temporary viewport override was reset.
 
@@ -117,7 +163,7 @@ The first production build failed resolving Fira Code's Google-font URLs (`next/
 
 The old idle agent was stopped gracefully after confirming no enabled processing or pending manual/diagnostic commands, then restarted hidden using the current source. PostgreSQL and the official AliasMode roster confirm that the two original profiles remain closed. Proxy purchase/configuration and authenticated LinkedIn trials were not performed. No account was automatically approved, warmed up, qualified or resumed. No new environment variable or runtime library was introduced.
 
-## Engine/mode comparison
+## Previous runner comparison (superseded)
 
 New blank profiles were tested through the production CLI/CDP adapter and isolated PostgreSQL leases. No LinkedIn profile was signed in or visited. Both engines exposed webdriver=false, a normal Chrome user agent, window.chrome and five plugins in both modes. All four batteries remained UNKNOWN: root landing pages/missing machine-readable verdicts and Antoine Vastel HTTP 502 prevented a complete CDP/TLS result. This does not justify selecting CloakBrowser or identify a restriction cause. AliasMode Chromium remains the default; no existing profile engine was changed.
 

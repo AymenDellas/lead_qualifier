@@ -17,7 +17,7 @@ async function probe(page,{checkCDP=false}={}){
   let gl,debug;try{gl=document.createElement('canvas').getContext('webgl');debug=gl?.getExtension('WEBGL_debug_renderer_info');}catch{errors.webgl='unavailable';}
   const p={origin:location.origin,secureContext:isSecureContext,
    webdriver:read('webdriver',()=>navigator.webdriver),userAgent:read('userAgent',()=>navigator.userAgent),platform:read('platform',()=>navigator.platform),
-   chrome:read('chrome',()=>typeof window.chrome),plugins:read('plugins',()=>navigator.plugins.length),
+   chrome:read('chrome',()=>window.chrome===null?'null':typeof window.chrome),plugins:read('plugins',()=>navigator.plugins.length),
    screen:read('screen',()=>({width:screen.width,height:screen.height})),timezone:read('timezone',()=>Intl.DateTimeFormat().resolvedOptions().timeZone),locale:read('locale',()=>navigator.language),
    hardwareConcurrency:read('hardwareConcurrency',()=>navigator.hardwareConcurrency),deviceMemory:read('deviceMemory',()=>navigator.deviceMemory),
    webglVendor:read('webglVendor',()=>debug?gl.getParameter(debug.UNMASKED_VENDOR_WEBGL):null),webglRenderer:read('webglRenderer',()=>debug?gl.getParameter(debug.UNMASKED_RENDERER_WEBGL):null),
@@ -60,7 +60,10 @@ function assessProbe(p={}){
 function endpointMatches(actual,expected){try{const a=new URL(actual),b=new URL(expected);return a.origin===b.origin&&a.pathname.replace(/\/$/,'')===b.pathname.replace(/\/$/,'')&&!a.search;}catch{return false;}}
 function assessSite({url,status,finalUrl=url,probe:identity,external=null,error=''}){
  const checks=assessProbe(identity),measured=verdict(checks);
- if(measured==='FAIL'||external?.verdict==='FAIL')return {url,checks,verdict:'FAIL',reason:external?.verdict==='FAIL'?'The test site reported a failure.':'Direct checks failed: '+checks.filter(c=>c.verdict==='FAIL').map(c=>c.name).join(', ')+'.'};
+ if(measured==='FAIL'||external?.verdict==='FAIL'){
+  const flagged=[...Object.entries(external?.flags||{}).filter(([k,v])=>v===true&&k!=='isBot').map(([k])=>k),...Object.entries(external?.checks||{}).filter(([,v])=>v==='FAIL').map(([k])=>k),...(external?.cells||[]).filter(c=>c.failed).map(c=>c.id)].join(', ').slice(0,400);
+  return {url,checks,verdict:'FAIL',reason:external?.verdict==='FAIL'?'The test site reported failure'+(flagged?': '+flagged:external.value?': '+external.value:'')+'.':'Direct checks failed: '+checks.filter(c=>c.verdict==='FAIL').map(c=>c.name).join(', ')+'.'};
+ }
  if(!URLS.includes(url)||!endpointMatches(finalUrl,url)||error||status!==200)return {url,checks,verdict:'UNKNOWN',reason:error||'The actual test endpoint was unavailable or redirected (HTTP '+status+').'};
  if(measured==='UNKNOWN')return {url,checks,verdict:'UNKNOWN',reason:'Cannot read direct signals: '+checks.filter(c=>c.verdict==='UNKNOWN').map(c=>c.name).join(', ')+'.'};
  return {url,checks,verdict:'PASS',reason:'All seven direct browser checks passed.'+(external?.verdict==='PASS'?' The site also reported a pass.':' The site-specific verdict is unavailable; direct measurements are separate.')};
@@ -70,7 +73,7 @@ function siteResult(kind){
  try{
   if(kind==='device'){
    const data=JSON.parse((document.querySelector('#jsonResult')?.textContent||'').slice(0,32768));if(typeof data.isBot!=='boolean')return null;
-   const flags=Object.fromEntries(Object.entries(data).filter(([k,v])=>/^(?:is|has)/.test(k)&&typeof v==='boolean').slice(0,40));
+   const flags=Object.fromEntries(Object.entries({...data.details,...data.checks,...data}).filter(([k,v])=>/^(?:is|has)/.test(k)&&typeof v==='boolean').slice(0,40));
    const failed=data.isBot||['hasBotUserAgent','hasWebdriverTrue','isHeadlessChrome','isAutomatedWithCDP','isAutomatedWithCDPInWebWorker'].some(k=>flags[k]===true);
    return {verdict:failed?'FAIL':'PASS',source:'#jsonResult',flags};
   }
@@ -96,9 +99,10 @@ function siteResult(kind){
  return null;
 }
 function assessTLS(data,p={}){
+ p??={};
  const md5=s=>require('node:crypto').createHash('md5').update(s).digest('hex');
  const hasJA3=typeof data?.ja3_hash==='string'&&/^[a-f0-9]{32}$/i.test(data.ja3_hash)&&typeof data.ja3_text==='string'&&/^\d+,[\d-]+,[\d-]*,[\d-]*,[\d-]*$/.test(data.ja3_text);
- const hasJA4=typeof data?.ja4==='string'&&/^[tq][\da-z]{9}_[a-f0-9]{12}_[a-f0-9]{12}$/i.test(data.ja4);
+ const hasJA4=typeof data?.ja4==='string'&&/^[tq](?:1[0-3]|00)[di]\d{4}[a-z0-9]{2}_[a-f0-9]{12}_[a-f0-9]{12}$/i.test(data.ja4);
  const hasUA=typeof data?.user_agent==='string'&&data.user_agent.length>0&&typeof p.userAgent==='string'&&p.userAgent.length>0;
  const checks=[result('ja3',hasJA3,hasJA3&&md5(data.ja3_text)===data.ja3_hash?.toLowerCase(),data?.ja3_hash),result('ja4',hasJA4,true,data?.ja4),result('httpUserAgent',hasUA,hasUA&&data.user_agent===p.userAgent,data?.user_agent)];
  return {verdict:verdict(checks),checks,referenceVerdict:'NOT_EVALUATED',reason:'Checks cover fingerprint availability/integrity and HTTP/browser UA agreement. No reference Chrome TLS fingerprint was supplied.'};
@@ -108,24 +112,31 @@ async function run(page,{assertActive=async()=>{},now=Date.now,urls=URLS,resultT
  if(!Number.isInteger(resultTimeoutMs)||resultTimeoutMs<1||resultTimeoutMs>10000)throw Error('Invalid detector result deadline.');
  const sites=[],start=now();
  for(const {url,kind}of BATTERY){
-  await assertActive();const at=now();let e={url,kind};
+  await assertActive();const at=now();let e={url,kind},stage='navigation';
   try{
    const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:15000});await assertActive();
-   const status=response?.status(),finalUrl=page.url();
+   const status=response?.status(),finalUrl=page.url();e={...e,status,finalUrl};
    if(kind==='tls'){
-    const data=await page.evaluate(()=>{const t=document.body?.innerText||'';if(t.length>65536)return null;try{const d=JSON.parse(t);return Object.fromEntries(['user_agent','ja4','ja4_r','ja4_o','ja4_ro','ja3_hash','ja3_text','ja3n_hash','ja3n_text','akamai_hash'].filter(k=>typeof d[k]==='string').map(k=>[k,d[k].slice(0,4096)]));}catch{return null;}});
-    const identity=await probe(page),assessment=assessTLS(data,identity);e={...e,status,finalUrl,tls:data,...assessment};
+    stage='tls-json';
+    const data=await page.evaluate(()=>{const t=document.body?.innerText||'';if(t.length>65536)return null;try{const d=JSON.parse(t);return Object.fromEntries(['user_agent','ja4','ja4_r','ja4_o','ja4_ro','ja3_hash','ja3_text','ja3n_hash','ja3n_text','akamai_hash'].filter(k=>typeof d[k]==='string'&&d[k].length<=4096).map(k=>[k,d[k]]));}catch{return null;}});
+    e.tls=data;stage='tls-browser-ua';const identity=await probe(page),assessment=assessTLS(data,identity);e={...e,probe:identity,...assessment};
     if(status!==200||!endpointMatches(finalUrl,url))e={...e,verdict:'UNKNOWN',reason:'The browser-routed TLS JSON endpoint was unavailable (HTTP '+status+').'};
    }else{
-    let external=null;
+    let external=null;stage='site-result';
     if(status===200&&endpointMatches(finalUrl,url)&&['device','fingerprint','sannysoft','incolumitas'].includes(kind)){
      // Event-driven DOM observation, not a fixed rendering/throttle sleep.
      try{const h=await page.waitForFunction(siteResult,{timeout:resultTimeoutMs,polling:'mutation'},kind);try{external=await h.jsonValue();}finally{await h.dispose();}}catch{/* Direct measurements remain available if the site UI is unsupported/slow. */}
     }
-    await assertActive();const identity=await probe(page,{checkCDP:true}),captured=await page.evaluate(()=>({title:document.title,text:(document.body?.innerText||'').slice(0,8000)}));
-    e={...e,status,finalUrl,probe:identity,external:external||{verdict:'UNKNOWN',reason:'No completed supported site result; direct checks are independent.'},...captured};e={...e,...assessSite(e)};
+    e.external=external||{verdict:'UNKNOWN',reason:'No completed supported site result; direct checks are independent.'};
+    await assertActive();stage='direct-probe';e.probe=await probe(page,{checkCDP:true});e={...e,...assessSite(e)};
+    // Raw page text is supporting evidence, not a required detector signal.
+    // Failure to capture it cannot erase a completed PASS or confirmed FAIL.
+    try{Object.assign(e,await page.evaluate(()=>({title:document.title,text:(document.body?.innerText||'').slice(0,8000)})));}catch{e.rawCaptureError='Optional page text unavailable; direct/site results retained.';}
    }
-  }catch(error){e={...e,verdict:'UNKNOWN',reason:'Cannot read detector signals: '+String(error.name||'Detector error'),error:String(error.name||'Detector error')};}
+  }catch(error){
+   const known=kind==='tls'?assessTLS(e.tls,e.probe):assessSite(e),message=String(error.message||error.name||'Detector error').replace(/wss?:\/\/\S+/gi,'[CDP endpoint]').slice(0,600);
+   e={...e,...known,verdict:known.verdict==='FAIL'?'FAIL':'UNKNOWN',reason:known.verdict==='FAIL'?known.reason:'Cannot read '+stage+': '+message,error:String(error.name||'Detector error'),failureStage:stage};
+  }
   // Pause/hold/lease loss aborts, never permits subsequent navigation as UNKNOWN.
   await assertActive();sites.push({...e,durationMs:now()-at});
  }
