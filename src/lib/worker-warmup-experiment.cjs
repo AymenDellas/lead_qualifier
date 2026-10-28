@@ -2,6 +2,7 @@
 // One explicitly authorized experiment, not a general processing-policy bypass.
 const {randomUUID,randomInt}=require('node:crypto');
 const ID='john-rendered-warmup-20261028-20',PROFILE='k1ierfk4',COUNT=20,COMMAND='warmup-experiment';
+const MIN_SESSION_MS=20*60*1000,MAX_SESSION_MS=40*60*1000;
 const terminal=state=>!['WARMUP_PREPARED','WARMUP_AUTHORIZED','WARMUP_RUNNING'].includes(state);
 const problem=(reason,code='WARMUP_STOPPED')=>Object.assign(Error(reason),{code});
 async function load(pool){return (await pool.query('SELECT * FROM compel_engine_batches WHERE id=$1',[ID])).rows[0]||null;}
@@ -51,7 +52,7 @@ async function cancel(pool,reason='The operator stopped the warmup experiment.')
  await pool.query("UPDATE compel_linkedin_accounts SET session_evidence=session_evidence-'command',changed_at=clock_timestamp() WHERE id=$1 AND session_evidence->>'command'=$2 AND session_evidence->>'warmupExperimentId'=$3",[b.account_id,COMMAND,ID]);
  await pool.query("SELECT pg_notify('compel_engine_wake','')");return {...b,cancelReason:reason};
 }
-function create({pool,accountId,owner,core,guard,now=Date.now,rendered=require('./linkedin-browser-page.cjs'),human=require('./session-humanizer.cjs'),probe=require('./stealth-self-test.cjs').probe}){
+function create({pool,accountId,owner,core,guard,now=Date.now,sleep,random=randomInt,rendered=require('./linkedin-browser-page.cjs'),human=require('./session-humanizer.cjs'),probe=require('./stealth-self-test.cjs').probe}){
  const policy=require('./account-session-policy.cjs'),session=require('./linkedin-session-policy.cjs');
  let verifiedPage=null,claimed=null,traffic={total:0,nativeVoyager:0,security:[],pages:[],serverErrors:[],requestFailures:[]},watched=null,identity=null,lastAction='admission',lastNavigation=null;
  const route=value=>{try{const u=new URL(value);return /(^|\.)(linkedin\.com|licdn\.com)$/.test(u.hostname)?{host:u.hostname,path:u.pathname.slice(0,240)}:null;}catch{return null;}};
@@ -90,6 +91,15 @@ function create({pool,accountId,owner,core,guard,now=Date.now,rendered=require('
  function confirmDestination(page,url){
   require('./linkedin-page-health.cjs').assertProfile(page.url(),url,lastNavigation?.status||0);
  }
+ async function finishSession(page,assertActive,inspect,reason){
+  // A successful session returns through the feed. Error/hold paths call stop
+  // directly: cancellation never authorizes a final browser action.
+  await assertActive();lastAction='session_feed_return';const response=await human.feed(page,{assertActive});
+  await inspect(response);await assertActive();if(!session.isFeed(page.url()))throw problem('The final session page was not the rendered feed.');
+  const b=await assertActive(),plan=b.report.sessionPlan,endedAt=now(),durationMs=plan?Math.max(0,endedAt-Date.parse(plan.startedAt)):null;
+  await write({sessionSummary:{endedAt:new Date(endedAt).toISOString(),durationMs,targetDurationMs:plan?.targetDurationMs??null,targetMet:durationMs!==null&&durationMs>=MIN_SESSION_MS&&durationMs<=MAX_SESSION_MS,reason},traffic});
+  return stop(reason,'WARMUP_COMPLETE');
+ }
  async function step(a,{open,assertSignal,onSignal,inspect,adopt=async()=>{}}){
   try{
    lastAction='admission';
@@ -98,8 +108,12 @@ function create({pool,accountId,owner,core,guard,now=Date.now,rendered=require('
    if(b.report.inFlight)throw problem('A previous navigation was interrupted. Its checkpoint is retained; no profile is reread.');
    const assertActive=async(initial=false)=>{await assertSignal();return active(a,initial);};
    await assertActive(true);lastAction='browser_open';const surface=await open(a.launch_mode==='headless'),page=surface.page;observe(page);
+   if(!b.report.sessionPlan){
+    const startedAt=now(),targetDurationMs=random(MIN_SESSION_MS,MAX_SESSION_MS+1);
+    await write({sessionPlan:{startedAt:new Date(startedAt).toISOString(),targetDurationMs,sessionEnd:new Date(startedAt+targetDurationMs).toISOString(),maximumEnd:new Date(startedAt+MAX_SESSION_MS).toISOString()}});b=await assertActive(true);
+   }
    if(verifiedPage!==page){
-    await assertActive(true);lastAction='feed_navigation';const response=await page.goto('https://www.linkedin.com/feed/',{waitUntil:'domcontentloaded',timeout:30000});await assertActive(true);lastAction='feed_inspection';await inspect(response);
+    await assertActive(true);lastAction='feed_navigation';const response=await human.feed(page,{assertActive:()=>assertActive(true)});await assertActive(true);lastAction='feed_inspection';await inspect(response);
     lastAction='identity_verification';
     const found=await rendered.readSignedInIdentity(page,{leaveMenuOpen:true,beforeCheck:()=>assertActive(true)});
     await assertActive(true);await inspect();if(!session.isFeed(page.url())||!found||!a.confirmed_identity||!session.sameMember(a.confirmed_identity,found))throw Object.assign(problem('The rendered feed did not confirm John’s saved identity.','ACCOUNT_MISMATCH'),{failure:{stage:'linkedin',code:'ACCOUNT_MISMATCH',reason:'The rendered feed did not confirm John’s saved identity.',retryable:false}});
@@ -107,29 +121,37 @@ function create({pool,accountId,owner,core,guard,now=Date.now,rendered=require('
     try{await assertSignal();}catch(e){if(e.failure?.stage==='linkedin')await core.pauseProcessing(pool,accountId,e.failure.reason,true,owner);throw e;}
     await assertActive();identity=found;await adopt();
     const current=await core.readRuntimeAccount(pool,accountId);if(current.session_evidence?.fingerprint&&guard&&!await guard.verify(current,page))throw problem('Browser identity drift requires review.','ACCOUNT_REVIEW');
-    if(page.url()!=='https://www.linkedin.com/feed/'){await page.goto('https://www.linkedin.com/feed/',{waitUntil:'domcontentloaded',timeout:30000});await assertActive();await inspect();}
+    if(page.url()!=='https://www.linkedin.com/feed/'){const response=await human.feed(page,{assertActive});await assertActive();await inspect(response);}
     lastAction='identity_baseline';const fingerprint=policy.fingerprint(await probe(page),{profileId:a.aliasmode_profile_id,engine:a.engine,mode:a.launch_mode,proxyId:a.proxy_id,revision:Number(a.session_revision)});
     if(b.report.fingerprint&&b.report.fingerprint.hash!==fingerprint.hash)throw Object.assign(problem('Browser fingerprint changed during the experiment.','FINGERPRINT_DRIFT'),{failure:{stage:'linkedin',code:'FINGERPRINT_DRIFT',reason:'Browser fingerprint changed during the experiment.',retryable:false}});
     await write({identity:found,fingerprint,traffic});verifiedPage=page;
+    lastAction='feed_dwell';const feedDwell=await human.dwell(page,{assertActive,minMs:20000,maxMs:60000,minScrolls:1,maxScrolls:2,now,sleep,random});
+    await inspect();await assertActive();await write({feedDwell,traffic});
    }
-   lastAction='profile_claim';b=await assertActive();if(b.report.attempts.length>=COUNT)return stop('Twenty authorized rendered profile starts completed.','WARMUP_COMPLETE');
+   lastAction='profile_claim';b=await assertActive();
+   if(b.report.attempts.length>=COUNT)return await finishSession(page,assertActive,inspect,'Twenty authorized rendered profile starts completed; normal qualification remains paused.');
+   if(now()>=Date.parse(b.report.sessionPlan.sessionEnd)||now()+120000>=Date.parse(b.report.sessionPlan.maximumEnd))return await finishSession(page,assertActive,inspect,'The rendered session reached its target duration; normal qualification remains paused.');
    const url=b.profiles[b.report.attempts.length],jobId='warmup_'+randomUUID(),c=await pool.connect();
    try{await c.query('BEGIN');await c.query('SELECT id FROM compel_linkedin_accounts WHERE id=$1 FOR UPDATE',[accountId]);b=await authority(c,{accountId,owner,version:a.control_version,lock:true});
     const inserted=await c.query(`INSERT INTO compel_worker_jobs(id,profile_key,payload,status,account_id,owner,lease_until,checkpoint) VALUES($1,$2,$3::jsonb,'processing',$4,$5,NOW()+interval '15 minutes',$6::jsonb) ON CONFLICT DO NOTHING RETURNING id`,[jobId,url,JSON.stringify({jobId,linkedinUrl:url,warmupExperimentId:ID,nativePostProcess:false}),accountId,owner,JSON.stringify({warmupExperimentId:ID,url,stage:'RESERVING'})]);
     if(!inserted.rowCount)throw problem('Another job owns the selected canonical profile; duplicate protection stopped the test.');
     await c.query('UPDATE compel_engine_batches SET job_ids=array_append(job_ids,$2),report=report||$3::jsonb WHERE id=$1',[ID,jobId,JSON.stringify({inFlight:{url,jobId,stage:'RESERVING'}})]);await c.query('COMMIT');claimed={url,jobId};
    }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
-   lastAction='profile_reservation';const reservation=await core.reserveProfile(pool,{accountId,owner,profileUrl:url,jobId,version:a.control_version,warmupExperimentId:ID});
-   if(reservation.paced){await releaseJob();await write({inFlight:null});return {wait:true,at:reservation.resumeAt,code:'PROFILE_INTERVAL',reason:'Waiting for the account’s normal profile interval.'};}
+   lastAction='profile_reservation';const reservation=await core.reserveProfile(pool,{accountId,owner,profileUrl:url,jobId,version:a.control_version,warmupExperimentId:ID,intervalMs:human.profileIntervalMs()});
+   if(reservation.paced){await releaseJob();await write({inFlight:null});const at=new Date(Math.min(new Date(reservation.resumeAt).getTime(),Date.parse(b.report.sessionPlan.sessionEnd)));return {wait:true,at,code:'PROFILE_INTERVAL',reason:'Waiting for the account’s reserved profile interval.'};}
    if(reservation.limited||reservation.stopped)throw problem(reservation.reason||'The normal daily profile ceiling stopped the experiment.');
-   await assertActive();lastAction='profile_navigation';const response=await human.visit(page,url,{assertActive:()=>assertActive()});
+   let navigation={method:null,referer:null,secFetchSite:null,headerSource:null,httpNavigation:null};
+   await assertActive();lastAction='profile_navigation';const response=await human.visit(page,url,{assertActive:()=>assertActive(),onNavigationEvidence:async value=>{navigation=value;await write({inFlight:{url,jobId,stage:'NAVIGATED',navigation}});}});
    lastAction='profile_inspection';await inspect(response);await assertActive();confirmDestination(page,url);
-   lastAction='profile_interaction';await human.interact(page,{assertActive:()=>assertActive()});
+   lastAction='profile_settle';const settle=await human.settle(page,{assertActive:()=>assertActive(),now,sleep});await write({inFlight:{url,jobId,stage:'SETTLED',navigation,settle}});await inspect();await assertActive();confirmDestination(page,url);
+   lastAction='profile_dwell';const dwell=await human.dwell(page,{assertActive:()=>assertActive(),minMs:30000,maxMs:90000,minScrolls:2,maxScrolls:4,now,sleep,random});await write({inFlight:{url,jobId,stage:'DWELLED',navigation,settle,dwell}});
    lastAction='profile_final_inspection';await inspect();await assertActive();confirmDestination(page,url);
-   b=await active(a);const visits=[...b.report.visits,{url,jobId,at:new Date(now()).toISOString()}];
+   b=await active(a);const visits=[...b.report.visits,{url,jobId,at:new Date(now()).toISOString(),navigationMethod:navigation.method,referer:navigation.referer,secFetchSite:navigation.secFetchSite,headerSource:navigation.headerSource,httpNavigation:navigation.httpNavigation,...dwell,settle,intervalMs:reservation.intervalMs}];
    lastAction='visit_save';await write({visits,inFlight:null,traffic,lastVisited:url,lastAction,finalPage:currentRoute(),lastNavigation});await releaseJob();await core.recordLinkedInChecks(pool,accountId,owner,{profile_page:1});
-   if(visits.length===COUNT)return stop('Twenty authorized rendered visits completed; normal qualification remains paused.','WARMUP_COMPLETE');
-   return {wait:true,at:reservation.nextProfileAt,code:'PROFILE_INTERVAL',visits:visits.length,identity,reason:`Rendered warmup ${visits.length}/${COUNT}; no qualification API reads or CRM decisions.`};
+   if(visits.length===COUNT)return await finishSession(page,assertActive,inspect,'Twenty authorized rendered visits completed; normal qualification remains paused.');
+   if(now()>=Date.parse(b.report.sessionPlan.sessionEnd))return await finishSession(page,assertActive,inspect,'The rendered session reached its target duration; normal qualification remains paused.');
+   const nextAt=new Date(Math.min(new Date(reservation.nextProfileAt).getTime(),Date.parse(b.report.sessionPlan.sessionEnd)));
+   return {wait:true,at:nextAt,code:'PROFILE_INTERVAL',visits:visits.length,identity,reason:`Rendered warmup ${visits.length}/${COUNT}; no qualification API reads or CRM decisions.`};
   }catch(error){
    // A freshly observed signal is never reconciled as the saved pre-test hold.
    if(error.failure?.stage==='linkedin')await onSignal(error.failure);

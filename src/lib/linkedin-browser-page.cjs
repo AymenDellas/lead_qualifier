@@ -80,7 +80,7 @@ async function firstControl(page, selector, match=()=>true) {
  for(const el of elements) {
   try {
    if(selected){await el.dispose();continue;}
-   const info=await el.evaluate(n=>({href:n.href||'',label:n.getAttribute('aria-label')||n.textContent||'',visible:!!n.getClientRects().length,disabled:!!n.disabled||n.getAttribute('aria-disabled')==='true'}));
+   const info=await el.evaluate(n=>({href:n.href||'',target:n.target||n.ownerDocument?.querySelector('base[target]')?.target||'',label:n.getAttribute('aria-label')||n.textContent||'',visible:!!n.getClientRects().length,disabled:!!n.disabled||n.getAttribute('aria-disabled')==='true'}));
    if(!selected&&info.visible&&!info.disabled&&match(info)) selected=el;
    else await el.dispose();
   }catch(error){await el.dispose().catch(()=>{});if(!detachedControl(error)){await selected?.dispose().catch(()=>{});throw error;}}
@@ -119,14 +119,71 @@ async function clickControl(page, selector, match, kind, options={}) {
  }
  return false;
 }
+async function navigateProfile(page,person,{assertActive=async()=>{},onNavigationEvidence,timeout=45000}={}) {
+ const expected=profileUrl(person);
+ if(!expected)throw problem('PROFILE_IDENTITY','The requested LinkedIn profile URL is invalid.');
+ await assertActive();
+ // Observe Chromium's actual document headers. Never set a Referer or spoof
+ // Fetch Metadata. ExtraInfo includes headers absent from HTTPRequest.headers().
+ let client,observed=null,method='location.assign';
+ const pending=new Map(),headers=new Map();
+ const safeReferer=value=>{try{const u=new URL(value);return u.origin+u.pathname;}catch{return null;}};
+ const collect=(id)=>{
+  if(!pending.has(id)||!headers.has(id))return;
+  const values=Object.fromEntries(Object.entries(headers.get(id)).map(([k,v])=>[k.toLowerCase(),String(v)]));
+  observed={referer:safeReferer(values.referer),secFetchSite:values['sec-fetch-site']||null,headerSource:'Network.requestWillBeSentExtraInfo'};
+ };
+ try{
+  if(page.target?.().createCDPSession){
+   client=await page.target().createCDPSession();
+   client.on('Network.requestWillBeSent',event=>{
+    if(event.type!=='Document'||profileUrl(event.request.url)!==expected)return;
+    pending.set(event.requestId,true);collect(event.requestId);
+   });
+   client.on('Network.requestWillBeSentExtraInfo',event=>{
+    if(headers.size>=40)headers.delete(headers.keys().next().value);
+    headers.set(event.requestId,event.headers);collect(event.requestId);
+   });
+   await client.send('Network.enable');
+  }
+  const el=await firstControl(page,'a[href]',info=>{
+   try{const u=new URL(info.href);return (!info.target||info.target==='_self')&&u.origin==='https://www.linkedin.com'&&/^\/in\/[^/]+\/?$/.test(u.pathname)&&profileUrl(u.href)===expected;}catch{return false;}
+  });
+  let response;
+  try{
+   await assertActive();
+   // Register before input: a rendered link may perform a full document load
+   // or LinkedIn's native same-document routing. Both retain browser semantics.
+   const navigation=page.waitForNavigation({waitUntil:'load',timeout});
+   navigation.catch(()=>{});
+   if(el){method='rendered-link';await pressControl(page,el);}
+   else await page.evaluate(url=>location.assign(url),expected);
+   response=await navigation;
+  }finally{await el?.dispose().catch(()=>{});}
+  await assertActive();
+  await page.waitForFunction(()=>document.readyState==='complete',{timeout,polling:100});
+  // The lifecycle response may precede ExtraInfo delivery. Observe a bounded
+  // window; a same-document link has no HTTP navigation and no new headers.
+  if(response&&client&&!observed){
+   const deadline=Date.now()+1000;
+   while(!observed&&Date.now()<deadline){await assertActive();await new Promise(resolve=>setTimeout(resolve,25));}
+  }
+  if(!observed&&response){
+   const values=response.request?.().headers?.()||{};
+   observed={referer:safeReferer(values.referer),secFetchSite:values['sec-fetch-site']||null,headerSource:'HTTPRequest.headers'};
+  }
+  await onNavigationEvidence?.({method,httpNavigation:!!response,referer:observed?.referer||null,secFetchSite:observed?.secFetchSite||null,headerSource:observed?.headerSource||null,refererQueryOmitted:true});
+  return response;
+ }finally{await client?.detach().catch(()=>{});}
+}
 async function openProfile(page, person, options={}) {
  const expected=profileUrl(person);
  if(!expected) throw problem('PROFILE_IDENTITY','The requested LinkedIn profile URL is invalid.');
  await options.beforeCheck?.('profile_page');
- const response=await page.goto(expected,{waitUntil:'domcontentloaded',timeout:45000});
+ const response=await navigateProfile(page,expected,{assertActive:()=>options.beforeNavigationCheck?.(),onNavigationEvidence:options.onNavigationEvidence});
  let firstState=await inspected(page,options,response);
  if([404,410].includes(response?.status?.()))throw problem('PROFILE_UNAVAILABLE','The queued profile is no longer available. No profile facts were assigned.');
- // Navigation's DOMContentLoaded can precede the rendered member card. Use
+ // Navigation's load event can precede the rendered member card. Use
  // the SAME identity check for readiness and extraction, including visibility,
  // rather than waking on a heading whose photo/self link is still hydrating.
  // This only observes the current page: no navigation retry or extra request.
@@ -521,4 +578,4 @@ async function captureProfile(page,person,options={}) {
  return finish(result);
  }finally{unwatch();}
 }
-module.exports={snapshot,inspected,firstControl,controlPoint,pressControl,clickControl,signedInIdentity,readSignedInIdentity,signInDiagnostics,profileDiagnostics,parseProfile,parseContact,openProfile,readActivity,captureProfile,externalUrl};
+module.exports={snapshot,inspected,firstControl,controlPoint,pressControl,clickControl,navigateProfile,signedInIdentity,readSignedInIdentity,signInDiagnostics,profileDiagnostics,parseProfile,parseContact,openProfile,readActivity,captureProfile,externalUrl};

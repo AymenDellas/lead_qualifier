@@ -2,26 +2,59 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),core=require('../../src/lib/linkedin-workers.cjs'),alias=require('../../src/lib/aliasmode-store.cjs'),exp=require('../../src/lib/worker-warmup-experiment.cjs'),{database}=require('./db-fixture.cjs');
 const urls=Array.from({length:20},(_,i)=>`https://www.linkedin.com/in/authorized-warmup-${i}/`),identity={name:'John Dilah',profileUrl:'https://www.linkedin.com/in/john-fixture/'},oldHold='LinkedIn reported an access restriction (HTTP 403). Saved pre-test hold.';
 const fingerprint={origin:'https://www.linkedin.com',userAgent:'Fixture Chrome',platform:'Win32',screen:{width:1920,height:1080},timezone:'UTC',locale:'en-GB',hardwareConcurrency:4,deviceMemory:8,webglVendor:'Fixture GPU',webglRenderer:'Fixture GPU renderer'};
-async function fixture(){const db=await database(),pool=db.pool;await core.ensure(pool);await alias.ensure(pool);const id=await alias.importProfile(pool,{profileId:exp.PROFILE,name:'John',expectedMemberName:identity.name});await pool.query('UPDATE compel_linkedin_accounts SET connected_at=NOW(),confirmed_identity=$2::jsonb,attention_reason=$3 WHERE id=$1',[id,JSON.stringify(identity),oldHold]);await exp.prepare(pool,urls);await exp.start(pool);await pool.query("UPDATE compel_engine_batches SET report=report||jsonb_build_object('notBefore',clock_timestamp()-interval '1 second') WHERE id=$1",[exp.ID]);assert.equal(await core.acquireSession(pool,id,'owner'),true);return {...db,id,pool};}
-function fakePage(){let url='about:blank';return {url:()=>url,on:()=>{},goto:async u=>{url=u;}};}
-function harness(f,{found=identity,signal,probe=async()=>fingerprint,visitError}={}){const page=fakePage(),seen=[],signalled=[];
- const runner=exp.create({pool:f.pool,accountId:f.id,owner:'owner',core,rendered:{readSignedInIdentity:async()=>found,captureProfile:()=>assert.fail('No qualification reads')},human:{visit:async(p,u,{assertActive})=>{await assertActive();if(visitError)throw visitError;seen.push(u);await p.goto(u);},interact:async()=>{}},probe});
+async function fixture(){const db=await database(),pool=db.pool;await core.ensure(pool);await alias.ensure(pool);const id=await alias.importProfile(pool,{profileId:exp.PROFILE,name:'John',expectedMemberName:identity.name});await pool.query('UPDATE compel_linkedin_accounts SET connected_at=NOW(),confirmed_identity=$2::jsonb,attention_reason=$3 WHERE id=$1',[id,JSON.stringify(identity),oldHold]);await exp.prepare(pool,urls);await exp.start(pool);await pool.query("UPDATE compel_engine_batches SET report=report||jsonb_build_object('notBefore',clock_timestamp()-interval '1 second') WHERE id=$1",[exp.ID]);assert.equal(await core.acquireSession(pool,id,'owner'),true);const heartbeat=setInterval(()=>void core.heartbeat(pool,id,'owner',{status:'fixture'}).catch(()=>{}),10000);heartbeat.unref();return {...db,id,pool,close:async()=>{clearInterval(heartbeat);await db.close();}};}
+function fakePage(){let url='about:blank';const navigations=[];return {url:()=>url,on:()=>{},navigations,goto:async(u,options)=>{assert.equal(u,'https://www.linkedin.com/feed/');assert.equal(options.waitUntil,'load');url=u;navigations.push(u);},assign:async u=>{url=u;navigations.push(u);}};}
+function harness(f,{found=identity,signal,probe=async()=>fingerprint,visitError,dwellSignal,finalFeedSignal}={}){const page=fakePage(),seen=[],signalled=[];let clock=Date.now();
+ const runner=exp.create({pool:f.pool,accountId:f.id,owner:'owner',core,now:()=>clock,random:(_min,max)=>max-1,rendered:{readSignedInIdentity:async()=>found,captureProfile:()=>assert.fail('No qualification reads')},human:{
+  feed:async(p,{assertActive})=>{await assertActive();if(finalFeedSignal&&seen.length)throw finalFeedSignal;return p.goto('https://www.linkedin.com/feed/',{waitUntil:'load'});},
+  visit:async(p,u,{assertActive,onNavigationEvidence})=>{await assertActive();if(visitError)throw visitError;const referer=p.url();seen.push(u);await p.assign(u);await onNavigationEvidence({method:'location.assign',referer,secFetchSite:'same-origin',headerSource:'fixture',httpNavigation:true});},
+  settle:async()=>({readyState:'complete',settled:true,reason:'quiet',telemetryFlushConfirmed:false}),
+  dwell:async(p,{assertActive,minMs,maxMs,minScrolls,maxScrolls})=>{await assertActive();if(dwellSignal&&p.url().includes('/in/'))throw dwellSignal;const dwellMs=(minMs+maxMs)/2,scrollCount=Math.floor((minScrolls+maxScrolls)/2);clock+=dwellMs;return{dwellMs,scrollCount,targetDwellMs:dwellMs};},
+  profileIntervalMs:()=>90000,
+ },probe});
  const callbacks={open:async()=>({page}),inspect:async()=>{},assertSignal:async()=>{if(signal&&page.url().includes('/feed/'))throw signal;},onSignal:async failure=>{signalled.push(failure);await core.pauseProcessing(f.pool,f.id,failure.reason,true,'owner');}};
- return {runner,callbacks,page,seen,signalled};
+ return {runner,callbacks,page,seen,signalled,setClock:value=>{clock=value;}};
 }
 test('one-time rendered experiment performs at most 20 visits with real atomic spacing/slots, no qualification and no enabled processing intent',async()=>{
  const f=await fixture();try{
   const h=harness(f);for(let i=0;i<20;i++){
    await f.pool.query('UPDATE compel_linkedin_accounts SET next_profile_at=NULL WHERE id=$1',[f.id]);const a=await core.readRuntimeAccount(f.pool,f.id),r=await h.runner.step(a,h.callbacks);
    assert.equal(r.done,i===19?true:undefined);assert.equal((await core.readRuntimeAccount(f.pool,f.id)).processing_enabled,false);
-   const slot=(await f.pool.query('SELECT EXTRACT(EPOCH FROM(next_profile_at-clock_timestamp())) AS seconds FROM compel_linkedin_accounts WHERE id=$1',[f.id])).rows[0];assert.ok(Number(slot.seconds)>50&&Number(slot.seconds)<=150);
+   const slot=(await f.pool.query('SELECT EXTRACT(EPOCH FROM(next_profile_at-clock_timestamp())) AS seconds FROM compel_linkedin_accounts WHERE id=$1',[f.id])).rows[0];assert.ok(Number(slot.seconds)>50&&Number(slot.seconds)<=400);
   }
   const b=await exp.load(f.pool);assert.equal(b.state,'WARMUP_COMPLETE');assert.equal(b.report.visits.length,20);assert.equal(b.report.attempts.length,20);assert.deepEqual(h.seen,urls);assert.equal(b.report.scriptedQualificationRequests,0);
+  assert.equal(h.page.navigations[0],'https://www.linkedin.com/feed/');assert.equal(h.page.navigations.at(-1),'https://www.linkedin.com/feed/');assert.equal(b.report.finalPage.path,'/feed/');
+  assert.ok(b.report.feedDwell.dwellMs>=20000&&b.report.feedDwell.dwellMs<=60000);assert.equal(b.report.sessionSummary.targetMet,true);
+  for(const visit of b.report.visits){assert.equal(visit.navigationMethod,'location.assign');assert.equal(visit.secFetchSite,'same-origin');assert.ok(visit.referer);assert.ok(visit.dwellMs>=30000&&visit.dwellMs<=90000);assert.ok(visit.scrollCount>=2&&visit.scrollCount<=4);assert.equal(visit.intervalMs,90000);assert.equal(visit.settle.telemetryFlushConfirmed,false);}
   assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM compel_worker_account_profiles WHERE account_id=$1',[f.id])).rows[0].n,20);
   assert.equal((await f.pool.query("SELECT count(*)::int AS n FROM compel_worker_jobs WHERE status='cancelled' AND payload->>'warmupExperimentId'=$1",[exp.ID])).rows[0].n,20);
   const a=await core.readRuntimeAccount(f.pool,f.id);assert.equal(a.attention_reason,'');assert.ok(a.session_evidence.recoveryUntil);assert.equal(a.session_evidence.gate,null);
   await assert.rejects(exp.start(f.pool),/already active or finished/);await h.runner.step(a,h.callbacks);assert.equal(h.seen.length,20);
   assert.equal((await core.enqueue(f.pool,[urls[0]])).queuedCount,1,'warmup does not masquerade as completed qualification');
+ }finally{await f.close();}
+});
+
+test('the session target finishes on the feed without consuming another profile slot',async()=>{
+ const f=await fixture();try{
+  const h=harness(f);await h.runner.step(await core.readRuntimeAccount(f.pool,f.id),h.callbacks);const before=await exp.load(f.pool);
+  h.setClock(Date.parse(before.report.sessionPlan.sessionEnd));await h.runner.step(await core.readRuntimeAccount(f.pool,f.id),h.callbacks);
+  const after=await exp.load(f.pool);assert.equal(after.state,'WARMUP_COMPLETE');assert.equal(after.report.attempts.length,1);assert.equal(after.report.visits.length,1);assert.equal(h.page.url(),'https://www.linkedin.com/feed/');assert.equal(after.report.sessionSummary.targetMet,true);
+ }finally{await f.close();}
+});
+
+test('a fresh hold during profile dwell stops without returning to the feed',async()=>{
+ const f=await fixture();try{
+  const failure={stage:'linkedin',code:'LINKEDIN_AUTH',reason:'Fresh HTTP 401 during dwell',retryable:false},h=harness(f,{dwellSignal:Object.assign(Error(failure.reason),{failure})});
+  await h.runner.step(await core.readRuntimeAccount(f.pool,f.id),h.callbacks);const b=await exp.load(f.pool);
+  assert.equal(b.state,'WARMUP_STOPPED');assert.equal(b.report.visits.length,0);assert.equal(b.report.attempts.length,1);assert.equal(h.page.navigations.at(-1),urls[0]);assert.equal((await core.readRuntimeAccount(f.pool,f.id)).attention_reason,failure.reason);assert.equal(b.report.inFlight.stage,'SETTLED');assert.equal(b.report.inFlight.navigation.method,'location.assign');assert.ok(b.report.inFlight.navigation.referer);
+ }finally{await f.close();}
+});
+
+test('a new security signal on the final feed remains a stopped session with its exact hold',async()=>{
+ const f=await fixture();try{
+  const failure={stage:'linkedin',code:'LINKEDIN_AUTH',reason:'Fresh HTTP 401 on final feed',retryable:false},h=harness(f,{finalFeedSignal:Object.assign(Error(failure.reason),{failure})});
+  await h.runner.step(await core.readRuntimeAccount(f.pool,f.id),h.callbacks);const before=await exp.load(f.pool);h.setClock(Date.parse(before.report.sessionPlan.sessionEnd));
+  const result=await h.runner.step(await core.readRuntimeAccount(f.pool,f.id),h.callbacks),after=await exp.load(f.pool);assert.equal(result.done,true);assert.equal(after.state,'WARMUP_STOPPED');assert.equal(after.report.reason,failure.reason);assert.equal((await core.readRuntimeAccount(f.pool,f.id)).attention_reason,failure.reason);assert.equal(after.report.visits.length,1);
  }finally{await f.close();}
 });
 test('a new 403 identical to the saved hold stops before a profile start and never clears the hold',async()=>{

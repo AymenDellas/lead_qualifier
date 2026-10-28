@@ -1,5 +1,9 @@
 # Account session controls and diagnostic evidence
 
+## Rendered session and worker targets — 28 October 2026
+
+The latest implementation request adds [native rendered navigation and session evidence](engine-session-navigation.md) and [worker-target filtering with measured detector results](engine-worker-targets.md). The new 60–400-second log-normal timing applies to the experimental runner only; ordinary qualification policy is unchanged. Both consumed John manifests and his exact hold remain unchanged. The blank-profile measurement observed the worker CDP flag change from true to false while all other flags on that detector stayed unchanged; the overall gate remains FAIL. No authenticated LinkedIn run or account restart was performed.
+
 ## Browser reliability maintenance — 28 October 2026
 
 The user has manually confirmed John's restriction. The current hold and consumed experiments remain unchanged. [Browser reliability maintenance](engine-browser-reliability.md) addresses a potentially suspended animation-frame wait, generic 5xx/fallback-page handling, canonical warmup destinations and bounded redacted failure diagnostics. Plain Puppeteer/CDP, browser-exposed identity, detector verdicts and the memory guard remain unchanged. This work neither establishes the restriction's cause nor authorizes a new account test.

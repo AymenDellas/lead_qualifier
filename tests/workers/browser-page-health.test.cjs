@@ -33,10 +33,10 @@ test('scrolling does not wait for an animation frame that the page never schedul
  await human.interact(page,{random:a=>a});assert.deepEqual(calls,['pointer','scroll']);
 });
 test('rendered visit retains its navigation response for the caller to classify',async()=>{
- const response={status:()=>503};let active=0;assert.equal(await human.visit({goto:async()=>response},person,{assertActive:async()=>active++}),response);assert.equal(active,2);
+ const response={status:()=>503};let active=0;assert.equal(await human.visit({$$:async()=>[],waitForNavigation:async options=>{assert.equal(options.waitUntil,'load');return response;},evaluate:async()=>{},waitForFunction:async()=>{},goto:()=>assert.fail('Profile navigation cannot use goto')},person,{assertActive:async()=>active++}),response);assert.ok(active>=2);
 });
 test('ordinary warmup cannot save an observed day for a failed page',async()=>{
  const guard=require('../../src/lib/account-session-guard.cjs').createSessionGuard({pool:{query:()=>assert.fail('No evidence write for an unavailable page')},owner:'fixture',core:{reserveProfile:async()=>({nextProfileAt:new Date().toISOString()})}});
- const response={status:()=>500},page={goto:async()=>response,url:()=>person};
+ const response={status:()=>500},page={$$:async()=>[],waitForNavigation:async()=>response,evaluate:async()=>{},waitForFunction:async()=>{},url:()=>person};
  await assert.rejects(guard.warmup({id:'one',session_evidence:{},session_policy:{}},{linkedinUrl:person,jobId:'job'},page,async()=>{},async r=>assert.equal(r,response)),e=>e.failure.stage==='page');
 });
