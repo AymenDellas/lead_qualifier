@@ -1,5 +1,7 @@
 # AliasMode account browsers — 27 October 2026
 
+The provider/CDP ownership architecture below remains active. The latest per-account visible-default mode, dedicated proxy controls, fingerprint checks, manually reviewable UNKNOWN reports and warmup/ramp/recovery policy are documented in [engine-stealth.md](engine-stealth.md), which supersedes the earlier headless-only and fixed-spacing descriptions here.
+
 AliasMode replaces the abandoned AdsPower integration as the sole active account-browser provider. The former Chrome launcher and AdsPower adapter remain as inactive commented source, with no fallback. The installed Puppeteer version attaches through CDP; no browser library was migrated.
 
 ## Architecture

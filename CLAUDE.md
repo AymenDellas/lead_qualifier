@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+Current qualification-engine policy is in AGENTS.md and docs/engine-stealth.md. Legacy filesystem-queue/local-Chrome/password descriptions below are historical and do not override those instructions.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this is

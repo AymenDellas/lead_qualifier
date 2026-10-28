@@ -79,6 +79,28 @@ LinkedIn 401/403/429/999 and recognized account notices retain their stop behavi
 
 Offline browser fixtures intercept every request. They cover visible CDP operation, persistence of the requested mode, observed identity drift, safe pointer/scroll actions, warmup without Voyager/qualification, blocked admission, atomic ramp/spacing reservations, stale/expired owners, duplicate proxy bindings and explicit review of only a current unclear report. Frozen qualification evidence remains independent of these session controls. Live authenticated LinkedIn qualification and proxy-route validation remain unverified; no restriction-prevention or throughput improvement is claimed.
 
+## Final validation and rollout
+
+Phase 3 adds `src/components/AccountSessionControls.tsx`, integrates it into `src/components/AliasModeAccounts.tsx`, and exposes the report/approval operations through the existing local-admin/same-origin `src/app/api/aliasmode/route.ts`. The approval checkbox resets when the report ID or configuration revision changes. Desktop (1280 px) and mobile (390 px) layouts were inspected without saving account settings, requesting browser checks or enabling processing. Current setup/hold states keep Start disabled. The temporary viewport override was reset.
+
+| Check | Result |
+| --- | --- |
+| Full engine/worker/prospect/coach suite | 420 passed; 0 failed/skipped |
+| Additional PostgreSQL session/admission checks | 5 passed |
+| CRM with `CRM_TEST_POSTGRES=1` (temporary fixture tables) | 14 passed; 0 failed/skipped |
+| `npx tsc --noEmit` | Passed; production build's typecheck also passed |
+| ESLint on changed production files | Passed |
+| `npm run lint` across the workspace | 5 errors and 7 warnings in existing unrelated components |
+| Production build | Passed on retry with the same Next 16.1.6 Turbopack builder |
+| `node scripts/engine-verify-build.cjs` | 45 route manifests; 0 private runtime entries |
+| Frozen evidence, phases 0/1/2/3 and final | 50 records; 0 decision changes, 0 evidence changes, 0 errors |
+| Agent restart | AGENT_ACK, ALIASMODE_CDP, 0 open account browsers, 0 pending saves |
+| Actual account state after restart | All 4 paused; both existing holds unchanged; no account evidence/settings changed |
+
+The first production build failed resolving Fira Code's Google-font URLs (`next/font/google queries have exactly one entry`). A retry compiled successfully; no font source, package, bundler configuration or mock font response was changed. Existing broad dynamic-filesystem warnings remain in Finder/Create. Full lint's five errors are in `src/app/teleprompter/page.jsx`, `WorkspaceCommandMenu.tsx`, `business/OnboardingWorkspace.tsx`, `copy-studio/EvidenceRecoveryDialog.tsx` and `copy-studio/OnboardingDialog.tsx`; their unrelated work was left intact. Private logs, screenshots, diagnostic evidence and the restart comparison remain in ignored `data/engine-v2/session-hardening/`.
+
+The old idle agent was stopped gracefully after confirming no enabled processing or pending manual/diagnostic commands, then restarted hidden using the current source. PostgreSQL and the official AliasMode roster confirm that the two original profiles remain closed. Proxy purchase/configuration and authenticated LinkedIn trials were not performed. No account was automatically approved, warmed up, qualified or resumed. No new environment variable or runtime library was introduced.
+
 ## Engine/mode comparison
 
 New blank profiles were tested through the production CLI/CDP adapter and isolated PostgreSQL leases. No LinkedIn profile was signed in or visited. Both engines exposed webdriver=false, a normal Chrome user agent, window.chrome and five plugins in both modes. All four batteries remained UNKNOWN: root landing pages/missing machine-readable verdicts and Antoine Vastel HTTP 502 prevented a complete CDP/TLS result. This does not justify selecting CloakBrowser or identify a restriction cause. AliasMode Chromium remains the default; no existing profile engine was changed.

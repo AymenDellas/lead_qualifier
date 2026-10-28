@@ -1,5 +1,7 @@
 # AliasMode headless processing — 27 October 2026
 
+Current session policy: see [engine-stealth.md](engine-stealth.md). The latest user request changes the default to visible processing and adds per-account prerequisites, rendered warmup, ramp and recovery. Headless-only/fixed-interval descriptions below are historical.
+
 The user authorized supported headless processing after the initial Local API/CDP migration. AliasMode's packaged CLI supplies the missing launch-mode control; the Local API still supplies CDP discovery and confirmed stop. Puppeteer, browser-context Voyager reads, PostgreSQL guarantees and qualification policy remain.
 
 ## Supported helper

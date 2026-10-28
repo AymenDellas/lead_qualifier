@@ -4,6 +4,7 @@ import {ExternalLink,Loader2,Pause,Play,Power,RefreshCw,Settings2,Users} from 'l
 import type {WorkerAccount,WorkerSettings} from '@/lib/linkedin-workers.cjs';
 import type {AliasModeSettings} from '@/lib/aliasmode-store.cjs';
 import type {SupervisorStatus} from '@/lib/worker-supervisor-control.cjs';
+import AccountSessionControls from './AccountSessionControls';
 
 async function api<T>(url:string,body?:unknown,method='POST'):Promise<T>{
  const response=await fetch(url,body===undefined?{cache:'no-store'}:{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -18,6 +19,10 @@ function state(account:WorkerAccount){
  if(!account.aliasmodeProfileId)return 'Not linked';
  if(!account.enabled)return 'Disabled';
  if(account.status==='DAILY_LIMIT_REACHED')return 'Daily limit reached';
+ if(account.session?.lifecycle.state==='PROVISION')return 'Session setup required';
+ if(account.session?.lifecycle.state==='RECOVERY')return 'Recovery period';
+ if(account.session?.lifecycle.state==='HOLD')return 'Browser identity review required';
+ if(account.session?.lifecycle.state==='WARMUP')return `Warmup · ${account.session.lifecycle.done||0}/${account.session.lifecycle.required} days`;
  if(account.processingEnabled)return account.status==='processing'?'Processing':account.status==='sleeping'?'Waiting for next profile':'Processing requested';
  return account.connectedAt?'Paused':'Session not verified';
 }
@@ -53,10 +58,11 @@ export default function AliasModeAccounts(){
      {a.startupStage&&<p className="text-xs text-[var(--text-faint)]">{a.startupStage}{a.failedStage?` · ${a.failedStage}`:''}</p>}
      <div className="flex flex-wrap gap-2">
       <button type="button" className="btn btn-outline !text-xs" disabled={!!pending||!online||a.closePending||a.processingEnabled} onClick={()=>void run(a.id,()=>api('/api/linkedin-accounts',{id:a.id,action:'login'}),'Review requested. Confirm the expected member in AliasMode; processing stays paused.')}><ExternalLink className="w-3.5 h-3.5"/>{a.attentionReason?'Open for review':'Verify session'}</button>
-      {a.processingEnabled?<button type="button" className="btn btn-outline !text-xs" onClick={()=>void run(a.id,()=>api('/api/linkedin-accounts',{id:a.id,action:'pause'}),'Processing paused; checkpoints retained.')}><Pause className="w-3.5 h-3.5"/>Pause</button>:<button type="button" className="btn btn-primary !text-xs" disabled={!!pending||!online||!connected||accounts.activeCount===0||!a.enabled||!a.connectedAt||!!a.attentionReason||a.closePending||a.loginPending||a.status==='awaiting_login'} onClick={()=>void run(a.id,()=>api('/api/linkedin-accounts',{id:a.id,action:'start'}),'Processing requested for this profile.')}><Play className="w-3.5 h-3.5"/>Start batch</button>}
+      {a.processingEnabled?<button type="button" className="btn btn-outline !text-xs" onClick={()=>void run(a.id,()=>api('/api/linkedin-accounts',{id:a.id,action:'pause'}),'Processing paused; checkpoints retained.')}><Pause className="w-3.5 h-3.5"/>Pause</button>:<button type="button" className="btn btn-primary !text-xs" disabled={!!pending||!online||!connected||accounts.activeCount===0||!a.enabled||!a.connectedAt||!!a.attentionReason||a.closePending||a.loginPending||(!!a.session&&['PROVISION','HOLD','RECOVERY'].includes(a.session.lifecycle.state))||a.status==='awaiting_login'} onClick={()=>void run(a.id,()=>api('/api/linkedin-accounts',{id:a.id,action:'start'}),'Processing requested for this profile.')}><Play className="w-3.5 h-3.5"/>{a.session?.lifecycle.state==='WARMUP'?'Start warmup':'Start batch'}</button>}
       <button type="button" className="btn btn-ghost !text-xs" disabled={!!pending||!online||a.closePending} onClick={()=>void run(a.id,()=>change({action:'close',accountId:a.id}),'Profile closure requested. Your LinkedIn sign-in is preserved.')}>Close profile</button>
      </div>
      <p className="text-xs text-[var(--text-faint)]"><span className="num">{a.dailyCount}/{a.dailyLimit}</span> unique profiles today{a.nextEligibleAt?` · Next eligible ${new Date(a.nextEligibleAt).toLocaleTimeString()}`:''}</p>
+     <AccountSessionControls key={`${a.id}-session-${a.session?.revision}-${a.session?.gate?.reportId||''}`} account={a} disabled={!!pending} online={!!online&&!!connected} onAction={body=>run(a.id,()=>change(body),'Session request saved. Review its evidence and status before processing.')}/>
      {manage&&<AccountForm key={`${a.id}-${a.enabled}-${a.dailyLimit}-${a.label}`} account={a} profiles={provider.profiles} disabled={!!pending} onUpdate={body=>run(a.id,()=>change(body),'Account settings saved.')} onBind={body=>run(a.id,()=>change(body),'Profile binding saved. Verify the member before processing.')}/>}
     </div>)}</div>
     {(manage||!linked.length)&&<ImportForm profiles={provider.profiles.filter(p=>!linked.some(a=>a.aliasmodeProfileId===p.id))} disabled={!!pending||!connected} defaultLimit={accounts.defaultDailyLimit||300} onSave={body=>run('import',()=>change(body),'Profile linked. Verify the signed-in member before starting.')}/>}
@@ -64,14 +70,14 @@ export default function AliasModeAccounts(){
    </>}
    {pending&&<p role="status" className="flex items-center gap-2 text-xs text-[var(--text-faint)]"><Loader2 className="h-3.5 w-3.5 animate-spin"/>Saving request…</p>}
   </div>
-  <p className="panel-note">Headless processing · Visible manual sign-in and review. Linked accounts run simultaneously, with their own daily cap and one-minute profile interval. Start authorizes processing.</p>
+  <p className="panel-note">Visible processing by default · Each account keeps its own profile, verified session prerequisites and daily ceiling. Warmup uses rendered visits; later profile starts are spaced 60–150 seconds apart. Start authorizes processing.</p>
  </section>;
 }
 function ConnectionForm({provider,disabled,onSave}:{provider:AliasModeSettings;disabled:boolean;onSave:(body:unknown)=>Promise<boolean>}){
  const [address,setAddress]=useState(provider.baseUrl);
  return <form className="space-y-3 border-y border-[var(--line)] py-4" onSubmit={e=>{e.preventDefault();void onSave({baseUrl:address,revision:provider.revision});}}>
   <p className="text-xs font-medium">AliasMode connection</p><label className="block space-y-1"><span className="field-label">Local API address</span><input className="field w-full" type="url" required value={address} onChange={e=>setAddress(e.target.value)} disabled={disabled}/></label>
-  <p className="field-hint">Keep AliasMode open. Processing uses its supported headless launcher; Verify session opens a visible browser. No API key is needed.</p><button className="btn btn-outline !text-xs" disabled={disabled}>Save connection</button>
+  <p className="field-hint">Keep AliasMode open. Its supported launcher confirms the account’s configured mode. Visible processing is the default; manual sign-in stays visible. No API key is needed.</p><button className="btn btn-outline !text-xs" disabled={disabled}>Save connection</button>
  </form>;
 }
 type FormProps={profiles:AliasModeSettings['profiles'];disabled:boolean};

@@ -1,5 +1,7 @@
 # Headless processing and account pacing
 
+Current session policy: see [engine-stealth.md](engine-stealth.md). The latest user request changes the default to visible processing and adds per-account prerequisites, rendered warmup, ramp and recovery. Headless-only/fixed-interval descriptions below are historical.
+
 On 2026-10-25 the user explicitly replaced the original daily-only policy with
 300 unique profiles per account per local day and a minimum 60 seconds between
 profile starts. The existing daily limit remains editable in account settings.
