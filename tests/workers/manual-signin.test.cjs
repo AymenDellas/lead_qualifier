@@ -141,7 +141,7 @@ test('daily cap keeps intent and resume time visible after automatic idle browse
 });
 
 test('manual sign-in hands off to headless processing, and a held account returns to visible manual review only on request',async()=>{
- const f=fixture(),modes=[];let mode=null;const launch=f.browserOwner.open;f.browserOwner.isHeadless=()=>mode;f.browserOwner.open=async options=>{mode=options.headless;modes.push(mode);return launch();};
+ const f=fixture(),modes=[];f.account.launch_mode='headless';let mode=null;const launch=f.browserOwner.open;f.browserOwner.isHeadless=()=>mode;f.browserOwner.open=async options=>{mode=options.headless;modes.push(mode);return launch();};
  const read=f.reader.readSignedInIdentity;f.reader.readSignedInIdentity=async(page,options)=>options.manual?read(page,options):viewer;
  f.reader.captureProfile=async(_page,url,options)=>{await options.beforeCheck('profile_page');return {url,profileIdentityConfirmed:true,linkedinCapture:{complete:true}};};
  await f.runtime.tick();f.state={identity:viewer};await f.runtime.tick();assert.deepEqual(modes,[false]);

@@ -21,10 +21,10 @@ function createAliasModeClient({config={},fetch:fetcher=globalThis.fetch,timeout
  // Bound local control work without delaying LinkedIn requests.
  const queue=require('./bounded-work.cjs').createBoundedQueue({capacity:16,concurrency:2});
  const helper=cli||require('./aliasmode-cli.cjs').createAliasModeCli();
- async function requestNow(path,{timeout=timeoutMs}={}){
+ async function requestNow(path,{timeout=timeoutMs,method='GET',body}={}){
   const settings=typeof config==='function'?await config():config,origin=baseUrl(settings.baseUrl);
   let response,data;try{
-   response=await fetcher(origin+path,{method:'GET',redirect:'error',signal:AbortSignal.timeout(timeout),headers:{accept:'application/json'}});
+   response=await fetcher(origin+path,{method,redirect:'error',signal:AbortSignal.timeout(timeout),headers:{accept:'application/json',...(body?{'content-type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
    if([401,403].includes(response.status))throw providerError('ALIASMODE_API_AUTH','AliasMode rejected local access. Check its loopback API settings.');
    if(response.status===429)throw providerError('ALIASMODE_API_BUSY','AliasMode Local API is busy. The agent will retry without reading LinkedIn.');
    if(!response.ok)throw providerError('ALIASMODE_API_HTTP','AliasMode Local API returned HTTP '+response.status+'. Check the local client.');
@@ -62,6 +62,11 @@ function createAliasModeClient({config={},fetch:fetcher=globalThis.fetch,timeout
   }catch(error){error.startedProfilePort=opened.port;throw error;}
  }
  async function list(){let profiles=[],truncated=false;for(let page=1;page<=2;page++){const data=await request('/api/v1/user/list?'+new URLSearchParams({page:String(page),page_size:'100'}));if(!Array.isArray(data.list))throw providerError('ALIASMODE_API_RESPONSE','AliasMode did not return a supported profile list.');profiles.push(...data.list.map(publicProfile).filter(Boolean));if(data.list.length<100)break;if(page===2)truncated=true;}return {profiles:[...new Map(profiles.map(p=>[p.id,p])).values()],truncated};}
- return {health:()=>request('/status'),capabilities:async()=>({helperVersion:await helper.version(),headless:true}),list,active,inspect,start,stop:async id=>{await request('/api/v1/browser/stop?user_id='+encodeURIComponent(profileId(id)),{timeout:90000});},idle:async()=>{await helper.idle();await queue.idle();},request};
+ async function createProfile({name,engine='aliasmode-chromium'}){
+  if(typeof name!=='string'||!name.trim()||name.length>80||!['aliasmode-chromium','cloakbrowser'].includes(engine))throw providerError('ALIASMODE_PROFILE_CONFIG','Enter a profile name and supported Chromium engine.');
+  const result=await request('/api/v1/user/create',{method:'POST',body:{name:name.trim(),engine:'chromium',chromium_runtime:engine==='aliasmode-chromium'?'aliasmode':'cloakbrowser',fingerprint_config:{screen_resolution:'1920_1080'}}});
+  return {id:profileId(result.id),name:name.trim(),engine};
+ }
+ return {health:()=>request('/status'),capabilities:async()=>({helperVersion:await helper.version(),headless:true}),createProfile,list,active,inspect,start,stop:async id=>{await request('/api/v1/browser/stop?user_id='+encodeURIComponent(profileId(id)),{timeout:90000});},idle:async()=>{await helper.idle();await queue.idle();},request};
 }
 module.exports={createAliasModeClient,baseUrl,profileId,websocket,publicProfile,providerError};

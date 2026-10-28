@@ -24,3 +24,70 @@ The temporary diagnostic profile was closed and deleted through the supported CL
 Phase 0 preserves 50 decided CRM records, reasons, stored evidence and replay assessments. All actual accounts remain paused and both existing account holds remain in place. A detector-site pass is not a licence to clear a LinkedIn hold. Proxy configuration is authorized; purchase and paid usage are not.
 
 Phase 1 adds additive account fields and unique proxy-reference/verified-egress indexes. Account configuration rejects credential payloads, requires closed/paused sessions and uses revision compare-and-swap. Evidence writes require the current unexpired owner lease and configuration revision. Policy changes preserve recovery deadlines and exact account holds while invalidating prior diagnostics. Eight new policy/database tests and two existing AliasMode store tests pass; all 50 frozen records replay with zero decision/evidence changes and zero errors. Runtime admission and dashboard controls follow in the next phase; merely saving policy is not permission to process.
+
+Phase 2 implements lane admission, configured visible/headless launch, fixed-origin fingerprint comparison, diagnostic commands/manual UNKNOWN approval, rendered warmup, ramp/spacing/stagger and recovery. The complete engine suite passes 420/420; an additional five-test PostgreSQL run verifies that explicit Start can follow completed diagnostics without another manual sign-in, while the next processing session still rechecks the member. The 50 frozen records replay with zero decision changes, zero evidence changes and zero errors. The PostgreSQL-enabled CRM suite passes 14/14. Failed diagnostic launches clear their pending command, retain an actionable error and require another explicit request instead of reopening repeatedly. Close and holds cancel pending diagnostics.
+
+## Implemented controls
+
+`account-session-policy.cjs` evaluates PROVISION → WARMUP → RAMP → PROCESSING, with HOLD and RECOVERY taking precedence over automated work. PostgreSQL owns each account's configuration, deadlines and observations. `account-session-guard.cjs` runs inside the existing account lane; it does not create another worker/browser. `account-runtime.cjs` releases a blocked claim without deciding or retrying the lead. Cached complete captures and the existing public research lane retain their separate path.
+
+Processing defaults to **headful**, matching visible manual sign-in. A per-account headless option remains explicit; actual CLI mode and Local API CDP port must still agree. No browser library was migrated, stealth injection added, user agent overwritten, or cookie exported. The old Chrome/AdsPower implementations remain inactive commented references. AliasMode owns its profile, proxy credentials, cookies and cache; CompelOS never clears them.
+
+New profiles can be provisioned with `node scripts/engine-provision-profile.cjs "Expected member name" aliasmode-chromium` (or `cloakbrowser`). The native create request explicitly sets `engine=chromium`, `chromium_runtime=aliasmode|cloakbrowser`, and a 1920×1080 screen. A safe creation receipt is printed before the PostgreSQL account import; failed imports never automatically create a replacement or delete the partial profile. Existing profile engine/proxy changes are made in AliasMode and then reflected in CompelOS's declared configuration. The V1 profile roster does not expose complete engine/proxy provenance; declaring an engine in CompelOS is not automatic proof of that vendor configuration.
+
+Network preflight compares three browser-routed observations against the configured fixed exit IP, country and timezone, then checks the browser's own timezone. It rejects observed rotation or an explicit datacenter result. It uses keyless ipapi.is (currently 30 lookups per IP/UTC day), has no automatic retries or paid fallback, and reports an exhausted/unavailable lookup as an error. Anonymous responses do not independently prove a connection is a purchased residential proxy: confirm that product with your provider. Credentials must be configured in AliasMode, never pasted into CompelOS or this repository. PostgreSQL prevents duplicate proxy references and duplicate verified exit IPs.
+
+After manual member verification, the first successful configured network preflight records the observed browser baseline. Every baseline and comparison uses the same secure BrowserScan origin: about:blank can omit secure-context fields, and different origins can expose different profile fingerprints. An unavailable consistent context stops the check rather than creating a false drift report. Explicit Capture/Approve identity also exists for reviewed changes. A later observed hash change creates a persistent hold. The hash covers observed UA, platform, screen, timezone, locale, cores, memory, WebGL vendor/renderer, and the declared profile/configuration identity. It does not prove that all possible browser signals are unchanged or that two profiles are unlinkable.
+
+The detector runner reads only the configured six public sites with bounded requests and result waits. Landing pages, HTTP errors and unsupported/missing results remain **UNKNOWN**, never a synthetic pass. Current sites do not share a stable machine-readable verdict, so reports can contain UNKNOWN even when individual visible JS checks look normal. On the user's subsequent explicit instruction, an administrator may inspect the saved report and approve its unclear checks. This is recorded as **HUMAN_APPROVED**, preserving the original UNKNOWN result, report ID and approval time. A failed check, saved LinkedIn hold, identity drift, changed configuration, stale report or pending diagnostic prevents approval. Approval never starts processing or clears a hold. The dashboard offers a separate, explicit Start action after prerequisites are satisfied.
+
+Rendered warmup visits reserve the same daily/spacing allowance as profile-data reads and release the CRM job unchanged. Visits are recorded by the PostgreSQL local day; no Voyager qualification or public research is performed during a warmup visit. Four distinct observed warmup days and elapsed days are required by default. The visit list stays bounded and prevents repeatedly visiting the same first queued lead that day. An empty queue cannot manufacture warmup progress.
+
+After warmup the effective daily allowance ramps 15 → 30 → 60 → 100 at seven-day steps, never exceeding the account's editable ceiling. Profile starts reserve randomized 60–150-second spacing atomically in PostgreSQL; cached reads are free. Initial lane staggering is persisted with the explicit Start request, so wake notifications cannot erase it. Per-kind counters remain statistics. Session interactions are bounded pointer movement and scroll; they never click a social control, submit a form, message, connect, react or follow. Every tenth captured profile additionally receives a rendered visit after its profile slot is reserved. Identity/follower/location gates retain their required ordering; activity/contact reads are not shuffled ahead of them.
+
+LinkedIn 401/403/429/999 and recognized account notices retain their stop behaviour. The profile-data-volume wording and plain “we restricted your account” wording are covered; notices are kept with the reason. Human verification leaves processing paused, invalidates the prior gate and starts a minimum seven-day recovery deadline. The ramp restarts at 15 after recovery; neither deadline expiry nor a configuration save starts the account. A configuration edit cannot shorten an existing recovery deadline.
+
+## Configuration
+
+**New environment variables: none.** Existing `ALIASMODE_HELPER_PATH`, `MAX_ACTIVE_BROWSERS`, process-tree memory/recycle settings and `DAILY_LIMIT_TIMEZONE` retain their purposes. No real environment file was read as a document, edited, staged or committed. New controls are per-account PostgreSQL values:
+
+| Setting | Default |
+| --- | --- |
+| `engine` | `aliasmode-chromium` (declared vendor profile engine) |
+| `launch_mode` | `headful` |
+| Proxy binding / expected exit IP | Unconfigured; unattended work blocked |
+| `warmupDays` | 4 |
+| `warmupProfilesPerDay` | 10 |
+| `rampStepDays` | 7 |
+| `recoveryDays` | 7; cannot configure below 7 |
+| `minIntervalSeconds` / `maxIntervalSeconds` | 60 / 150 |
+| `staggerSeconds` | 120 maximum |
+| `renderEvery` | 10 |
+| Editable `daily_limit` ceiling | Existing value; new accounts default to 300 |
+
+## Runbook
+
+1. Keep AliasMode open. Use existing imported profiles, or explicitly provision a new blank profile with the script above. No account/profile is automatically replaced.
+2. In AliasMode configure the intended Chromium engine and dedicated static residential proxy. Obtain its fixed exit IP, country and timezone from the provider. Buying proxies is outside CompelOS and has not been performed.
+3. Pause and Close profile in CompelOS. In Engine → LinkedIn profiles → Session setup, save the corresponding reference, host/port, country, timezone, exit IP, engine and mode. Credentials stay in AliasMode. Settings do not enable processing or clear review holds.
+4. Verify the expected LinkedIn member manually when you choose to reconnect. Run Check network, capture/review the browser baseline and Run detector checks. Read Saved session evidence. If results are unclear, explicitly review and approve that exact report; confirmed failures cannot be overridden.
+5. Start warmup explicitly. Rendered visits leave qualification jobs queued. After sufficient observed days, the same authorized lane enters the bounded ramp. Pause remains effective at every stage.
+6. On HOLD, review the exact reason and complete the appropriate human verification. Diagnose a fingerprint change before explicitly approving a replacement baseline. Rerun invalidated checks. After the recovery deadline, explicitly Start if you want to resume at the low allowance.
+7. `node scripts/engine-stealth-check.cjs <account-id> preflight|approve-identity|diagnostics` submits the same PostgreSQL commands for the single agent; it never spawns a competing account browser. A held account rejects diagnostic requests.
+
+## Verification limits
+
+Offline browser fixtures intercept every request. They cover visible CDP operation, persistence of the requested mode, observed identity drift, safe pointer/scroll actions, warmup without Voyager/qualification, blocked admission, atomic ramp/spacing reservations, stale/expired owners, duplicate proxy bindings and explicit review of only a current unclear report. Frozen qualification evidence remains independent of these session controls. Live authenticated LinkedIn qualification and proxy-route validation remain unverified; no restriction-prevention or throughput improvement is claimed.
+
+## Engine/mode comparison
+
+New blank profiles were tested through the production CLI/CDP adapter and isolated PostgreSQL leases. No LinkedIn profile was signed in or visited. Both engines exposed webdriver=false, a normal Chrome user agent, window.chrome and five plugins in both modes. All four batteries remained UNKNOWN: root landing pages/missing machine-readable verdicts and Antoine Vastel HTTP 502 prevented a complete CDP/TLS result. This does not justify selecting CloakBrowser or identify a restriction cause. AliasMode Chromium remains the default; no existing profile engine was changed.
+
+| Engine | Mode | Launch/attach seconds | Six-site battery seconds | Observed browser requests | Verdict |
+| --- | --- | ---: | ---: | ---: | --- |
+| AliasMode Chromium 155 | Visible | 14.61 | 14.60 | 166 | UNKNOWN |
+| AliasMode Chromium 155 | Headless | 9.86 | 14.67 | 176 | UNKNOWN |
+| CloakBrowser 146 | Visible | 66.36 | 14.56 | 155 | UNKNOWN |
+| CloakBrowser 146 | Headless | 9.94 | 14.45 | 171 | UNKNOWN |
+
+Each cell is one diagnostic run, not a throughput benchmark; first-launch startup and cache state were not controlled. Request counts include the sites' subresources. The temporary profiles are absent from the final official CLI roster, which contains only the two original imported profiles, both closed. Full evidence stays private under ignored data/engine-v2/session-hardening/browser-comparison.json.

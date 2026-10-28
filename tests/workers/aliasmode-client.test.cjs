@@ -2,6 +2,13 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const {createAliasModeClient,baseUrl,websocket}=require('../../src/lib/aliasmode-client.cjs');
 function fixture(data={}){const calls=[];return {calls,client:createAliasModeClient({config:{baseUrl:'http://127.0.0.1:50400',apiKey:'must-never-forward'},cli:{version:async()=>'0.1.0-beta.69',status:async()=>({running:true,state:'running',headless:true,port:9222}),idle:async()=>{}},fetch:async(url,options)=>{calls.push({url,options});return new Response(JSON.stringify({code:0,data}),{status:200});}})};}
+test('new profile provisioning explicitly chooses the native Chromium runtime and fixed screen without credentials',async()=>{
+ for(const engine of ['aliasmode-chromium','cloakbrowser']){
+  const f=fixture({id:'new-fixture'});await f.client.createProfile({name:'Fixture member',engine});const body=JSON.parse(f.calls[0].options.body);
+  assert.equal(body.engine,'chromium');assert.equal(body.chromium_runtime,engine==='aliasmode-chromium'?'aliasmode':'cloakbrowser');assert.equal(body.fingerprint_config.screen_resolution,'1920_1080');assert.equal(f.calls[0].options.method,'POST');
+  assert.ok(!JSON.stringify(body).includes('password'));assert.ok(!JSON.stringify(f.calls).includes('must-never-forward'));
+ }
+});
 test('only loopback API and CDP addresses are accepted',()=>{
  assert.equal(baseUrl(),'http://127.0.0.1:50400');
  for(const value of ['https://attacker.test','http://127.0.0.1:50400/path','http://user:secret@localhost:50400','file:///tmp'])assert.throws(()=>baseUrl(value));

@@ -16,10 +16,11 @@ function createAccountRuntime(options) {
  const prospecting=options.prospecting||require('./coach-prospecting-worker.cjs');
  const researchQueue=options.researchQueue||require('./worker-research-queue.cjs');
  const now=options.now||Date.now;
+ const guard=options.sessionGuard;
  const log=options.log||(()=>{}),onStatus=options.onStatus||(()=>{});
  let stopped=false,identity=null,manual=null,signal=null,surface=null,watched=null,closing=null,browserAttempted=false;
  let status={status:'idle',startupStage:'AGENT_ACK',reason:'Agent acknowledged this account. Waiting for work or manual connection.',runtimeVersion,sessionReady:false,browserOpen:false,accountId};
- let startupFailures=0,recoveringJob=false;
+ let startupFailures=0,recoveringJob=false,currentSessionPolicy={};
  let handledStart=null,handledLogin=null,handledClose=null,handlingSignal=null,activeVersion=null,signalGeneration=0,pageGeneration=0,jobsStarted=0,pendingKinds={};
  const saves=(options.createSaveQueue||require('./bounded-work.cjs').createBoundedQueue)({capacity:options.saveQueueCapacity||6,onError:(error,metadata)=>{
   const reason='PostgreSQL save failed: '+error.message;
@@ -87,7 +88,7 @@ function createAccountRuntime(options) {
   });
   page.on?.('close',()=>{if(watched===page)disconnected(new Error('The account tab was closed. Use Open session to reopen it.'));});
  }
- async function open(headless=true) {
+ async function open(headless=false) {
   if(browserOwner.isOpen()&&typeof browserOwner.isHeadless==='function'&&typeof browserOwner.isHeadless()==='boolean'&&browserOwner.isHeadless()!==headless){
    await saves.idle();await releasePendingClaims();watched=null;identity=null;surface=null;handledStart=null;
    await (browserOwner.recycle?browserOwner.recycle():browserOwner.close());
@@ -190,13 +191,15 @@ function createAccountRuntime(options) {
   }
  }
  async function prepareProcessing(a) {
-  if(identity&&browserOwner.isOpen()&&browserOwner.isHeadless?.()!==false){await browserOwner.adopt?.();publish('ready',{startupStage:'SESSION_VERIFIED',reason:'Verified session reused.'});return true;}
+  const headless=a.launch_mode==='headless';
+  if(identity&&browserOwner.isOpen()&&(!browserOwner.isHeadless||browserOwner.isHeadless()===headless)){await browserOwner.adopt?.();publish('ready',{startupStage:'SESSION_VERIFIED',reason:'Verified session reused.'});return true;}
   const startToken=a.processing_token||a.control_version||String(a.processing_until);
   if(handledStart===startToken)return false;
   signal=null;
   publish('starting',{reason:'Opening the saved session and checking the signed-in member.'});
   if(!browserOwner.isOpen()&&browserAttempted)await browserOwner.close(); // release a disconnected handle before an owned relaunch
-  await open();
+  await open(headless);
+  if(guard&&!await guard.verify(a,surface.page)){identity=null;publish('HOLD',{reason:'Browser identity changed. Complete manual review and approve its baseline.',manualResumeRequired:true,reasonCode:'FINGERPRINT_DRIFT'});return false;}
   await permit('identity');
   await assertActive();
   await surface.page.goto('https://www.linkedin.com/feed/',{waitUntil:'domcontentloaded',timeout:30000});
@@ -274,6 +277,10 @@ function createAccountRuntime(options) {
        if(limit.limited)throw Object.assign(Error('Daily profile limit reached.'),{dailyLimit:limit});
        if(limit.paced)throw Object.assign(Error('Waiting for the next profile start.'),{profilePace:limit});
        await assertActive();
+       if(guard){
+        await require('./session-humanizer.cjs').interact(surface.page,{assertActive});
+        if(jobsStarted%require('./account-session-policy.cjs').config(currentSessionPolicy).renderEvery===0){await require('./session-humanizer.cjs').visit(surface.page,job.linkedinUrl,{assertActive});await inspect();await assertActive();}
+       }
       }
       if(job.prospecting&&!await discoveryStore.runIsActive(pool,job.prospecting.runId))throw controlError('The prospecting run was stopped. Captured evidence is retained.');
      },resume:captured,
@@ -292,6 +299,7 @@ function createAccountRuntime(options) {
   if(recoveringJob)await saves.idle();
   const a=await account();
   if(!a){await close();return;}
+  currentSessionPolicy=a.session_policy||{};
   if(a.close_token){
    if(a.close_token===handledClose)return;
    activeVersion=a.control_version||null;await saves.idle();manual=null;identity=null;watched=null;
@@ -308,6 +316,11 @@ function createAccountRuntime(options) {
    await releasePendingClaims();
    publish('paused',{reason:a.attention_reason,manualResumeRequired:true,reasonCode:'ACCOUNT_REVIEW'});return;
   }
+  if(guard&&a.session_evidence?.command){
+   activeVersion=a.control_version||null;identity=null;handledStart=null;publish('diagnostics',{startupStage:'SESSION_DIAGNOSTICS',reason:'Running the explicitly requested session check; qualification remains paused.'});
+   try{await open(a.launch_mode==='headless');const result=await guard.command(a,surface.page);if(result?.held){publish('HOLD',{reason:'Browser identity changed. Complete manual review before running more checks.',manualResumeRequired:true,reasonCode:'FINGERPRINT_DRIFT'});return;}const error=result?.session_evidence?.commandError;publish(error?'paused':'idle',{startupStage:error?'FAILED':'SESSION_CHECK_COMPLETE',failedStage:error?'SESSION_DIAGNOSTICS':null,reason:error||'Session check finished. Review the stored evidence before starting.',reasonCode:error?'SESSION_DIAGNOSTICS_FAILED':null});}
+   catch(error){await guard.failCommand?.(a,error).catch(()=>{});publish('paused',{startupStage:'FAILED',failedStage:'SESSION_DIAGNOSTICS',reason:error.message,reasonCode:'SESSION_DIAGNOSTICS_FAILED'});}return;
+  }
   if(!a.authorized) {
    await releasePendingClaims();
    if(status.status==='paused'&&status.reasonCode)return; // retain actionable failures until an explicit recovery
@@ -318,7 +331,11 @@ function createAccountRuntime(options) {
    if(a.control_version!==activeVersion&&saves.error){await saves.idle();saves.clearError();}
    activeVersion=a.control_version||null;
    await assertActive();
-   const run=await discoveryStore.claimSource?.(pool,accountId,owner);
+   const sessionState=guard?.state(a);
+   if(sessionState&&['WARMUP','RAMP','PROCESSING'].includes(sessionState.state)&&Date.parse(a.session_evidence?.startNotBefore)>now()){
+    publish('sleeping',{reason:'This account’s requested start is staggered. Other lanes remain available.',reasonCode:'LANE_STAGGER',nextEligibleAt:a.session_evidence.startNotBefore});return;
+   }
+   const run=!sessionState||['RAMP','PROCESSING'].includes(sessionState.state)?await discoveryStore.claimSource?.(pool,accountId,owner):null;
    if(run) {
     claimedRun=run;if(!await prepareProcessing(a)){await discoveryStore.releaseSource?.(pool,run.id,owner);return;}await setWindowVisibility(false);
     publish('processing',{phase:'PROSPECT_DISCOVERY',runId:run.id,reason:'Collecting the requested prospect list.'});
@@ -331,13 +348,24 @@ function createAccountRuntime(options) {
     await flushStatistics(null);
     return;
    }
-   const reservation=await core.claim(pool,accountId,owner);
+ const day=guard?(a.daily_day||require('./account-session-policy.cjs').localDay(now(),a.proxy_timezone||'UTC')):null;
+   const warmupVisits=sessionState?.state==='WARMUP'?(a.session_evidence?.warmupVisits?.[day]||[]):[];
+   if(sessionState?.state==='WARMUP'&&warmupVisits.length>=require('./account-session-policy.cjs').config(a.session_policy).warmupProfilesPerDay){publish('WARMUP',{reason:'Today’s rendered warmup visits are complete. Qualification jobs remain queued.',reasonCode:'WARMUP_DAILY_COMPLETE'});return;}
+   const reservation=await core.claim(pool,accountId,owner,{excludeProfiles:warmupVisits});
    if(reservation?.disabled)return;
    if(reservation?.limited) {dailyStatus(reservation);return;}
    if(reservation?.paced) {paceStatus(reservation);return;}
    if(reservation?.job){
     claimedJob=reservation.job;
+    if(sessionState&&!researchQueue.fullCapture(claimedJob.resumeResult)&&!['WARMUP','RAMP','PROCESSING'].includes(sessionState.state)){
+     await core.releaseClaim(pool,claimedJob.jobId,owner);publish(sessionState.state,{startupStage:sessionState.state,reason:sessionState.reason,reasonCode:'SESSION_'+sessionState.state,nextEligibleAt:sessionState.resumeAt||null,action:'Complete session setup in Engine → LinkedIn profiles.'});return;
+    }
     if(!researchQueue.fullCapture(reservation.job.resumeResult)){if(!await prepareProcessing(a)){await core.releaseClaim?.(pool,reservation.job.jobId,owner);return;}await setWindowVisibility(false);}
+    if(sessionState?.state==='WARMUP'&&!researchQueue.fullCapture(claimedJob.resumeResult)){
+     try{const progress=await guard.warmup(a,claimedJob,surface.page,assertActive,()=>inspect());if(progress.reservation?.limited)dailyStatus(progress.reservation);else if(progress.reservation?.paced)paceStatus(progress.reservation);else{if(progress.visited){await permit('profile_page');await flushStatistics(claimedJob.jobId);}publish('WARMUP',{reason:'Rendered warmup visit recorded. No Voyager read or qualification decision was made.',...(progress.nextProfileAt?{reasonCode:'PROFILE_INTERVAL',nextEligibleAt:new Date(progress.nextProfileAt).toISOString()}:{} )});}}
+     finally{await core.releaseClaim(pool,claimedJob.jobId,owner);}return;
+    }
+    if(guard)await guard.activateRamp(a);
     await processJob(reservation.job);
    }
    else publish('ready',{reason:'No profiles waiting for LinkedIn capture. Website research may still be running.'});
@@ -362,7 +390,7 @@ function createAccountRuntime(options) {
   }
  }
  function dailyStatus(limit){publish('DAILY_LIMIT_REACHED',{startupStage:'DAILY_LIMIT_REACHED',reason:`Daily unique profiles: ${limit.used??limit.dailyCount}/${limit.limit??limit.dailyLimit}. Website research continues. Resumes at ${new Date(limit.resumeAt).toLocaleString()} (${limit.timezone}).`,reasonCode:'DAILY_LIMIT_REACHED',nextEligibleAt:limit.resumeAt});}
- function paceStatus(value){publish('sleeping',{reasonCode:'PROFILE_INTERVAL',reason:'One-minute profile interval. Website research continues; the next profile starts at '+new Date(value.resumeAt).toLocaleTimeString()+'.',nextEligibleAt:new Date(value.resumeAt).toISOString()});}
+ function paceStatus(value){publish('sleeping',{reasonCode:'PROFILE_INTERVAL',reason:'Profile spacing is active. Website research continues; the next profile starts at '+new Date(value.resumeAt).toLocaleTimeString()+'.',nextEligibleAt:new Date(value.resumeAt).toISOString()});}
  function close({preserveIntent=false}={}) {
   if(closing)return closing;stopped=true;
   closing=(async()=>{

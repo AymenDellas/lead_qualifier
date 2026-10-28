@@ -11,7 +11,7 @@ function statusRoute(heartbeat,failDatabase=false,routeName='process-lead',cache
  const fakePool={query:async sql=>{
   if(failDatabase)throw new Error('Database unavailable');
   if(sql.includes("to_regprocedure('compel_worker_day()')"))return{rows:[{ready:true}]};
-  if(sql.includes('FROM pg_attribute'))return{rows:[{migrated:true}]};
+  if(sql.includes('FROM pg_attribute'))return{rows:[{migrated:true,ready:true}]};
   if(sql.startsWith('\nCREATE TABLE'))return{rows:[]};
   if(sql.includes('SELECT * FROM compel_worker_config')||sql.startsWith('SELECT *,compel_worker_day()'))return{rows:[{active_count:1,revision:0}]};
   if(sql.includes('FROM compel_linkedin_accounts a'))return{rows:[{id:'legacy-0',label:'First',email:'fixture@example.test',enabled:true,daily_limit:400,has_password:true,daily_count:276,status:heartbeat,lease_until:heartbeat?.status==='offline'?'2024-01-01':new Date(Date.now()+120000).toISOString()}]};

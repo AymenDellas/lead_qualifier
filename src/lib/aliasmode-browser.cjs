@@ -25,7 +25,7 @@ function createAliasModeBrowser({account,owner,pool,provider,puppeteer=require('
   const session=await browser.target().createCDPSession();try{const data=await session.send('SystemInfo.getProcessInfo'),pid=Number(data.processInfo?.find(p=>p.type==='browser')?.id);if(Number.isSafeInteger(pid)&&pid>0)return pid;throw Error('Missing browser PID');}
   catch{throw providerError('ALIASMODE_RESOURCE_ACCOUNTING','Cannot identify this AliasMode browser process for memory accounting. Check the Chromium/CDP version; the account remains paused.');}finally{await session.detach().catch(()=>{});}
  }
- function open({headless=true}={}){
+ function open({headless=account.launch_mode==='headless'}={}){
   if(closing)return Promise.reject(providerError('ALIASMODE_CLOSING','This profile is closing. Wait for confirmation before reopening.'));
   if(typeof headless!=='boolean')return Promise.reject(providerError('ALIASMODE_MODE_UNVERIFIED','Choose a supported browser mode.'));
   if(opening)return openingMode===headless?opening:Promise.reject(providerError('ALIASMODE_MODE_CONFLICT','A different browser mode is still opening. Wait for it to finish.'));

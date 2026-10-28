@@ -3,7 +3,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),{EventEmi
 const {createAliasModeBrowser}=require('../../src/lib/aliasmode-browser.cjs');
 let fixtureId=0;
 function fixture({active=false,saved=null,headless=true}={}){
- const id='fixture-'+(++fixtureId),account={id,aliasmode_profile_id:id,binding_revision:0},owner='owner-'+id;
+ const id='fixture-'+(++fixtureId),account={id,aliasmode_profile_id:id,binding_revision:0,launch_mode:'headless'},owner='owner-'+id;
  let row=saved?{...saved,account_id:id}:null,allowed=true,connected=false,stopWorks=true,connectError=false,startGate=null;
  const calls=[],browser=new EventEmitter(),page={isClosed:()=>false,bringToFront:async()=>{},close:async()=>calls.push('page.close'),target:()=>({_targetId:'compel-tab'})};
  browser.isConnected=()=>connected;browser.version=async()=> 'Chrome/146';browser.disconnect=async()=>{calls.push('disconnect');connected=false;browser.emit('disconnected');};browser.close=async()=>assert.fail('Never close an attached browser through CDP');
@@ -14,6 +14,9 @@ function fixture({active=false,saved=null,headless=true}={}){
  const options={account,owner,pool:{},provider:{store,client:api},puppeteer:{connect:async settings=>{calls.push('connect');assert.equal(settings.defaultViewport,null);if(connectError)throw Error('Connection refused');connected=true;return browser;}}};
  return {account,options,calls,browser,page,get row(){return row;},get active(){return active;},set allowed(v){allowed=v;},set stopWorks(v){stopWorks=v;},set connectError(v){connectError=v;},set startGate(v){startGate=v;}};
 }
+test('visible is the default and explicit headless configuration remains supported',async()=>{
+ const f=fixture();delete f.account.launch_mode;const b=createAliasModeBrowser(f.options);await b.open();assert.equal(b.isHeadless(),false);await b.open({headless:false});assert.equal(f.calls.filter(v=>v==='connect').length,1);await b.recycle();
+});
 test('closed profiles start through AliasMode and concurrent opens share one CDP connection and tab',async()=>{
  const f=fixture(),b=createAliasModeBrowser(f.options);const [one,two]=await Promise.all([b.open(),b.open()]);assert.equal(one,two);assert.equal(b.pid(),12345);assert.equal(b.isHeadless(),true);assert.deepEqual(f.calls,['active','start','connect','newPage']);await b.close();assert.equal(f.active,true);
 });

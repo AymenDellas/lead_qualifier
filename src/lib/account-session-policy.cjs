@@ -6,7 +6,7 @@ const integer=(value,name,min,max)=>{if(!Number.isInteger(value)||value<min||val
 function config(input={}){
  const result={...DEFAULTS,...input};
  for(const key of Object.keys(result))if(!(key in DEFAULTS))throw Error('Unknown session policy setting: '+key);
- for(const key of ['warmupDays','rampStepDays','recoveryDays'])integer(result[key],key,1,90);
+ for(const key of ['warmupDays','rampStepDays','recoveryDays'])integer(result[key],key,key==='recoveryDays'?7:1,90);
  integer(result.warmupProfilesPerDay,'warmupProfilesPerDay',1,20);
  integer(result.minIntervalSeconds,'minIntervalSeconds',60,3600);integer(result.maxIntervalSeconds,'maxIntervalSeconds',result.minIntervalSeconds,3600);
  integer(result.staggerSeconds,'staggerSeconds',0,120);integer(result.renderEvery,'renderEvery',1,100);
@@ -15,7 +15,7 @@ function config(input={}){
 function fingerprint(probe,metadata={}){
  if(!probe||!['userAgent','platform','timezone','locale'].every(k=>typeof probe[k]==='string'&&probe[k])||!Number.isInteger(probe.screen?.width)||!Number.isInteger(probe.screen?.height))throw Error('Browser identity probe is incomplete.');
  const fields={profileId:metadata.profileId,engine:metadata.engine,mode:metadata.mode,proxyId:metadata.proxyId,revision:metadata.revision,
-  userAgent:probe.userAgent,platform:probe.platform,screen:{width:probe.screen.width,height:probe.screen.height},timezone:probe.timezone,locale:probe.locale,
+  probeOrigin:probe.origin,userAgent:probe.userAgent,platform:probe.platform,screen:{width:probe.screen.width,height:probe.screen.height},timezone:probe.timezone,locale:probe.locale,
   hardwareConcurrency:probe.hardwareConcurrency??null,deviceMemory:probe.deviceMemory??null,webglVendor:probe.webglVendor??null,webglRenderer:probe.webglRenderer??null};
  return {hash:createHash('sha256').update(JSON.stringify(fields)).digest('hex'),fields};
 }
@@ -29,7 +29,7 @@ function lifecycle(account,{now=Date.now(),day=localDay(now,account.proxy_timezo
  if(e.network?.verdict!=='PASS'||e.network.key!==key)return {state:'PROVISION',reason:'Run the bound profile’s network preflight; proxy identity and geography are not verified.'};
  if(e.drift)return {state:'HOLD',reason:'Browser identity changed. Review the stored baseline and current observations.'};
  if(!e.fingerprint?.hash)return {state:'PROVISION',reason:'Capture and explicitly approve this profile’s browser identity baseline.'};
- if(e.gate?.verdict!=='PASS'||e.gate.key!==key||e.gate.fingerprintHash!==e.fingerprint.hash)return {state:'PROVISION',reason:'The diagnostic gate is missing, stale, failed or incomplete. Open its evidence report.'};
+ if(!['PASS','HUMAN_APPROVED'].includes(e.gate?.verdict)||e.gate.key!==key||e.gate.fingerprintHash!==e.fingerprint.hash)return {state:'PROVISION',reason:'The diagnostic gate needs a completed pass or your explicit review of an unclear report. Confirmed failures cannot be overridden.'};
  const recovery=Date.parse(e.recoveryUntil);
  if(Number.isFinite(recovery)&&recovery>now)return {state:'RECOVERY',reason:'Human review was completed; the recovery period has not elapsed.',resumeAt:new Date(recovery).toISOString()};
  const warmupDays=[...new Set(e.warmupDays||[])],first=warmupDays[0];

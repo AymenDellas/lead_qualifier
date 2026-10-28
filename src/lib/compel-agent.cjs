@@ -5,7 +5,8 @@ const {createBrowserCoordinator}=require('./browser-coordinator.cjs');
 const {createResearchRunner}=require('./worker-research-runner.cjs'),researchQueue=require('./worker-research-queue.cjs');
 const READ_CONTROL=`SELECT c.active_count,c.agent_stop_requested,
  COALESCE((SELECT jsonb_agg(row_to_json(a)) FROM (SELECT id,label,profile_key,aliasmode_profile_id,aliasmode_profile_name,binding_revision,enabled,processing_enabled AS authorized,attention_reason,
- login_requested_at::text AS login_token,logout_requested_at::text AS logout_token,close_requested_at::text AS close_token,changed_at::text AS control_version
+ login_requested_at::text AS login_token,logout_requested_at::text AS logout_token,close_requested_at::text AS close_token,changed_at::text AS control_version,
+ engine,launch_mode,session_revision,session_policy,session_evidence->>'command' AS session_command
  FROM compel_linkedin_accounts WHERE NOT archived ORDER BY position,id) a),'[]'::jsonb) AS accounts FROM compel_worker_config c WHERE c.id=1`;
 function integer(value,fallback,min=1,max=Infinity){const n=value==null||value===''?fallback:Number(value);if(!Number.isInteger(n)||n<min||n>max)throw Error('Invalid agent resource configuration.');return n;}
 function createAgent(options){
@@ -40,6 +41,7 @@ function createAgent(options){
   let inner;try{inner=makeBrowser({root,account,owner:accountOwner,pool,provider,onStage:(startupStage,reason)=>stage(account.id,{startupStage,reason,controlVersion:account.control_version}),onDisconnect:error=>{entry.runtime?.disconnected(error);entry.due=0;notify();}});}catch(error){await core.releaseSession(pool,account.id,accountOwner,{status:'offline',reason:error.message});throw error;}
   entry.browser=coordinator.wrap(account.id,inner);
   entry.runtime=makeRuntime({pool,accountId:account.id,owner:accountOwner,core,browserOwner:entry.browser,log,wakeResearch,createSaveQueue:saves.scope,
+   sessionGuard:options.createBrowser?null:require('./account-session-guard.cjs').createSessionGuard({pool,owner:accountOwner,core,now}),
    onStatus:value=>stage(account.id,{...value,controlVersion:value.controlVersion||account.control_version}),
   });
   entries.set(account.id,entry);stage(account.id,{startupStage:'AGENT_ACK',reason:'Agent acknowledged the request.',controlVersion:account.control_version});return entry;
@@ -58,12 +60,12 @@ function createAgent(options){
   const rows=control?.accounts||[],byId=new Map(rows.map(a=>[a.id,a]));
   for(const entry of [...entries.values()]){
    const account=byId.get(entry.account.id);
-   if(!account||!account.enabled&&!account.login_token&&!account.close_token||entry.account.binding_revision!==account.binding_revision||entry.account.aliasmode_profile_id!==account.aliasmode_profile_id){void retire(entry).catch(error=>log('Account shutdown: '+error.message));continue;}
+   if(!account||!account.enabled&&!account.login_token&&!account.close_token&&!account.session_command||entry.account.binding_revision!==account.binding_revision||entry.account.aliasmode_profile_id!==account.aliasmode_profile_id||entry.account.session_revision!==account.session_revision){void retire(entry).catch(error=>log('Account shutdown: '+error.message));continue;}
    entry.account=account;
   }
   for(const account of rows){
    if(entries.has(account.id))continue;
-   if(!account.login_token&&!account.close_token&&(!account.authorized||!account.enabled||account.attention_reason))continue;
+   if(!account.login_token&&!account.close_token&&!account.session_command&&(!account.authorized||!account.enabled||account.attention_reason))continue;
    if(failures.get(account.id)===account.control_version)continue;
    try{await add(account);}catch(error){
     failures.set(account.id,account.control_version);stage(account.id,{startupStage:'FAILED',failedStage:'AGENT_ACK',reason:error.message,action:'Stop the previous owner, check its heartbeat, then request Start or Open session again.',controlVersion:account.control_version});
@@ -92,7 +94,7 @@ function createAgent(options){
   }else if(!entry.browser.isOpen()&&coordinator.reserved.has(entry.account.id))await entry.browser.close();
   entry.backoff=state.status==='provider_unavailable'?30000:worked||state.status==='recovering'?2000:Math.min(30000,entry.backoff*2);
   entry.due=state.status!=='provider_unavailable'&&(worked||state.status==='recovering')?now():now()+entry.backoff;
-  if(state.reasonCode==='PROFILE_INTERVAL'&&state.nextEligibleAt)entry.due=Math.max(now(),Date.parse(state.nextEligibleAt));
+  if(['PROFILE_INTERVAL','LANE_STAGGER'].includes(state.reasonCode)&&state.nextEligibleAt)entry.due=Math.max(now(),Date.parse(state.nextEligibleAt));
  }
  function runAccount(entry){
   const before=entry.runtime.snapshot().jobsStarted||0;

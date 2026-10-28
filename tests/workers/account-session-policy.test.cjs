@@ -35,5 +35,5 @@ test('fingerprint binds observed properties to immutable profile/configuration i
 });
 test('spacing is bounded without jitter timers; invalid configuration is rejected',()=>{
  assert.equal(p.interval({},(a,b)=>a),60000);assert.equal(p.interval({},(a,b)=>b-1),150000);
- for(const c of [{minIntervalSeconds:10},{maxIntervalSeconds:59},{unexpected:1},{warmupDays:0}])assert.throws(()=>p.config(c));
+ for(const c of [{minIntervalSeconds:10},{maxIntervalSeconds:59},{unexpected:1},{warmupDays:0},{recoveryDays:1}])assert.throws(()=>p.config(c));
 });
