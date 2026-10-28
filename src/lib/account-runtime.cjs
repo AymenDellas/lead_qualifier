@@ -20,7 +20,7 @@ function createAccountRuntime(options) {
  const log=options.log||(()=>{}),onStatus=options.onStatus||(()=>{});
  let stopped=false,identity=null,manual=null,signal=null,surface=null,watched=null,closing=null,browserAttempted=false;
  let status={status:'idle',startupStage:'AGENT_ACK',reason:'Agent acknowledged this account. Waiting for work or manual connection.',runtimeVersion,sessionReady:false,browserOpen:false,accountId};
- let startupFailures=0,recoveringJob=false,currentSessionPolicy={};
+ let startupFailures=0,recoveringJob=false,currentSessionPolicy={},warmupExperiment=null,experimentDisconnected=false;
  let handledStart=null,handledLogin=null,handledClose=null,handlingSignal=null,activeVersion=null,signalGeneration=0,pageGeneration=0,jobsStarted=0,pendingKinds={};
  const saves=(options.createSaveQueue||require('./bounded-work.cjs').createBoundedQueue)({capacity:options.saveQueueCapacity||6,onError:(error,metadata)=>{
   const reason='PostgreSQL save failed: '+error.message;
@@ -300,6 +300,7 @@ function createAccountRuntime(options) {
   const a=await account();
   if(!a){await close();return;}
   currentSessionPolicy=a.session_policy||{};
+  if(warmupExperiment&&(a.close_token||a.login_token||a.logout_token||a.session_evidence?.command!=='warmup-experiment'))await warmupExperiment.stop('Account controls changed or the operator stopped the warmup.');
   if(a.close_token){
    if(a.close_token===handledClose)return;
    activeVersion=a.control_version||null;await saves.idle();manual=null;identity=null;watched=null;
@@ -312,6 +313,15 @@ function createAccountRuntime(options) {
   if(a.login_token&&a.login_token!==handledLogin){try{await connect(a);}catch(error){if(error.failure?.stage==='provider')await providerUnavailable(error);else throw error;}return;}
   if(manual){await observeManual(a);return;}
   if(!a.enabled){await close();return;}
+  if(a.session_evidence?.command==='warmup-experiment'){
+   activeVersion=a.control_version||null;
+   warmupExperiment??=(options.warmupExperiment||require('./worker-warmup-experiment.cjs').create({pool,accountId,owner,core,guard,now}));
+   const result=experimentDisconnected?await warmupExperiment.stop('Browser disconnected during the bounded experiment; no automatic retry.'):await warmupExperiment.step(a,{open,adopt:()=>browserOwner.adopt?.(),inspect:()=>inspect(),onSignal:handleSignal,assertSignal:async()=>{if(stopped)throw controlError('The worker is stopping.');if(signal)throw Object.assign(Error(signal.reason),{failure:signal});}});
+   if(result.identity)identity=result.identity;
+   if(result.done){if(result.held){await setWindowVisibility(true);publish('paused',{startupStage:'SESSION_REVIEW',reason:result.reason,manualResumeRequired:true,reasonCode:'WARMUP_STOPPED'});}else{await browserOwner.recycle?.();publish('idle',{profileClosed:true,reason:result.reason,reasonCode:result.state});}}
+   else publish('WARMUP',{reason:result.reason,reasonCode:result.code,nextEligibleAt:new Date(result.at).toISOString(),signedIn:result.identity||null});
+   return;
+  }
   if(a.attention_reason) {
    await releasePendingClaims();
    publish('paused',{reason:a.attention_reason,manualResumeRequired:true,reasonCode:'ACCOUNT_REVIEW'});return;
@@ -394,6 +404,7 @@ function createAccountRuntime(options) {
  function close({preserveIntent=false}={}) {
   if(closing)return closing;stopped=true;
   closing=(async()=>{
+   await warmupExperiment?.stop('The agent stopped; the warmup checkpoint is retained and will not automatically reread profiles.');
    await flushStatistics(status.jobId);await saves.close();await releasePendingClaims();
    if(!preserveIntent)await core.pauseProcessing(pool,accountId,'The local account session stopped. Queued work is retained.',false,owner).catch(()=>{});
    watched=null;await browserOwner.close();identity=null;
@@ -402,6 +413,7 @@ function createAccountRuntime(options) {
   return closing;
  }
  function disconnected(error) {
+  if(warmupExperiment)experimentDisconnected=true;
   identity=null;surface=null;
   handledStart=null;
   publish(manual||signal?'paused':'recovering',{startupStage:manual||signal?'SESSION_REVIEW':'BROWSER_STARTING',reason:error?.message||'Chrome disconnected. The current job can resume from its checkpoint.',reasonCode:'BROWSER_CLOSED'});

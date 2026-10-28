@@ -47,3 +47,9 @@ test('a failed diagnostic launch is recorded once and requires an explicit new r
   core:{readRuntimeAccount:async()=>a},sessionGuard:{failCommand:async(_a,error)=>{assert.match(error.message,/launch failure/);recorded++;a.session_evidence.command=null;}},
  });try{await runtime.tick();assert.equal(runtime.snapshot().reasonCode,'SESSION_DIAGNOSTICS_FAILED');await runtime.tick();assert.equal(attempts,1);assert.equal(recorded,1);}finally{await runtime.close({preserveIntent:true});}
 });
+test('a bounded warmup browser disconnect stops the run instead of reopening it',async()=>{
+ const {createAccountRuntime}=require('../../src/lib/account-runtime.cjs');let steps=0,stops=0;
+ const a={enabled:true,control_version:'one',session_evidence:{command:'warmup-experiment'}};
+ const runtime=createAccountRuntime({pool:{},accountId:'one',owner:'owner',core:{readRuntimeAccount:async()=>a},browserOwner:{isOpen:()=>false,close:async()=>{},recycle:async()=>{}},warmupExperiment:{step:async()=>{steps++;return{wait:true,at:new Date(Date.now()+60000).toISOString(),code:'PROFILE_INTERVAL'};},stop:async()=>{stops++;return{done:true,state:'WARMUP_STOPPED',reason:'Disconnected'};}}});
+ try{await runtime.tick();runtime.disconnected(Error('Target closed'));await runtime.tick();assert.equal(steps,1);assert.ok(stops>=1);}finally{await runtime.close({preserveIntent:true});}
+});

@@ -398,8 +398,8 @@ async function pauseProcessing(pool,id,message='Processing paused from account s
  return accountTransaction(pool,async client=>{
   const result=await client.query(`UPDATE compel_linkedin_accounts a SET processing_enabled=FALSE,processing_until=NULL,
    attention_reason=CASE WHEN $3 THEN $2 ELSE attention_reason END,
-   session_evidence=CASE WHEN $3 THEN (session_evidence-'command'-'requestedAt')||jsonb_build_object('hold',jsonb_build_object('reason',$2::text,'at',clock_timestamp())) ELSE session_evidence END
-   WHERE id=$1 AND (processing_enabled IS TRUE OR $3 AND attention_reason IS DISTINCT FROM $2)
+   session_evidence=CASE WHEN $3 THEN (session_evidence-'command'-'requestedAt')||jsonb_build_object('hold',jsonb_build_object('reason',$2::text,'at',clock_timestamp())) WHEN session_evidence->>'command'='warmup-experiment' THEN session_evidence-'command' ELSE session_evidence END
+   WHERE id=$1 AND (processing_enabled IS TRUE OR session_evidence->>'command'='warmup-experiment' OR $3 AND attention_reason IS DISTINCT FROM $2)
     AND ($4::text IS NULL OR EXISTS(SELECT 1 FROM compel_worker_sessions WHERE account_id=a.id AND owner=$4))
     AND ($5::timestamptz IS NULL OR a.changed_at=$5::timestamptz) RETURNING id`,[id,message,attention,owner,version]);
   if(result.rowCount)await accountEvent(client,id,attention?'needs_attention':'processing_paused',message);
@@ -551,7 +551,7 @@ async function claim(pool,id,owner,{excludeProfiles=[]}={}) {
   if(!(await client.query('SELECT 1 FROM compel_worker_sessions WHERE account_id=$1 AND owner=$2 AND lease_until>NOW() FOR UPDATE',[id,owner])).rowCount)throw Error('Account session lease lost.');
   const usage=await daily.usage(client,id),limited=usage.used>=usage.limit;
   await skipCompletedDuplicates(client);
-  const job=(await client.query(`SELECT * FROM compel_worker_jobs j WHERE lane='capture' AND status='pending' AND (retry_at IS NULL OR retry_at<=NOW()) AND NOT(profile_key=ANY($4::text[]))
+  const job=(await client.query(`SELECT * FROM compel_worker_jobs j WHERE lane='capture' AND status='pending' AND payload->>'warmupExperimentId' IS NULL AND (retry_at IS NULL OR retry_at<=NOW()) AND NOT(profile_key=ANY($4::text[]))
    AND ($2 IS FALSE OR (checkpoint->>'profileIdentityConfirmed'='true' AND checkpoint#>>'{linkedinCapture,complete}' IS DISTINCT FROM 'false')
     OR EXISTS(SELECT 1 FROM compel_worker_account_profiles p WHERE p.account_id=$1 AND p.day=compel_worker_day() AND p.profile_key=j.profile_key)
     OR (payload->>'explicitRetry' IS DISTINCT FROM 'true' AND EXISTS(SELECT 1 FROM compel_worker_jobs saved

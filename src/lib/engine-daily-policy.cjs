@@ -34,7 +34,8 @@ async function usage(pool,id){
   FROM compel_linkedin_accounts a CROSS JOIN compel_worker_config c LEFT JOIN compel_worker_account_profiles p ON p.account_id=a.id AND p.day=compel_worker_day()
   WHERE a.id=$1 AND c.id=1 GROUP BY a.id,c.daily_timezone`,[id])).rows[0]||null;
 }
-async function reserve(pool,{accountId,owner,profileUrl,jobId,version=null,intervalMs}){
+async function reserve(pool,{accountId,owner,profileUrl,jobId,version=null,intervalMs,warmupExperimentId=null}){
+ if(warmupExperimentId!==null&&warmupExperimentId!==require('./worker-warmup-experiment.cjs').ID)throw Error('Unknown warmup experiment.');
  if(intervalMs!==undefined&&(!Number.isInteger(intervalMs)||intervalMs<0))throw Error('Invalid profile interval.');
  if(!/^https:\/\/www\.linkedin\.com\/in\/[^/]+\/$/.test(profileUrl||''))throw Error('A canonical LinkedIn profile is required.');
  await ensure(pool);const client=await pool.connect();try{
@@ -42,12 +43,13 @@ async function reserve(pool,{accountId,owner,profileUrl,jobId,version=null,inter
   const a=(await client.query(`SELECT a.*,c.daily_timezone AS timezone,compel_worker_day()::text AS day,
    ((compel_worker_day()+1)::timestamp AT TIME ZONE c.daily_timezone) AS resume_at
    FROM compel_linkedin_accounts a JOIN compel_worker_sessions s ON s.account_id=a.id CROSS JOIN compel_worker_config c
-   WHERE a.id=$1 AND s.owner=$2 AND s.lease_until>NOW() AND a.enabled AND NOT a.archived AND a.processing_enabled
+   WHERE a.id=$1 AND s.owner=$2 AND s.lease_until>NOW() AND a.enabled AND NOT a.archived AND (a.processing_enabled OR $4::text IS NOT NULL)
     AND a.attention_reason='' AND a.connected_at IS NOT NULL AND a.login_requested_at IS NULL AND a.logout_requested_at IS NULL AND a.signed_out_at IS NULL
-    AND ($3::timestamptz IS NULL OR a.changed_at=$3) AND c.id=1 AND c.active_count>0 FOR UPDATE OF a`,[accountId,owner,version])).rows[0];
+    AND ($3::timestamptz IS NULL OR a.changed_at=$3) AND c.id=1 AND c.active_count>0 FOR UPDATE OF a`,[accountId,owner,version,warmupExperimentId])).rows[0];
   if(!a){await client.query('COMMIT');return {stopped:true,reason:'Processing paused, account needs review, or ownership changed.'};}
-  const sessionPolicy=require('./account-session-policy.cjs'),state=sessionPolicy.lifecycle(a,{day:a.day});
-  if(state.limit)a.daily_limit=Math.min(a.daily_limit,state.limit);
+  const experiment=warmupExperimentId?await require('./worker-warmup-experiment.cjs').authority(client,{accountId,owner,version,profileUrl,jobId,lock:true}):null;
+  const sessionPolicy=require('./account-session-policy.cjs'),state=experiment?null:sessionPolicy.lifecycle(a,{day:a.day});
+  if(state?.limit)a.daily_limit=Math.min(a.daily_limit,state.limit);
   intervalMs??=sessionPolicy.interval(a.session_policy);
   const used=Number((await client.query('SELECT count(*)::int AS n FROM compel_worker_account_profiles WHERE account_id=$1 AND day=$2',[accountId,a.day])).rows[0].n);
   const seen=(await client.query('SELECT 1 FROM compel_worker_account_profiles WHERE account_id=$1 AND day=$2 AND profile_key=$3',[accountId,a.day,profileUrl])).rowCount>0;
@@ -59,6 +61,7 @@ async function reserve(pool,{accountId,owner,profileUrl,jobId,version=null,inter
    ON CONFLICT(account_id,day,profile_key) DO UPDATE SET last_read_at=NOW(),attempts=compel_worker_account_profiles.attempts+1`,[accountId,a.day,profileUrl,jobId]);
   const count=used+(seen?0:1);await client.query(`INSERT INTO compel_worker_usage(account_id,day,count) VALUES($1,$2,$3)
    ON CONFLICT(account_id,day) DO UPDATE SET count=EXCLUDED.count`,[accountId,a.day,count]);
+  if(experiment)await require('./worker-warmup-experiment.cjs').reserved(client,experiment,{profileUrl,jobId});
   await client.query('COMMIT');return {used:count,limit:a.daily_limit,charged:!seen,resumeAt:a.resume_at,timezone:a.timezone,nextProfileAt:slot.rows[0].next_profile_at,intervalMs};
  }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
 }
